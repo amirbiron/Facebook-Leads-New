@@ -24,8 +24,8 @@ async def random_delay(min_sec=2, max_sec=6):
     await asyncio.sleep(delay)
 
 async def block_heavy_resources(page):
-    """חוסם תמונות, וידאו, פונטים, CSS ומדיה כדי לחסוך זיכרון"""
-    BLOCKED_TYPES = {"image", "media", "font", "stylesheet"}
+    """חוסם תמונות, וידאו ופונטים כדי לחסוך זיכרון"""
+    BLOCKED_TYPES = {"image", "media", "font"}
 
     async def handle_route(route):
         if route.request.resource_type in BLOCKED_TYPES:
@@ -34,7 +34,7 @@ async def block_heavy_resources(page):
             await route.continue_()
 
     await page.route("**/*", handle_route)
-    log.debug("חסימת משאבים כבדים הופעלה (תמונות, וידאו, פונטים, CSS)")
+    log.debug("חסימת משאבים כבדים הופעלה (תמונות, וידאו, פונטים)")
 
 async def human_scroll(page, times=3):
     for i in range(times):
@@ -307,7 +307,6 @@ async def scrape_all(email: str, password: str) -> list[dict]:
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
-                "--single-process",
                 "--disable-extensions",
                 "--disable-background-networking",
                 "--disable-default-apps",
@@ -318,7 +317,8 @@ async def scrape_all(email: str, password: str) -> list[dict]:
                 "--disable-backgrounding-occluded-windows",
                 "--disable-renderer-backgrounding",
                 "--disable-software-rasterizer",
-                "--js-flags=--max-old-space-size=64",
+                "--renderer-process-limit=1",
+                "--js-flags=--max-old-space-size=128",
             ]
         )
         log.debug("דפדפן הופעל בהצלחה")
