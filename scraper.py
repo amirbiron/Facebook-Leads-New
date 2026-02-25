@@ -123,22 +123,46 @@ async def login(page, email: str, password: str):
 
     # שולח את הטופס ע"י Enter — יותר אמין מחיפוש כפתור
     log.debug("שולח טופס לוגין (Enter)...")
-    await pass_field.press("Enter")
-    log.debug("ממתין לטעינת דף אחרי לוגין...")
-    await page.wait_for_load_state("domcontentloaded")
-    await random_delay(3, 5)
+
+    # מחכה לניווט בפועל אחרי שליחת הטופס
+    try:
+        async with page.expect_navigation(timeout=15000):
+            await pass_field.press("Enter")
+        log.debug("ניווט התבצע בהצלחה")
+    except Exception:
+        log.debug("לא זוהה ניווט — ממתין לטעינה ידנית...")
+        await asyncio.sleep(5)
+
+    await random_delay(2, 4)
 
     current_url = page.url
     log.debug(f"URL אחרי לוגין: {current_url}")
 
     # בדיקות שהלוגין הצליח
     if "/login" in current_url and "checkpoint" not in current_url:
+        # בודק אם יש הודעת שגיאה בדף
+        error_msg = None
+        for selector in ["div[role='alert']", "#error_box", "div._9ay7"]:
+            try:
+                el = await page.query_selector(selector)
+                if el:
+                    error_msg = await el.inner_text()
+                    break
+            except Exception:
+                continue
+
         try:
             await page.screenshot(path="data/debug_login_failed.png")
+            log.info("צילום מסך נשמר: data/debug_login_failed.png")
         except Exception:
             pass
-        log.error(f"התחברות נכשלה — URL עדיין בדף לוגין: {current_url}")
-        raise Exception("התחברות נכשלה — בדוק אימייל/סיסמה")
+
+        if error_msg:
+            log.error(f"פייסבוק מציג שגיאה: {error_msg.strip()}")
+            raise Exception(f"התחברות נכשלה — פייסבוק אומר: {error_msg.strip()}")
+        else:
+            log.error(f"התחברות נכשלה — URL עדיין בדף לוגין: {current_url}")
+            raise Exception("התחברות נכשלה — בדוק אימייל/סיסמה")
 
     if "checkpoint" in current_url:
         try:
