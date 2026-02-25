@@ -15,3 +15,7 @@ services:
         sync: false
       - key: INTERVAL_MINUTES
         value: "10"
+      - key: LOG_LEVEL
+        value: "DEBUG"
+      - key: PYTHONUNBUFFERED
+        value: "1"

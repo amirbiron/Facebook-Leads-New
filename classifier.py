@@ -1,6 +1,9 @@
 import os
 import json
 import anthropic
+from logger import get_logger
+
+log = get_logger("Classifier")
 
 client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY"))
 
@@ -24,6 +27,7 @@ SYSTEM_PROMPT = """אתה מסנן לידים לפרילנסר מפתח ישרא
 
 def classify_post(content: str, group_name: str) -> dict:
     try:
+        log.debug(f"שולח לסיווג: {content[:80]}...")
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=100,
@@ -36,7 +40,8 @@ def classify_post(content: str, group_name: str) -> dict:
             ]
         )
         result = json.loads(message.content[0].text)
+        log.debug(f"תוצאה: relevant={result.get('relevant')} reason={result.get('reason', '')}")
         return result
     except Exception as e:
-        print(f"[Classifier] שגיאה: {e}")
+        log.error(f"שגיאה בסיווג: {e}", exc_info=True)
         return {"relevant": False, "reason": "שגיאה בסיווג"}
