@@ -15,6 +15,10 @@ services:
         sync: false
       - key: INTERVAL_MINUTES
         value: "10"
+      - key: TIMEZONE
+        value: "Asia/Jerusalem"
+      - key: QUIET_HOURS
+        value: "02:00-07:00"
       - key: LOG_LEVEL
         value: "DEBUG"
       - key: PYTHONUNBUFFERED
