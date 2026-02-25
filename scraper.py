@@ -24,13 +24,17 @@ async def random_delay(min_sec=2, max_sec=6):
     await asyncio.sleep(delay)
 
 async def block_heavy_resources(page):
-    """חוסם תמונות, וידאו, פונטים ומדיה כדי לחסוך זיכרון"""
-    await page.route("**/*.{png,jpg,jpeg,gif,svg,webp,ico,bmp}", lambda route: route.abort())
-    await page.route("**/*.{mp4,webm,ogg,avi,mov}", lambda route: route.abort())
-    await page.route("**/*.{woff,woff2,ttf,otf,eot}", lambda route: route.abort())
-    await page.route("**/video/**", lambda route: route.abort())
-    await page.route("**/videoplayback*", lambda route: route.abort())
-    log.debug("חסימת משאבים כבדים הופעלה (תמונות, וידאו, פונטים)")
+    """חוסם תמונות, וידאו, פונטים, CSS ומדיה כדי לחסוך זיכרון"""
+    BLOCKED_TYPES = {"image", "media", "font", "stylesheet"}
+
+    async def handle_route(route):
+        if route.request.resource_type in BLOCKED_TYPES:
+            await route.abort()
+        else:
+            await route.continue_()
+
+    await page.route("**/*", handle_route)
+    log.debug("חסימת משאבים כבדים הופעלה (תמונות, וידאו, פונטים, CSS)")
 
 async def human_scroll(page, times=3):
     for i in range(times):
@@ -280,7 +284,7 @@ async def scrape_group(page, group: dict) -> list[dict]:
                 continue
 
         log.debug(f"סטטיסטיקה — דולגו: {skipped_short} קצרים, {skipped_dup} כפולים")
-        await random_delay(5, 15)
+        await random_delay(3, 8)
 
     except PlaywrightTimeout:
         log.error(f"טיימאאוט בקבוצה: {group['name']} (30 שניות)")
@@ -303,6 +307,7 @@ async def scrape_all(email: str, password: str) -> list[dict]:
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
+                "--single-process",
                 "--disable-extensions",
                 "--disable-background-networking",
                 "--disable-default-apps",
@@ -312,15 +317,15 @@ async def scrape_all(email: str, password: str) -> list[dict]:
                 "--disable-component-update",
                 "--disable-backgrounding-occluded-windows",
                 "--disable-renderer-backgrounding",
-                "--renderer-process-limit=1",
-                "--js-flags=--max-old-space-size=128",
+                "--disable-software-rasterizer",
+                "--js-flags=--max-old-space-size=64",
             ]
         )
         log.debug("דפדפן הופעל בהצלחה")
 
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800},
+            viewport={"width": 800, "height": 600},
             locale="he-IL"
         )
         page = await context.new_page()
@@ -357,7 +362,7 @@ async def scrape_all(email: str, password: str) -> list[dict]:
 
             if i < len(GROUPS):
                 log.debug("השהיה בין קבוצות...")
-                await random_delay(8, 20)
+                await random_delay(5, 12)
 
         await browser.close()
         log.debug("דפדפן נסגר")
