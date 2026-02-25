@@ -21,17 +21,29 @@ DEFAULT_GROUPS = [
 ]
 
 def load_groups() -> list[dict]:
-    """טוען קבוצות מ-FB_GROUPS (JSON) או מהרשימה המובנית.
-    פורמט FB_GROUPS: [{"name": "...", "url": "..."}, ...]
+    """טוען קבוצות מ-FB_GROUPS או מהרשימה המובנית.
+    פורמט FB_GROUPS: לינקים מופרדים בפסיק, למשל:
+    https://www.facebook.com/groups/123,https://www.facebook.com/groups/456
+    השם נגזר אוטומטית מה-URL (מזהה הקבוצה).
+    www.facebook.com מומר אוטומטית ל-m.facebook.com.
     """
     env_groups = os.environ.get("FB_GROUPS")
     if env_groups:
-        try:
-            groups = json.loads(env_groups)
+        groups = []
+        for raw_url in env_groups.split(","):
+            raw_url = raw_url.strip()
+            if not raw_url:
+                continue
+            # המרה לאתר מובייל
+            url = raw_url.replace("www.facebook.com", "m.facebook.com")
+            # חילוץ שם הקבוצה מה-URL
+            match = re.search(r"/groups/([^/?]+)", url)
+            name = match.group(1) if match else url
+            groups.append({"name": name, "url": url})
+        if groups:
             log.info(f"נטענו {len(groups)} קבוצות ממשתנה סביבה FB_GROUPS")
             return groups
-        except json.JSONDecodeError as e:
-            log.error(f"שגיאה בפירוש FB_GROUPS: {e} — משתמש ברשימת ברירת מחדל")
+        log.warning("FB_GROUPS מוגדר אבל ריק — משתמש ברשימת ברירת מחדל")
     return DEFAULT_GROUPS
 
 GROUPS = load_groups()
@@ -231,6 +243,17 @@ async def scrape_group(page, group: dict) -> list[dict]:
         if "login" in current_url:
             log.warning("הועברנו לדף לוגין — ייתכן שהסשן פג!")
             return posts
+
+        # ניסיון לחלץ את שם הקבוצה האמיתי מהדף
+        try:
+            title_el = await page.query_selector("h1, h3, [data-nt='FB:TEXT4']")
+            if title_el:
+                real_name = (await title_el.inner_text()).strip()
+                if real_name and real_name != group["name"]:
+                    log.debug(f"שם קבוצה עודכן: {group['name']} → {real_name}")
+                    group["name"] = real_name
+        except Exception:
+            pass
 
         await random_delay(2, 4)
         log.debug("מתחיל גלילה...")
