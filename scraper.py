@@ -44,25 +44,124 @@ async def load_session(context):
     log.info("לא נמצא סשן שמור")
     return False
 
+async def dismiss_cookie_dialog(page):
+    """סוגר דיאלוג cookies אם מופיע"""
+    cookie_selectors = [
+        "button[data-cookiebanner='accept_button']",
+        "button[data-cookiebanner='accept_only_essential_button']",
+        "[aria-label='Allow all cookies']",
+        "[aria-label='Allow essential and optional cookies']",
+        "[aria-label='אישור כל קובצי ה-Cookie']",
+        "[title='Allow all cookies']",
+    ]
+    for selector in cookie_selectors:
+        try:
+            btn = await page.query_selector(selector)
+            if btn:
+                log.info(f"נמצא דיאלוג cookies — לוחץ: {selector}")
+                await btn.click()
+                await random_delay(1, 2)
+                return True
+        except Exception:
+            continue
+    return False
+
 async def login(page, email: str, password: str):
     log.info("מתחבר לפייסבוק...")
-    await page.goto("https://www.facebook.com/login", wait_until="networkidle")
+    await page.goto("https://www.facebook.com/login", wait_until="domcontentloaded")
     await random_delay(2, 4)
 
-    await page.fill("#email", email)
+    log.debug(f"URL אחרי ניווט: {page.url}")
+
+    # סוגר דיאלוג cookies אם מופיע
+    await dismiss_cookie_dialog(page)
+
+    # מחפש את שדה האימייל עם כמה סלקטורים
+    email_selectors = ["#email", "input[name='email']", "input[type='email']", "input[id='email']"]
+    pass_selectors = ["#pass", "input[name='pass']", "input[type='password']", "input[id='pass']"]
+    login_selectors = ["[name='login']", "button[type='submit']", "#loginbutton", "button[data-testid='royal_login_button']"]
+
+    email_field = None
+    for selector in email_selectors:
+        try:
+            email_field = await page.wait_for_selector(selector, timeout=10000)
+            if email_field:
+                log.debug(f"שדה אימייל נמצא עם: {selector}")
+                break
+        except Exception:
+            continue
+
+    if not email_field:
+        # צילום מסך לדיבוג
+        try:
+            await page.screenshot(path="data/debug_login_page.png")
+            log.debug("צילום מסך דף לוגין נשמר: data/debug_login_page.png")
+        except Exception:
+            pass
+        page_title = await page.title()
+        log.error(f"לא נמצא שדה אימייל בדף. כותרת: {page_title}, URL: {page.url}")
+        raise Exception("לא נמצא שדה אימייל בדף הלוגין — ייתכן שפייסבוק חוסם או שהדף השתנה")
+
+    await email_field.fill(email)
     await random_delay(0.5, 1.5)
-    await page.fill("#pass", password)
+
+    pass_field = None
+    for selector in pass_selectors:
+        try:
+            pass_field = await page.query_selector(selector)
+            if pass_field:
+                log.debug(f"שדה סיסמה נמצא עם: {selector}")
+                break
+        except Exception:
+            continue
+
+    if not pass_field:
+        log.error("לא נמצא שדה סיסמה")
+        raise Exception("לא נמצא שדה סיסמה בדף הלוגין")
+
+    await pass_field.fill(password)
     await random_delay(0.5, 1.5)
-    await page.click("[name='login']")
+
+    login_btn = None
+    for selector in login_selectors:
+        try:
+            login_btn = await page.query_selector(selector)
+            if login_btn:
+                log.debug(f"כפתור לוגין נמצא עם: {selector}")
+                break
+        except Exception:
+            continue
+
+    if not login_btn:
+        log.error("לא נמצא כפתור לוגין")
+        raise Exception("לא נמצא כפתור לוגין בדף")
+
+    await login_btn.click()
     log.debug("ממתין לטעינת דף אחרי לוגין...")
-    await page.wait_for_load_state("networkidle")
+    await page.wait_for_load_state("domcontentloaded")
     await random_delay(3, 5)
 
-    if "login" in page.url:
-        log.error(f"התחברות נכשלה — URL עדיין בדף לוגין: {page.url}")
+    current_url = page.url
+    log.debug(f"URL אחרי לוגין: {current_url}")
+
+    # בדיקות שהלוגין הצליח
+    if "/login" in current_url and "checkpoint" not in current_url:
+        try:
+            await page.screenshot(path="data/debug_login_failed.png")
+        except Exception:
+            pass
+        log.error(f"התחברות נכשלה — URL עדיין בדף לוגין: {current_url}")
         raise Exception("התחברות נכשלה — בדוק אימייל/סיסמה")
 
-    log.info(f"מחובר בהצלחה — URL: {page.url}")
+    if "checkpoint" in current_url:
+        try:
+            await page.screenshot(path="data/debug_checkpoint.png")
+        except Exception:
+            pass
+        log.error(f"פייסבוק דורש אימות נוסף (checkpoint): {current_url}")
+        raise Exception("פייסבוק דורש אימות נוסף — בדוק את החשבון ידנית")
+
+    log.info(f"מחובר בהצלחה — URL: {current_url}")
 
 def extract_post_id(url: str) -> str:
     patterns = [
@@ -198,6 +297,7 @@ async def scrape_all(email: str, password: str) -> list[dict]:
             log.debug("בודק תקינות סשן...")
             await page.goto("https://www.facebook.com", wait_until="domcontentloaded")
             await random_delay(2, 4)
+            await dismiss_cookie_dialog(page)
             if "login" in page.url:
                 log.warning("סשן פג — מתחבר מחדש")
                 await login(page, email, password)
