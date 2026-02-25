@@ -3,6 +3,7 @@ import os
 import signal
 import sys
 from datetime import datetime, time, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from database import init_db, is_seen, mark_seen, save_lead, get_stats
 from logger import get_logger
@@ -12,6 +13,7 @@ log = get_logger("Main")
 INTERVAL_MINUTES = int(os.environ.get("INTERVAL_MINUTES", "10"))
 TIMEZONE_NAME = os.environ.get("TIMEZONE", "UTC")
 QUIET_HOURS = os.environ.get("QUIET_HOURS", "").strip()
+TELEGRAM_CONTROL = os.environ.get("TELEGRAM_CONTROL", "1").strip().lower() not in ("0", "false", "no", "off")
 
 FB_EMAIL = os.environ.get("FB_EMAIL")
 FB_PASSWORD = os.environ.get("FB_PASSWORD")
@@ -94,6 +96,193 @@ def _seconds_until_quiet_end(now: datetime, quiet: tuple[time, time]) -> float:
         end_dt = today_end if now_t < end_t else (today_end + timedelta(days=1))
 
     return max(0.0, (end_dt - now).total_seconds())
+
+def _parse_allowed_chat_ids(spec: str | None) -> set[int]:
+    """Parses TELEGRAM_CHAT_ID (supports '123', '-100...', '123,456')."""
+    if not spec:
+        return set()
+    parts = []
+    for chunk in spec.replace("\n", ",").replace(" ", ",").split(","):
+        chunk = chunk.strip()
+        if chunk:
+            parts.append(chunk)
+    ids: set[int] = set()
+    for p in parts:
+        try:
+            ids.add(int(p))
+        except Exception:
+            continue
+    return ids
+
+async def _telegram_control_loop(
+    *,
+    scan_now_event: asyncio.Event,
+    scan_force_event: asyncio.Event,
+    quiet: tuple[time, time] | None,
+    state: dict,
+):
+    """
+    Telegram polling loop for basic control commands.
+    Commands:
+      - /scan: run scan now (respects quiet hours)
+      - /scan_force: run scan now (ignores quiet hours)
+      - /status: show basic status
+    """
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    allowed_chat_ids = _parse_allowed_chat_ids(os.environ.get("TELEGRAM_CHAT_ID"))
+    if not bot_token or not allowed_chat_ids:
+        log.info("בקרת טלגרם לא מופעלת (חסרים TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID)")
+        return
+
+    from notifier import send_message
+    import requests
+    import json
+
+    offset_file = Path("data/telegram_offset.txt")
+
+    def load_offset() -> int:
+        try:
+            if offset_file.exists():
+                return int(offset_file.read_text().strip() or "0")
+        except Exception:
+            return 0
+        return 0
+
+    def save_offset(value: int):
+        try:
+            offset_file.parent.mkdir(exist_ok=True)
+            offset_file.write_text(str(value))
+        except Exception:
+            pass
+
+    def fetch_updates(offset: int, timeout: int = 30) -> list[dict]:
+        url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
+        params: dict = {"timeout": timeout, "allowed_updates": json.dumps(["message", "edited_message"])}
+        if offset:
+            params["offset"] = offset
+        resp = requests.get(url, params=params, timeout=timeout + 10)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"Telegram getUpdates failed: {data}")
+        return data.get("result") or []
+
+    offset = load_offset()
+    log.info("בקרת טלגרם הופעלה. פקודות: /scan /scan_force /status")
+
+    while True:
+        try:
+            updates = await asyncio.to_thread(fetch_updates, offset, 30)
+            for upd in updates:
+                try:
+                    update_id = int(upd.get("update_id"))
+                except Exception:
+                    continue
+
+                offset = max(offset, update_id + 1)
+                save_offset(offset)
+
+                msg = upd.get("message") or upd.get("edited_message")
+                if not msg:
+                    continue
+
+                chat_id = msg.get("chat", {}).get("id")
+                if chat_id is None:
+                    continue
+
+                try:
+                    chat_id_int = int(chat_id)
+                except Exception:
+                    continue
+
+                if chat_id_int not in allowed_chat_ids:
+                    continue
+
+                text = (msg.get("text") or "").strip()
+                if not text:
+                    continue
+
+                first = text.split()[0].strip()
+                cmd = first.split("@", 1)[0].lower()
+
+                if cmd in ("/help",):
+                    await asyncio.to_thread(
+                        send_message,
+                        "פקודות:\n/scan - סריקה עכשיו (מכבד שעות שקטות)\n/scan_force - סריקה עכשיו (מתעלם משעות שקטות)\n/status - סטטוס",
+                        chat_id=chat_id_int,
+                        disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/status",):
+                    stats = get_stats()
+                    now = _now_local()
+                    quiet_now = bool(quiet and _is_quiet_now(now, quiet))
+                    quiet_desc = f"{QUIET_HOURS} ({TIMEZONE_NAME})" if QUIET_HOURS else "(disabled)"
+                    last_started = state.get("last_scan_started")
+                    last_finished = state.get("last_scan_finished")
+                    in_progress = bool(state.get("scan_in_progress"))
+                    msg_text = (
+                        "סטטוס בוט:\n"
+                        f"- שעה מקומית: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                        f"- שעות שקטות: {quiet_desc} | עכשיו: {'פעיל' if quiet_now else 'לא'}\n"
+                        f"- סריקה רצה: {'כן' if in_progress else 'לא'}\n"
+                        f"- סריקה אחרונה התחילה: {last_started.strftime('%Y-%m-%d %H:%M:%S %Z') if last_started else '-'}\n"
+                        f"- סריקה אחרונה הסתיימה: {last_finished.strftime('%Y-%m-%d %H:%M:%S %Z') if last_finished else '-'}\n"
+                        f"- סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}\n"
+                        "\nפקודות: /scan /scan_force /status"
+                    )
+                    await asyncio.to_thread(
+                        send_message,
+                        msg_text,
+                        chat_id=chat_id_int,
+                        disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/scan",):
+                    now = _now_local()
+                    if state.get("scan_in_progress"):
+                        await asyncio.to_thread(
+                            send_message,
+                            "כבר יש סריקה שרצה כרגע. אעדכן כשתסתיים.",
+                            chat_id=chat_id_int,
+                            disable_web_page_preview=True,
+                        )
+                        continue
+
+                    if quiet and _is_quiet_now(now, quiet):
+                        await asyncio.to_thread(
+                            send_message,
+                            f"שעות שקטות פעילות עכשיו ({QUIET_HOURS}, {TIMEZONE_NAME}). אם בכל זאת צריך, השתמש /scan_force.",
+                            chat_id=chat_id_int,
+                            disable_web_page_preview=True,
+                        )
+                        continue
+
+                    scan_now_event.set()
+                    await asyncio.to_thread(
+                        send_message,
+                        "מתזמן סריקה עכשיו.",
+                        chat_id=chat_id_int,
+                        disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/scan_force",):
+                    scan_force_event.set()
+                    scan_now_event.set()
+                    await asyncio.to_thread(
+                        send_message,
+                        "מתזמן סריקה עכשיו (forced).",
+                        chat_id=chat_id_int,
+                        disable_web_page_preview=True,
+                    )
+                    continue
+
+        except Exception as e:
+            log.error(f"שגיאה בלולאת בקרת טלגרם: {e}", exc_info=True)
+            await asyncio.sleep(5)
 
 _shutting_down = False
 
@@ -191,25 +380,74 @@ async def main():
             log.error(f"QUIET_HOURS לא תקין ({QUIET_HOURS}) — מתעלם. שגיאה: {e}")
             quiet = None
 
+    scan_now_event = asyncio.Event()
+    scan_force_event = asyncio.Event()
+    scan_lock = asyncio.Lock()
+    state: dict = {
+        "scan_in_progress": False,
+        "last_scan_started": None,
+        "last_scan_finished": None,
+    }
+
+    async def run_scan_guarded():
+        async with scan_lock:
+            state["scan_in_progress"] = True
+            state["last_scan_started"] = _now_local()
+            try:
+                await run_cycle()
+            finally:
+                state["scan_in_progress"] = False
+                state["last_scan_finished"] = _now_local()
+
+    if TELEGRAM_CONTROL:
+        asyncio.create_task(
+            _telegram_control_loop(
+                scan_now_event=scan_now_event,
+                scan_force_event=scan_force_event,
+                quiet=quiet,
+                state=state,
+            )
+        )
+
     while True:
         try:
+            if scan_now_event.is_set():
+                force = scan_force_event.is_set()
+                scan_now_event.clear()
+                scan_force_event.clear()
+
+                if not force and quiet and _is_quiet_now(_now_local(), quiet):
+                    # Should not happen (we don't schedule /scan during quiet hours),
+                    # but guard anyway.
+                    log.info("בקשת סריקה נדחתה בגלל שעות שקטות")
+                else:
+                    log.info(f"מריץ סריקה לפי פקודה (force={force})")
+                    await run_scan_guarded()
+                    continue
+
             now = _now_local()
             if quiet and _is_quiet_now(now, quiet):
                 secs = _seconds_until_quiet_end(now, quiet)
                 sleep_for = max(60, min(int(secs) + 1, 12 * 60 * 60))
                 log.info(
                     f"שעות שקטות פעילות ({QUIET_HOURS}, {TIMEZONE_NAME}) — "
-                    f"מדלג על סריקה. ישן {sleep_for//60} דקות."
+                    f"מדלג על סריקה. ישן {sleep_for//60} דקות (או /scan_force)."
                 )
-                await asyncio.sleep(sleep_for)
+                try:
+                    await asyncio.wait_for(scan_now_event.wait(), timeout=sleep_for)
+                except asyncio.TimeoutError:
+                    pass
                 continue
 
-            await run_cycle()
+            await run_scan_guarded()
         except Exception as e:
             log.error(f"שגיאה לא צפויה: {e}", exc_info=True)
 
-        log.info(f"ממתין {INTERVAL_MINUTES} דקות לסבב הבא...")
-        await asyncio.sleep(INTERVAL_MINUTES * 60)
+        log.info(f"ממתין {INTERVAL_MINUTES} דקות לסבב הבא... (או /scan)")
+        try:
+            await asyncio.wait_for(scan_now_event.wait(), timeout=INTERVAL_MINUTES * 60)
+        except asyncio.TimeoutError:
+            pass
 
 if __name__ == "__main__":
     asyncio.run(main())
