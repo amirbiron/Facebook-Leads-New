@@ -8,11 +8,11 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 SESSION_FILE = Path("data/fb_session.json")
 
 GROUPS = [
-    {"name": "הכול על אוטומציות בינה מלאכותית AI - IL ישראל", "url": "https://www.facebook.com/groups/aiautomationisrael"},
-    {"name": "דרושים מתכנתים ואנשי פיתוח", "url": "https://www.facebook.com/groups/developers.jobs.israel"},
-    {"name": "AI ISRAEL – בינה מלאכותית כלים ושימושים", "url": "https://www.facebook.com/groups/aiisrael"},
-    {"name": "בינה מלאכותית AI ISRAEL", "url": "https://www.facebook.com/groups/artificialintelligenceisrael"},
-    {"name": "Vibe Coding - Israel", "url": "https://www.facebook.com/groups/vibecodingisrael"},
+    {"name": "הכול על אוטומציות בינה מלאכותית AI - IL ישראל", "url": "https://www.facebook.com/groups/640894321475593/"},
+    {"name": "דרושים מתכנתים ואנשי פיתוח", "url": "https://www.facebook.com/groups/1920854911477422"},
+    {"name": "AI ISRAEL – בינה מלאכותית כלים ושימושים", "url": "https://www.facebook.com/groups/1934524236895744/"},
+    {"name": "בינה מלאכותית AI ISRAEL", "url": "https://www.facebook.com/groups/2055437551629206"},
+    {"name": "Vibe Coding - Israel", "url": "https://www.facebook.com/groups/1684554685829832"},
 ]
 
 async def random_delay(min_sec=2, max_sec=6):
