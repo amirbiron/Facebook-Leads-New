@@ -5,6 +5,8 @@ services:
     buildCommand: pip install -r requirements.txt && playwright install chromium && playwright install-deps chromium
     startCommand: python main.py
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
       - key: FB_EMAIL
         sync: false
       - key: FB_PASSWORD
