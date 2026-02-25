@@ -411,6 +411,7 @@ async def main():
 
     while True:
         try:
+            did_scan = False
             if scan_now_event.is_set():
                 force = scan_force_event.is_set()
                 scan_now_event.clear()
@@ -423,23 +424,24 @@ async def main():
                 else:
                     log.info(f"מריץ סריקה לפי פקודה (force={force})")
                     await run_scan_guarded()
+                    did_scan = True
+
+            if not did_scan:
+                now = _now_local()
+                if quiet and _is_quiet_now(now, quiet):
+                    secs = _seconds_until_quiet_end(now, quiet)
+                    sleep_for = max(60, min(int(secs) + 1, 12 * 60 * 60))
+                    log.info(
+                        f"שעות שקטות פעילות ({QUIET_HOURS}, {TIMEZONE_NAME}) — "
+                        f"מדלג על סריקה. ישן {sleep_for//60} דקות (או /scan_force)."
+                    )
+                    try:
+                        await asyncio.wait_for(scan_now_event.wait(), timeout=sleep_for)
+                    except asyncio.TimeoutError:
+                        pass
                     continue
 
-            now = _now_local()
-            if quiet and _is_quiet_now(now, quiet):
-                secs = _seconds_until_quiet_end(now, quiet)
-                sleep_for = max(60, min(int(secs) + 1, 12 * 60 * 60))
-                log.info(
-                    f"שעות שקטות פעילות ({QUIET_HOURS}, {TIMEZONE_NAME}) — "
-                    f"מדלג על סריקה. ישן {sleep_for//60} דקות (או /scan_force)."
-                )
-                try:
-                    await asyncio.wait_for(scan_now_event.wait(), timeout=sleep_for)
-                except asyncio.TimeoutError:
-                    pass
-                continue
-
-            await run_scan_guarded()
+                await run_scan_guarded()
         except Exception as e:
             log.error(f"שגיאה לא צפויה: {e}", exc_info=True)
 
