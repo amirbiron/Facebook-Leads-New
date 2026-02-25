@@ -39,9 +39,28 @@ def classify_post(content: str, group_name: str) -> dict:
                 }
             ]
         )
-        result = json.loads(message.content[0].text)
+
+        raw_text = message.content[0].text if message.content else ""
+        log.debug(f"תשובה גולמית מ-API ({message.stop_reason}): {raw_text[:200]}")
+
+        if not raw_text.strip():
+            log.warning("API החזיר תשובה ריקה")
+            return {"relevant": False, "reason": "תשובה ריקה מ-API"}
+
+        # מנסה לחלץ JSON גם אם עטוף ב-markdown
+        text = raw_text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        result = json.loads(text)
         log.debug(f"תוצאה: relevant={result.get('relevant')} reason={result.get('reason', '')}")
         return result
+    except json.JSONDecodeError as e:
+        log.error(f"שגיאה בפירוש JSON: {e} | תשובה: {raw_text[:300]}")
+        return {"relevant": False, "reason": "שגיאה בפירוש תשובה"}
+    except anthropic.APIError as e:
+        log.error(f"שגיאת API: {e.status_code} {e.message}")
+        return {"relevant": False, "reason": f"שגיאת API: {e.status_code}"}
     except Exception as e:
         log.error(f"שגיאה בסיווג: {e}", exc_info=True)
         return {"relevant": False, "reason": "שגיאה בסיווג"}
