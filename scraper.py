@@ -79,7 +79,6 @@ async def login(page, email: str, password: str):
     # מחפש את שדה האימייל עם כמה סלקטורים
     email_selectors = ["#email", "input[name='email']", "input[type='email']", "input[id='email']"]
     pass_selectors = ["#pass", "input[name='pass']", "input[type='password']", "input[id='pass']"]
-    login_selectors = ["[name='login']", "button[type='submit']", "#loginbutton", "button[data-testid='royal_login_button']"]
 
     email_field = None
     for selector in email_selectors:
@@ -122,21 +121,9 @@ async def login(page, email: str, password: str):
     await pass_field.fill(password)
     await random_delay(0.5, 1.5)
 
-    login_btn = None
-    for selector in login_selectors:
-        try:
-            login_btn = await page.query_selector(selector)
-            if login_btn:
-                log.debug(f"כפתור לוגין נמצא עם: {selector}")
-                break
-        except Exception:
-            continue
-
-    if not login_btn:
-        log.error("לא נמצא כפתור לוגין")
-        raise Exception("לא נמצא כפתור לוגין בדף")
-
-    await login_btn.click()
+    # שולח את הטופס ע"י Enter — יותר אמין מחיפוש כפתור
+    log.debug("שולח טופס לוגין (Enter)...")
+    await pass_field.press("Enter")
     log.debug("ממתין לטעינת דף אחרי לוגין...")
     await page.wait_for_load_state("domcontentloaded")
     await random_delay(3, 5)
