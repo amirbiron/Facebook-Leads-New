@@ -245,9 +245,9 @@ async def scrape_group(page, group: dict) -> list[dict]:
         skipped_short = 0
         skipped_dup = 0
 
-        for el in post_elements[:30]:
+        for el in post_elements[:20]:
             try:
-                text = await el.inner_text()
+                text = await asyncio.wait_for(el.inner_text(), timeout=5)
                 text = text.strip()
 
                 if len(text) < 50:
@@ -284,7 +284,6 @@ async def scrape_group(page, group: dict) -> list[dict]:
                 continue
 
         log.debug(f"סטטיסטיקה — דולגו: {skipped_short} קצרים, {skipped_dup} כפולים")
-        await random_delay(3, 8)
 
     except PlaywrightTimeout:
         log.error(f"טיימאאוט בקבוצה: {group['name']} (30 שניות)")
@@ -354,9 +353,10 @@ async def scrape_all(email: str, password: str) -> list[dict]:
             posts = await scrape_group(page, group)
             all_posts.extend(posts)
 
-            # ניקוי זיכרון בין קבוצות
+            # ניקוי זיכרון — מנווט לדף ריק כדי לשחרר את ה-DOM של הקבוצה
             try:
-                await page.evaluate("window.gc && window.gc()")
+                await page.goto("about:blank")
+                log.debug("ניווט ל-about:blank לשחרור זיכרון")
             except Exception:
                 pass
 
