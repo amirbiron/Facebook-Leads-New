@@ -28,13 +28,15 @@ signal.signal(signal.SIGTERM, handle_signal)
 signal.signal(signal.SIGINT, handle_signal)
 
 async def run_cycle():
+    import gc
+
     log.info(f"===== סבב חדש: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =====")
 
     if not FB_EMAIL or not FB_PASSWORD:
         log.error("חסרים FB_EMAIL או FB_PASSWORD — לא ניתן לסרוק")
         return
 
-    # שלב 1 — גרידה
+    # שלב 1 — גרידה (דפדפן פתוח)
     try:
         posts = await scrape_all(FB_EMAIL, FB_PASSWORD)
         log.info(f"סך הכל פוסטים שנמצאו: {len(posts)}")
@@ -42,7 +44,11 @@ async def run_cycle():
         log.error(f"שגיאה בגרידה: {e}", exc_info=True)
         return
 
-    # שלב 2 — סינון כפילויות + סיווג
+    # הדפדפן כבר סגור כאן — משחררים זיכרון לפני הסיווג
+    gc.collect()
+    log.debug("זיכרון שוחרר אחרי סגירת דפדפן")
+
+    # שלב 2 — סינון כפילויות + סיווג (בלי דפדפן — זיכרון נמוך)
     new_posts = [p for p in posts if not is_seen(p["id"])]
     log.info(f"פוסטים חדשים (לא נראו קודם): {len(new_posts)}")
 
