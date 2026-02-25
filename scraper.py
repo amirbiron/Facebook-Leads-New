@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import random
 import re
 from pathlib import Path
@@ -11,13 +12,29 @@ log = get_logger("Scraper")
 SESSION_FILE = Path("data/fb_session.json")
 
 # שימוש ב-m.facebook.com — אתר מובייל קל בהרבה בזיכרון
-GROUPS = [
+DEFAULT_GROUPS = [
     {"name": "הכול על אוטומציות בינה מלאכותית AI - IL ישראל", "url": "https://m.facebook.com/groups/640894321475593/"},
     {"name": "דרושים מתכנתים ואנשי פיתוח", "url": "https://m.facebook.com/groups/1920854911477422"},
     {"name": "AI ISRAEL – בינה מלאכותית כלים ושימושים", "url": "https://m.facebook.com/groups/1934524236895744/"},
     {"name": "בינה מלאכותית AI ISRAEL", "url": "https://m.facebook.com/groups/2055437551629206"},
     {"name": "Vibe Coding - Israel", "url": "https://m.facebook.com/groups/1684554685829832"},
 ]
+
+def load_groups() -> list[dict]:
+    """טוען קבוצות מ-FB_GROUPS (JSON) או מהרשימה המובנית.
+    פורמט FB_GROUPS: [{"name": "...", "url": "..."}, ...]
+    """
+    env_groups = os.environ.get("FB_GROUPS")
+    if env_groups:
+        try:
+            groups = json.loads(env_groups)
+            log.info(f"נטענו {len(groups)} קבוצות ממשתנה סביבה FB_GROUPS")
+            return groups
+        except json.JSONDecodeError as e:
+            log.error(f"שגיאה בפירוש FB_GROUPS: {e} — משתמש ברשימת ברירת מחדל")
+    return DEFAULT_GROUPS
+
+GROUPS = load_groups()
 
 async def random_delay(min_sec=1, max_sec=3):
     delay = random.uniform(min_sec, max_sec)
@@ -256,9 +273,32 @@ async def scrape_group(page, group: dict) -> list[dict]:
 
                 post_url = group["url"]
                 try:
-                    link = await el.query_selector("a[href*='/posts/'], a[href*='story_fbid'], a[href*='permalink']")
-                    if link:
-                        href = await link.get_attribute("href")
+                    # סלקטורים מרובים — כולל מבנה מובייל
+                    link_selectors = [
+                        "a[href*='/posts/']",
+                        "a[href*='story_fbid']",
+                        "a[href*='permalink']",
+                        "a[href*='/story.php']",
+                        "a[href*='multi_permalinks']",
+                        "a[href*='/p/']",
+                    ]
+                    found_link = None
+                    for sel in link_selectors:
+                        found_link = await el.query_selector(sel)
+                        if found_link:
+                            break
+
+                    # fallback — קישור עם חותמת זמן (בד\"כ לינק לפוסט במובייל)
+                    if not found_link:
+                        all_links = await el.query_selector_all("a[href]")
+                        for a in all_links:
+                            href = await a.get_attribute("href") or ""
+                            if "/groups/" in href and ("/posts/" in href or "/permalink/" in href or "story_fbid" in href):
+                                found_link = a
+                                break
+
+                    if found_link:
+                        href = await found_link.get_attribute("href")
                         if href:
                             if href.startswith("http"):
                                 post_url = href
