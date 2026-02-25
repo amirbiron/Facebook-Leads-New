@@ -23,6 +23,15 @@ async def random_delay(min_sec=2, max_sec=6):
     log.debug(f"השהיה {delay:.1f} שניות")
     await asyncio.sleep(delay)
 
+async def block_heavy_resources(page):
+    """חוסם תמונות, וידאו, פונטים ומדיה כדי לחסוך זיכרון"""
+    await page.route("**/*.{png,jpg,jpeg,gif,svg,webp,ico,bmp}", lambda route: route.abort())
+    await page.route("**/*.{mp4,webm,ogg,avi,mov}", lambda route: route.abort())
+    await page.route("**/*.{woff,woff2,ttf,otf,eot}", lambda route: route.abort())
+    await page.route("**/video/**", lambda route: route.abort())
+    await page.route("**/videoplayback*", lambda route: route.abort())
+    log.debug("חסימת משאבים כבדים הופעלה (תמונות, וידאו, פונטים)")
+
 async def human_scroll(page, times=3):
     for i in range(times):
         await page.evaluate("window.scrollBy(0, Math.random() * 400 + 200)")
@@ -205,7 +214,7 @@ async def scrape_group(page, group: dict) -> list[dict]:
 
         await random_delay(3, 6)
         log.debug("מתחיל גלילה...")
-        await human_scroll(page, times=4)
+        await human_scroll(page, times=3)
 
         # מחפש אלמנטים של פוסטים
         log.debug("מחפש אלמנטים של פוסטים (סלקטור ראשי)...")
@@ -290,7 +299,22 @@ async def scrape_all(email: str, password: str) -> list[dict]:
         log.debug("מפעיל דפדפן Chromium...")
         browser = await p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-default-apps",
+                "--disable-sync",
+                "--disable-translate",
+                "--no-first-run",
+                "--disable-component-update",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--renderer-process-limit=1",
+                "--js-flags=--max-old-space-size=128",
+            ]
         )
         log.debug("דפדפן הופעל בהצלחה")
 
@@ -300,6 +324,7 @@ async def scrape_all(email: str, password: str) -> list[dict]:
             locale="he-IL"
         )
         page = await context.new_page()
+        await block_heavy_resources(page)
 
         session_loaded = await load_session(context)
 
@@ -323,6 +348,13 @@ async def scrape_all(email: str, password: str) -> list[dict]:
             log.info(f"--- קבוצה {i}/{len(GROUPS)} ---")
             posts = await scrape_group(page, group)
             all_posts.extend(posts)
+
+            # ניקוי זיכרון בין קבוצות
+            try:
+                await page.evaluate("window.gc && window.gc()")
+            except Exception:
+                pass
+
             if i < len(GROUPS):
                 log.debug("השהיה בין קבוצות...")
                 await random_delay(8, 20)

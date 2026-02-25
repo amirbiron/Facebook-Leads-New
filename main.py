@@ -1,5 +1,7 @@
 import asyncio
 import os
+import signal
+import sys
 from datetime import datetime
 from database import init_db, is_seen, mark_seen, save_lead, get_stats
 from scraper import scrape_all
@@ -13,6 +15,17 @@ INTERVAL_MINUTES = int(os.environ.get("INTERVAL_MINUTES", "10"))
 
 FB_EMAIL = os.environ.get("FB_EMAIL")
 FB_PASSWORD = os.environ.get("FB_PASSWORD")
+
+_shutting_down = False
+
+def handle_signal(sig, frame):
+    global _shutting_down
+    log.info(f"קיבלנו סיגנל {sig} — יוצאים בצורה מסודרת")
+    _shutting_down = True
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_signal)
+signal.signal(signal.SIGINT, handle_signal)
 
 async def run_cycle():
     log.info(f"===== סבב חדש: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =====")
