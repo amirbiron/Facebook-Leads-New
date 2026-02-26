@@ -51,6 +51,12 @@ def init_db():
                 UNIQUE(word, type)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS _config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
 
 # ── CRUD ──────────────────────────────────────────────────────
 def is_seen(post_id: str) -> bool:
@@ -90,9 +96,13 @@ def get_stats() -> dict:
 def _normalize_group_url(raw_url: str) -> str:
     """ממיר URL לפורמט m.facebook.com ומנקה."""
     url = raw_url.strip().rstrip("/")
-    url = url.replace("www.facebook.com", "m.facebook.com")
+    # הוספת סכמה לפני החלפת דומיין, כדי למנוע כפילות prefix
     if not url.startswith("http"):
-        url = "https://m.facebook.com/groups/" + url
+        if "facebook.com" in url:
+            url = "https://" + url
+        else:
+            url = "https://m.facebook.com/groups/" + url
+    url = url.replace("www.facebook.com", "m.facebook.com")
     return url
 
 def _extract_group_name(url: str) -> str:
@@ -110,6 +120,7 @@ def add_group(raw_url: str) -> tuple[bool, str]:
                 "INSERT INTO groups (name, url, created_at) VALUES (?, ?, ?)",
                 (name, url, datetime.now().isoformat()),
             )
+        _mark_feature_configured("groups")
         return True, f"קבוצה נוספה: {name}\n{url}"
     except sqlite3.IntegrityError:
         return False, f"הקבוצה כבר קיימת: {url}"
@@ -123,16 +134,23 @@ def remove_group(raw_url: str) -> tuple[bool, str]:
         return True, f"קבוצה הוסרה: {url}"
     return False, f"קבוצה לא נמצאה: {url}"
 
-def _table_was_configured(table_name: str) -> bool:
-    """בודק אם אי-פעם הוכנסה שורה לטבלה (דרך sqlite_sequence של AUTOINCREMENT)."""
+def _feature_was_configured(key: str) -> bool:
+    """בודק אם פיצ'ר מסוים הופעל אי-פעם (דרך טבלת _config)."""
     row = _get_conn().execute(
-        "SELECT 1 FROM sqlite_sequence WHERE name = ?", (table_name,)
+        "SELECT 1 FROM _config WHERE key = ?", (key,)
     ).fetchone()
     return row is not None
 
+def _mark_feature_configured(key: str):
+    """מסמן פיצ'ר כמוגדר (נקרא בפעם הראשונה שמוסיפים שורה)."""
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO _config (key, value) VALUES (?, '1')", (key,)
+        )
+
 def get_db_groups() -> list[dict] | None:
-    """מחזיר קבוצות מה-DB, או None אם הטבלה מעולם לא הוגדרה."""
-    if not _table_was_configured("groups"):
+    """מחזיר קבוצות מה-DB, או None אם מעולם לא הוגדרה קבוצה."""
+    if not _feature_was_configured("groups"):
         return None
     rows = _get_conn().execute("SELECT name, url FROM groups ORDER BY id").fetchall()
     return [{"name": r[0], "url": r[1]} for r in rows]
@@ -150,6 +168,7 @@ def add_keyword(word: str, kw_type: str) -> tuple[bool, str]:
                 "INSERT INTO keywords (word, type, created_at) VALUES (?, ?, ?)",
                 (word, kw_type, datetime.now().isoformat()),
             )
+        _mark_feature_configured(f"keywords_{kw_type}")
         label = "מילת מפתח" if kw_type == "pre_filter" else "מילה חסומה"
         return True, f"{label} נוספה: {word}"
     except sqlite3.IntegrityError:
@@ -167,8 +186,8 @@ def remove_keyword(word: str, kw_type: str) -> tuple[bool, str]:
     return False, f"מילה לא נמצאה: {word}"
 
 def get_db_keywords(kw_type: str) -> list[str] | None:
-    """מחזיר מילות מפתח מה-DB לפי סוג, או None אם הטבלה מעולם לא הוגדרה."""
-    if not _table_was_configured("keywords"):
+    """מחזיר מילות מפתח מה-DB לפי סוג, או None אם הסוג מעולם לא הוגדר."""
+    if not _feature_was_configured(f"keywords_{kw_type}"):
         return None
     rows = _get_conn().execute(
         "SELECT word FROM keywords WHERE type = ? ORDER BY id", (kw_type,)

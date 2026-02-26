@@ -36,6 +36,11 @@ class TestPassesKeywordFilter:
     def test_multiple_keywords(self):
         assert passes_keyword_filter("פיתוח בוט אוטומציה") is True
 
+    def test_empty_list_passes_all(self):
+        """רשימת מילות מפתח ריקה = אין סינון מוקדם, הכל עובר."""
+        with patch("main.PRE_FILTER_KEYWORDS", []):
+            assert passes_keyword_filter("כל טקסט שהוא") is True
+
 
 # ──────────────────────────────────────────────────────────────
 # 2. is_blocked
@@ -339,6 +344,18 @@ class TestGroupsCRUD:
         assert "m.facebook.com" in groups[0]["url"]
         assert not groups[0]["url"].endswith("/")
 
+    def test_url_normalization_schemeless(self, tmp_db):
+        """URL בלי סכמה עם דומיין לא צריך לקבל כפילות prefix."""
+        database.add_group("www.facebook.com/groups/77777")
+        groups = database.get_db_groups()
+        assert groups[0]["url"] == "https://m.facebook.com/groups/77777"
+
+    def test_url_normalization_bare_id(self, tmp_db):
+        """מזהה קבוצה בלבד — מקבל prefix מלא."""
+        database.add_group("12345")
+        groups = database.get_db_groups()
+        assert groups[0]["url"] == "https://m.facebook.com/groups/12345"
+
     def test_never_configured_returns_none(self, tmp_db):
         assert database.get_db_groups() is None
 
@@ -417,6 +434,23 @@ class TestKeywordsCRUD:
         kws = database.get_db_keywords("pre_filter")
         assert kws == []
 
+    def test_cross_type_does_not_affect_other_type(self, tmp_db):
+        """הוספת block לא צריכה לגרום ל-pre_filter להחזיר [] במקום None."""
+        database.add_keyword("ספאם", "block")
+        # block הוגדר — אבל pre_filter מעולם לא, אז צריך להחזיר None
+        assert database.get_db_keywords("pre_filter") is None
+        assert database.get_db_keywords("block") == ["ספאם"]
+
+    def test_cross_type_independent_empty(self, tmp_db):
+        """רוקנים סוג אחד — הסוג השני לא מושפע."""
+        database.add_keyword("בוט", "pre_filter")
+        database.add_keyword("ספאם", "block")
+        database.remove_keyword("בוט", "pre_filter")
+        # pre_filter רוקן בכוונה → []
+        assert database.get_db_keywords("pre_filter") == []
+        # block עדיין פעיל
+        assert database.get_db_keywords("block") == ["ספאם"]
+
 
 # ──────────────────────────────────────────────────────────────
 # 9. reload_keywords
@@ -447,3 +481,12 @@ class TestReloadKeywords:
         reload_keywords()
         from main import PRE_FILTER_KEYWORDS
         assert PRE_FILTER_KEYWORDS == []
+
+    def test_block_keyword_does_not_kill_pre_filter_defaults(self, tmp_db):
+        """הוספת block בלבד לא צריכה לרוקן את pre_filter — fallback ל-defaults."""
+        from main import reload_keywords, _PRE_FILTER_KEYWORDS_DEFAULT
+        database.add_keyword("ספאם", "block")
+        reload_keywords()
+        from main import PRE_FILTER_KEYWORDS, BLOCK_KEYWORDS
+        assert PRE_FILTER_KEYWORDS == _PRE_FILTER_KEYWORDS_DEFAULT
+        assert BLOCK_KEYWORDS == ["ספאם"]

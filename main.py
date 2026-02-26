@@ -72,7 +72,11 @@ def reload_keywords():
     PRE_FILTER_KEYWORDS = _load_pre_filter_keywords()
 
 def passes_keyword_filter(text: str) -> bool:
-    """בודק אם הפוסט מכיל לפחות מילת מפתח אחת."""
+    """בודק אם הפוסט מכיל לפחות מילת מפתח אחת.
+    אם הרשימה ריקה — מעביר הכל (אין סינון מוקדם).
+    """
+    if not PRE_FILTER_KEYWORDS:
+        return True
     text_lower = text.lower()
     return any(kw in text_lower for kw in PRE_FILTER_KEYWORDS)
 
