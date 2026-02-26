@@ -403,7 +403,9 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                     except Exception as e:
                         log.warning(f"נכשל עדכון שם קבוצה ב-DB: {e}")
             else:
-                log.warning(f"לא הצלחתי לחלץ שם קבוצה מכותרת הדף: '{page_title}'")
+                # warning רק אם השם עדיין לא עודכן (ספרות בלבד) — אחרת זה מצב רגיל
+                if group["name"].isdigit():
+                    log.warning(f"לא הצלחתי לחלץ שם קבוצה מכותרת הדף: '{page_title}'")
         except Exception as e:
             log.warning(f"שגיאה בחילוץ כותרת דף לקבוצה {group['url']}: {e}")
 
