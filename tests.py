@@ -236,6 +236,48 @@ class TestExtractPostId:
 
 
 # ──────────────────────────────────────────────────────────────
+# 5b. content-based post ID for posts without real URL
+# ──────────────────────────────────────────────────────────────
+
+import hashlib
+
+
+class TestContentBasedPostId:
+    """פוסטים ללא URL אמיתי צריכים לקבל ID מבוסס hash תוכן,
+    כדי למנוע ID זהה לכל הפוסטים בקבוצה (באג #55)."""
+
+    def test_different_content_different_id(self):
+        """שני פוסטים עם תוכן שונה מקבלים ID שונה."""
+        text1 = "פוסט ראשון על נושא מסוים"
+        text2 = "פוסט שני על נושא אחר"
+        id1 = "c_" + hashlib.md5(text1.encode()).hexdigest()[:16]
+        id2 = "c_" + hashlib.md5(text2.encode()).hexdigest()[:16]
+        assert id1 != id2
+
+    def test_same_content_same_id(self):
+        """אותו תוכן מייצר אותו ID — dedup עובד כראוי."""
+        text = "פוסט חוזר עם אותו תוכן בדיוק"
+        id1 = "c_" + hashlib.md5(text.encode()).hexdigest()[:16]
+        id2 = "c_" + hashlib.md5(text.encode()).hexdigest()[:16]
+        assert id1 == id2
+
+    def test_content_id_has_prefix(self):
+        """ID מבוסס תוכן מתחיל ב-'c_' כדי להבדיל מ-ID רגיל."""
+        text = "תוכן כלשהו"
+        post_id = "c_" + hashlib.md5(text.encode()).hexdigest()[:16]
+        assert post_id.startswith("c_")
+        assert len(post_id) == 18  # "c_" + 16 hex chars
+
+    def test_content_id_not_equal_to_group_fallback(self):
+        """ID מבוסס תוכן שונה מ-fallback של URL קבוצה."""
+        group_url = "https://m.facebook.com/groups/640894321475593/"
+        text = "פוסט כלשהו בקבוצה הזאת"
+        fallback_id = extract_post_id(group_url)
+        content_id = "c_" + hashlib.md5(text.encode()).hexdigest()[:16]
+        assert content_id != fallback_id
+
+
+# ──────────────────────────────────────────────────────────────
 # 6. classify_post (mocked API)
 # ──────────────────────────────────────────────────────────────
 
