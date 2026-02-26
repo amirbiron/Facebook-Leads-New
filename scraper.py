@@ -1,15 +1,72 @@
 import asyncio
+import html as html_mod
 import json
 import os
 import random
 import re
 from pathlib import Path
+
+import requests as _requests
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from logger import get_logger
 
 log = get_logger("Scraper")
 
 SESSION_FILE = Path("data/fb_session.json")
+
+# כותרות גנריות/שגויות שלא מייצגות שם קבוצה אמיתי
+_BAD_TITLES = {"facebook", "content not found", "page not found",
+               "error", "log in", "התחברות", "תוכן לא נמצא", "שגיאה"}
+
+
+def _extract_name_from_title(page_title: str) -> str | None:
+    """מחלץ שם קבוצה מכותרת דף פייסבוק. מחזיר None אם הכותרת לא תקינה."""
+    if not page_title or " | " not in page_title:
+        return None
+    extracted = page_title.split(" | ")[0].strip()
+    # פענוח HTML entities (למשל &amp;)
+    extracted = html_mod.unescape(extracted)
+    if (extracted
+            and len(extracted) > 2
+            and extracted.lower() not in _BAD_TITLES
+            and "אינו נתמך" not in extracted):
+        return extracted
+    return None
+
+
+def fetch_group_name(url: str) -> str | None:
+    """מנסה לחלץ את שם הקבוצה האמיתי מפייסבוק דרך HTTP GET עם cookies שמורים.
+    פונקציה סינכרונית — יש לקרוא לה דרך asyncio.to_thread().
+    """
+    try:
+        if not SESSION_FILE.exists():
+            return None
+        cookies = json.loads(SESSION_FILE.read_text())
+        cookie_dict = {c["name"]: c["value"] for c in cookies}
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/120.0.0.0 Mobile Safari/537.36",
+            "Accept-Language": "he-IL,he;q=0.9",
+        }
+
+        resp = _requests.get(
+            url, cookies=cookie_dict, headers=headers,
+            timeout=15, allow_redirects=True,
+        )
+
+        # חילוץ <title> מה-HTML
+        match = re.search(r"<title[^>]*>(.*?)</title>", resp.text,
+                          re.IGNORECASE | re.DOTALL)
+        if not match:
+            return None
+
+        return _extract_name_from_title(match.group(1).strip())
+    except Exception as e:
+        log.debug(f"לא הצלחתי לחלץ שם קבוצה מ-{url}: {e}")
+        return None
+
 
 # שימוש ב-m.facebook.com — אתר מובייל קל בהרבה בזיכרון
 DEFAULT_GROUPS = [
@@ -365,28 +422,20 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             return posts
 
         # חילוץ שם הקבוצה מכותרת הדף (אמין יותר מסלקטורים בתוך ה-DOM)
-        # רשימת כותרות גנריות/שגויות שלא מייצגות שם קבוצה אמיתי
-        _BAD_TITLES = {"facebook", "content not found", "page not found",
-                       "error", "log in", "התחברות", "תוכן לא נמצא", "שגיאה"}
         group_name = group["name"]
         try:
             page_title = await page.title()
-            # כותרת דף בפייסבוק: "שם הקבוצה | Facebook" או "שם הקבוצה"
-            if page_title and " | " in page_title:
-                extracted = page_title.split(" | ")[0].strip()
-                if (extracted
-                        and len(extracted) > 2
-                        and extracted.lower() not in _BAD_TITLES
-                        and "אינו נתמך" not in extracted):
-                    group_name = extracted
-                    log.debug(f"שם קבוצה מכותרת הדף: {group_name}")
-                    # עדכון שם הקבוצה ב-DB כדי שישתמר לסבבים הבאים
-                    if group_name != group["name"]:
-                        try:
-                            from database import update_group_name
-                            update_group_name(group["url"], group_name)
-                        except Exception:
-                            pass
+            extracted = _extract_name_from_title(page_title)
+            if extracted:
+                group_name = extracted
+                log.debug(f"שם קבוצה מכותרת הדף: {group_name}")
+                # עדכון שם הקבוצה ב-DB כדי שישתמר לסבבים הבאים
+                if group_name != group["name"]:
+                    try:
+                        from database import update_group_name
+                        update_group_name(group["url"], group_name)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
