@@ -283,6 +283,161 @@ class TestClassifyPost:
 
 
 # ──────────────────────────────────────────────────────────────
+# 6b. classify_batch (mocked API)
+# ──────────────────────────────────────────────────────────────
+
+
+class TestClassifyBatch:
+    def _make_mock_response(self, text: str):
+        content_block = SimpleNamespace(text=text)
+        return SimpleNamespace(content=[content_block], stop_reason="end_turn")
+
+    @patch("classifier.client")
+    def test_batch_two_posts(self, mock_client):
+        from classifier import classify_batch
+
+        mock_client.messages.create.return_value = self._make_mock_response(
+            '[{"relevant": true, "reason": "מחפש מפתח"}, {"relevant": false, "reason": "שיתוף מאמר"}]'
+        )
+        posts = [
+            {"content": "מחפש מפתח לבוט", "group": "קבוצה1"},
+            {"content": "מאמר מעניין", "group": "קבוצה2"},
+        ]
+        results = classify_batch(posts, batch_size=5)
+        assert len(results) == 2
+        assert results[0]["relevant"] is True
+        assert results[1]["relevant"] is False
+        # נשלחה בקשה אחת בלבד (לא 2)
+        assert mock_client.messages.create.call_count == 1
+
+    @patch("classifier.client")
+    def test_batch_empty_list(self, mock_client):
+        from classifier import classify_batch
+
+        results = classify_batch([])
+        assert results == []
+        mock_client.messages.create.assert_not_called()
+
+    @patch("classifier.client")
+    def test_batch_splits_into_batches(self, mock_client):
+        from classifier import classify_batch
+
+        def side_effect(**kwargs):
+            msg = kwargs.get("messages", [{}])[0].get("content", "")
+            count = msg.count("--- פוסט")
+            items = [{"relevant": False, "reason": "לא רלוונטי"}] * count
+            return self._make_mock_response(json.dumps(items))
+
+        mock_client.messages.create.side_effect = side_effect
+        posts = [{"content": f"פוסט {i}", "group": "קבוצה"} for i in range(7)]
+        results = classify_batch(posts, batch_size=3)
+        assert len(results) == 7
+        # 7 פוסטים בבאצ'ים של 3: 3 + 3 + 1 = 3 קריאות API
+        assert mock_client.messages.create.call_count == 3
+
+    @patch("classifier.client")
+    def test_batch_single_post_returns_dict(self, mock_client):
+        """באצ' של פוסט בודד — API יכול להחזיר אובייקט במקום מערך."""
+        from classifier import classify_batch
+
+        mock_client.messages.create.return_value = self._make_mock_response(
+            '{"relevant": true, "reason": "ליד"}'
+        )
+        results = classify_batch([{"content": "צריך מתכנת", "group": "קבוצה"}])
+        assert len(results) == 1
+        assert results[0]["relevant"] is True
+
+    @patch("classifier.client")
+    def test_batch_markdown_wrapped(self, mock_client):
+        from classifier import classify_batch
+
+        mock_client.messages.create.return_value = self._make_mock_response(
+            '```json\n[{"relevant": true, "reason": "ליד"}]\n```'
+        )
+        results = classify_batch([{"content": "צריך בוט", "group": "קבוצה"}])
+        assert len(results) == 1
+        assert results[0]["relevant"] is True
+
+    @patch("classifier.client")
+    def test_batch_fallback_on_length_mismatch(self, mock_client):
+        """אם API מחזיר מערך בגודל שונה — fallback לסיווג בודד."""
+        from classifier import classify_batch
+
+        # קריאה ראשונה (batch) — מחזיר מערך בגודל שגוי
+        batch_response = self._make_mock_response(
+            '[{"relevant": true, "reason": "ליד"}]'  # מערך של 1 במקום 2
+        )
+        # קריאות fallback בודדות
+        single_response = self._make_mock_response(
+            '{"relevant": false, "reason": "לא רלוונטי"}'
+        )
+        mock_client.messages.create.side_effect = [
+            batch_response, single_response, single_response
+        ]
+        posts = [
+            {"content": "פוסט 1", "group": "קבוצה"},
+            {"content": "פוסט 2", "group": "קבוצה"},
+        ]
+        results = classify_batch(posts, batch_size=5)
+        assert len(results) == 2
+        # 1 batch + 2 fallback singles = 3 calls
+        assert mock_client.messages.create.call_count == 3
+
+    @patch("classifier.client")
+    def test_batch_fallback_on_api_error(self, mock_client):
+        """אם API נופל בבאצ' — fallback לסיווג בודד פוסט-פוסט."""
+        import anthropic
+        from classifier import classify_batch
+
+        error_response = MagicMock()
+        error_response.status_code = 500
+        error_response.headers = {}
+
+        single_ok = self._make_mock_response(
+            '{"relevant": false, "reason": "fallback"}'
+        )
+        mock_client.messages.create.side_effect = [
+            anthropic.APIStatusError(
+                message="server error",
+                response=error_response,
+                body={"error": {"message": "server error"}},
+            ),
+            single_ok,
+            single_ok,
+        ]
+        posts = [
+            {"content": "פוסט 1", "group": "קבוצה"},
+            {"content": "פוסט 2", "group": "קבוצה"},
+        ]
+        results = classify_batch(posts, batch_size=5)
+        assert len(results) == 2
+        assert all(r["relevant"] is False for r in results)
+
+    @patch("classifier.client")
+    def test_batch_fallback_on_null_element(self, mock_client):
+        """אם אלמנט במערך הוא null — fallback בודד ללא תוצאות חלקיות."""
+        from classifier import classify_batch
+
+        # batch מחזיר מערך שבו אלמנט הוא None (לא dict)
+        batch_response = self._make_mock_response(
+            '[{"relevant": true, "reason": "ליד"}, null]'
+        )
+        single_ok = self._make_mock_response(
+            '{"relevant": false, "reason": "fallback"}'
+        )
+        mock_client.messages.create.side_effect = [
+            batch_response, single_ok, single_ok
+        ]
+        posts = [
+            {"content": "פוסט 1", "group": "קבוצה"},
+            {"content": "פוסט 2", "group": "קבוצה"},
+        ]
+        results = classify_batch(posts, batch_size=5)
+        # חייבים לקבל בדיוק 2 תוצאות — לא יותר
+        assert len(results) == 2
+
+
+# ──────────────────────────────────────────────────────────────
 # 7. Database — Groups CRUD
 # ──────────────────────────────────────────────────────────────
 
