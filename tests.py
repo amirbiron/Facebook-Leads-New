@@ -1651,102 +1651,39 @@ class TestExtractNameFromTitle:
 # 25. fetch_group_name — חילוץ שם קבוצה מפייסבוק ב-HTTP
 # ──────────────────────────────────────────────────────────────
 
-from scraper import fetch_group_name
+from scraper import fetch_group_name, _async_fetch_group_name
 
 
 class TestFetchGroupName:
-    def test_og_title_preferred(self, monkeypatch):
-        """og:title מועדף על פני <title>."""
-        import scraper
-        fake_html = (
-            '<html><head>'
-            '<meta property="og:title" content="שם אמיתי מ-OG" />'
-            '<title>Facebook</title>'
-            '</head></html>'
-        )
-        fake_resp = SimpleNamespace(text=fake_html)
-        monkeypatch.setattr(scraper._requests, "get", lambda *a, **kw: fake_resp)
+    """טסטים ל-fetch_group_name — מוקים את _async_fetch_group_name
+    כי Playwright לא זמין בסביבת טסטים."""
 
-        assert fetch_group_name("https://m.facebook.com/groups/123") == "שם אמיתי מ-OG"
-
-    def test_title_fallback(self, monkeypatch):
-        """אם אין og:title — נופל ל-<title>."""
+    def test_returns_name_on_success(self, monkeypatch):
+        """מחזיר שם קבוצה כשהחילוץ מצליח."""
         import scraper
-        fake_html = "<html><head><title>קבוצת טסט מגניבה | Facebook</title></head></html>"
-        fake_resp = SimpleNamespace(text=fake_html)
-        monkeypatch.setattr(scraper._requests, "get", lambda *a, **kw: fake_resp)
+
+        async def fake_async(url):
+            return "קבוצת טסט מגניבה"
+        monkeypatch.setattr(scraper, "_async_fetch_group_name", fake_async)
 
         assert fetch_group_name("https://m.facebook.com/groups/123") == "קבוצת טסט מגניבה"
 
-    def test_uses_desktop_url(self, monkeypatch):
-        """ממיר m.facebook.com ל-www.facebook.com."""
+    def test_returns_none_on_failure(self, monkeypatch):
+        """מחזיר None כשהחילוץ נכשל."""
         import scraper
-        captured = {}
-        def fake_get(url, **kw):
-            captured["url"] = url
-            return SimpleNamespace(text='<meta property="og:title" content="טסט" />')
-        monkeypatch.setattr(scraper._requests, "get", fake_get)
 
-        fetch_group_name("https://m.facebook.com/groups/123")
-        assert "www.facebook.com" in captured["url"]
-
-    def test_login_page_returns_none(self, monkeypatch):
-        """דף לוגין — מחזיר None."""
-        import scraper
-        fake_html = "<html><head><title>Log in | Facebook</title></head></html>"
-        fake_resp = SimpleNamespace(text=fake_html)
-        monkeypatch.setattr(scraper._requests, "get", lambda *a, **kw: fake_resp)
+        async def fake_async(url):
+            return None
+        monkeypatch.setattr(scraper, "_async_fetch_group_name", fake_async)
 
         assert fetch_group_name("https://m.facebook.com/groups/123") is None
 
-    def test_network_error_returns_none(self, monkeypatch):
-        """שגיאת רשת — מחזיר None."""
+    def test_returns_none_on_exception(self, monkeypatch):
+        """מחזיר None כששגיאה זורקת exception."""
         import scraper
-        def raise_error(*a, **kw):
-            raise ConnectionError("network down")
-        monkeypatch.setattr(scraper._requests, "get", raise_error)
+
+        async def fake_async(url):
+            raise RuntimeError("playwright crash")
+        monkeypatch.setattr(scraper, "_async_fetch_group_name", fake_async)
 
         assert fetch_group_name("https://m.facebook.com/groups/123") is None
-
-    def test_no_title_tag_returns_none(self, monkeypatch):
-        """HTML ללא תגית title או og:title — מחזיר None."""
-        import scraper
-        fake_resp = SimpleNamespace(text="<html><head></head></html>")
-        monkeypatch.setattr(scraper._requests, "get", lambda *a, **kw: fake_resp)
-
-        assert fetch_group_name("https://m.facebook.com/groups/123") is None
-
-    def test_works_without_session_file(self, tmp_path, monkeypatch):
-        """גם בלי קובץ סשן — מנסה לחלץ שם (קבוצות ציבוריות)."""
-        import scraper
-        monkeypatch.setattr(scraper, "SESSION_FILE", tmp_path / "no_such_file.json")
-        fake_html = '<meta property="og:title" content="קבוצה ציבורית" />'
-        fake_resp = SimpleNamespace(text=fake_html)
-        monkeypatch.setattr(scraper._requests, "get", lambda *a, **kw: fake_resp)
-
-        assert fetch_group_name("https://m.facebook.com/groups/123") == "קבוצה ציבורית"
-
-    def test_og_title_html_entities(self, monkeypatch):
-        """HTML entities ב-og:title מפוענחים."""
-        import scraper
-        fake_html = '<meta property="og:title" content="AI &amp; ML ישראל" />'
-        fake_resp = SimpleNamespace(text=fake_html)
-        monkeypatch.setattr(scraper._requests, "get", lambda *a, **kw: fake_resp)
-
-        assert fetch_group_name("https://m.facebook.com/groups/123") == "AI & ML ישראל"
-
-    def test_with_session_cookies(self, tmp_path, monkeypatch):
-        """עם קובץ סשן — שולח cookies בבקשה."""
-        import scraper
-        session_file = tmp_path / "session.json"
-        session_file.write_text(json.dumps([{"name": "c_user", "value": "999"}]))
-        monkeypatch.setattr(scraper, "SESSION_FILE", session_file)
-
-        captured = {}
-        def fake_get(url, **kw):
-            captured["cookies"] = kw.get("cookies", {})
-            return SimpleNamespace(text='<meta property="og:title" content="טסט" />')
-        monkeypatch.setattr(scraper._requests, "get", fake_get)
-
-        fetch_group_name("https://m.facebook.com/groups/123")
-        assert captured["cookies"].get("c_user") == "999"
