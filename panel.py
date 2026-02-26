@@ -78,12 +78,8 @@ def create_app() -> Flask:
         qh_db = get_config("quiet_hours", _NOT_SET)
         quiet_hours = qh_db if qh_db is not _NOT_SET else os.environ.get("QUIET_HOURS", "")
 
-        # interval_minutes — אותו דפוס
-        iv_db = get_config("interval_minutes", _NOT_SET)
-        interval = iv_db if iv_db is not _NOT_SET else os.environ.get("INTERVAL_MINUTES", "10")
-        # ברירת מחדל אם ריק
-        if not interval.strip():
-            interval = os.environ.get("INTERVAL_MINUTES", "10")
+        # interval_minutes — env var בלבד (הוסר מהפאנל)
+        interval = os.environ.get("INTERVAL_MINUTES", "10")
 
         return jsonify({
             "fb_email": get_config("fb_email") or os.environ.get("FB_EMAIL", ""),

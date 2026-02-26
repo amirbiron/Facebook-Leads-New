@@ -717,11 +717,10 @@ def start_health_server(port: int = HEALTH_PORT):
 
 
 def _load_interval_from_db() -> int:
-    """טוען תדירות סריקה מ-DB עם fallback למשתנה סביבה."""
-    val = get_config("interval_minutes")
-    if val and val.strip().isdigit():
-        return max(1, int(val))
-    return INTERVAL_MINUTES
+    """מחזיר תדירות סריקה ממשתנה סביבה בלבד.
+    interval_minutes כבר לא ניתן לעריכה מהפאנל — רק דרך env var.
+    """
+    return max(1, INTERVAL_MINUTES)
 
 _CONFIG_NOT_SET = object()
 

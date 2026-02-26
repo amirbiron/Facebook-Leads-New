@@ -1027,20 +1027,21 @@ from main import _load_interval_from_db, _load_quiet_hours_from_db
 
 
 class TestDynamicSettings:
-    def test_interval_from_db(self, tmp_db):
-        database.set_config("interval_minutes", "25")
+    def test_interval_from_env(self, tmp_db, monkeypatch):
+        """interval נקרא ממשתנה סביבה בלבד, לא מ-DB."""
+        monkeypatch.setattr("main.INTERVAL_MINUTES", 25)
         assert _load_interval_from_db() == 25
 
-    def test_interval_zero_floored_to_one(self, tmp_db):
-        """ערך 0 ב-DB מוחזר כ-1 — defense-in-depth מול לולאה צמודה."""
-        database.set_config("interval_minutes", "0")
+    def test_interval_zero_floored_to_one(self, tmp_db, monkeypatch):
+        """ערך 0 מוחזר כ-1 — defense-in-depth מול לולאה צמודה."""
+        monkeypatch.setattr("main.INTERVAL_MINUTES", 0)
         assert _load_interval_from_db() == 1
 
-    def test_interval_fallback_to_env(self, tmp_db):
-        # אין ערך ב-DB — fallback למשתנה סביבה (INTERVAL_MINUTES)
-        result = _load_interval_from_db()
-        assert isinstance(result, int)
-        assert result > 0
+    def test_interval_ignores_stale_db_value(self, tmp_db, monkeypatch):
+        """ערך ישן ב-DB לא דורס את env var."""
+        database.set_config("interval_minutes", "99")
+        monkeypatch.setattr("main.INTERVAL_MINUTES", 10)
+        assert _load_interval_from_db() == 10
 
     def test_quiet_hours_from_db(self, tmp_db):
         database.set_config("quiet_hours", "22:00-06:00")

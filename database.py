@@ -1,10 +1,23 @@
+import os
 import re
 import sqlite3
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 DB_PATH = Path("data/leads.db")
+
+
+def _now() -> datetime:
+    """מחזיר את הזמן הנוכחי באזור הזמן המוגדר (TIMEZONE env var)."""
+    tz_name = os.environ.get("TIMEZONE", "UTC")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    return datetime.now(tz=tz)
+
 
 # ── Connection Pool (thread-local) ────────────────────────────
 _local = threading.local()
@@ -69,14 +82,14 @@ def mark_seen(post_id: str, group_name: str):
     with _get_conn() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO seen_posts (post_id, group_name, seen_at) VALUES (?, ?, ?)",
-            (post_id, group_name, datetime.now().isoformat())
+            (post_id, group_name, _now().isoformat())
         )
 
 def save_lead(post_id: str, group_name: str, content: str, reason: str):
     with _get_conn() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO sent_leads (post_id, group_name, content, reason, sent_at) VALUES (?, ?, ?, ?, ?)",
-            (post_id, group_name, content, reason, datetime.now().isoformat())
+            (post_id, group_name, content, reason, _now().isoformat())
         )
 
 def is_lead_sent(post_id: str) -> bool:
@@ -137,7 +150,7 @@ def add_group(raw_url: str) -> tuple[bool, str]:
         with _get_conn() as conn:
             conn.execute(
                 "INSERT INTO groups (name, url, created_at) VALUES (?, ?, ?)",
-                (name, url, datetime.now().isoformat()),
+                (name, url, _now().isoformat()),
             )
         _mark_feature_configured("groups")
         return True, f"קבוצה נוספה: {name}\n{url}"
@@ -185,7 +198,7 @@ def add_keyword(word: str, kw_type: str) -> tuple[bool, str]:
         with _get_conn() as conn:
             conn.execute(
                 "INSERT INTO keywords (word, type, created_at) VALUES (?, ?, ?)",
-                (word, kw_type, datetime.now().isoformat()),
+                (word, kw_type, _now().isoformat()),
             )
         _mark_feature_configured(f"keywords_{kw_type}")
         label = "מילת מפתח" if kw_type == "pre_filter" else "מילה חסומה"
@@ -237,7 +250,7 @@ def set_config(key: str, value: str):
 # ── Cleanup ───────────────────────────────────────────────────
 def cleanup_old_posts(days: int = 30) -> int:
     """מוחק רשומות ישנות מטבלת seen_posts (ברירת מחדל: מעל 30 יום)."""
-    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    cutoff = (_now() - timedelta(days=days)).isoformat()
     with _get_conn() as conn:
         deleted = conn.execute(
             "DELETE FROM seen_posts WHERE seen_at < ?", (cutoff,)
