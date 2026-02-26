@@ -1016,6 +1016,7 @@ async def run_cycle():
                 content=post["content"],
                 post_url=post["url"],
                 reason=reason,
+                has_real_url=post.get("has_real_url", True),
             )
             save_lead(post["id"], post["group"], post["content"], reason)
             leads_found += 1
@@ -1064,7 +1065,8 @@ async def run_cycle():
                     group_name=post["group"],
                     content=post["content"],
                     post_url=post["url"],
-                    reason=reason
+                    reason=reason,
+                    has_real_url=post.get("has_real_url", True),
                 )
                 save_lead(post["id"], post["group"], post["content"], reason)
                 leads_found += 1
