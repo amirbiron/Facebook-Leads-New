@@ -172,6 +172,42 @@ def answer_callback_query(callback_query_id: str, text: str = "") -> bool:
         return False
 
 
+def send_document(
+    file_bytes: bytes,
+    filename: str,
+    caption: str = "",
+    *,
+    chat_id: str | int | None = None,
+) -> bool:
+    """שולח קובץ לטלגרם דרך sendDocument.
+
+    file_bytes — תוכן הקובץ כ-bytes.
+    filename — שם הקובץ שיוצג בטלגרם.
+    caption — כיתוב אופציונלי (עד 1024 תווים).
+    """
+    if not BOT_TOKEN or not (chat_id or CHAT_ID):
+        log.error("חסרים TELEGRAM_BOT_TOKEN או TELEGRAM_CHAT_ID")
+        return False
+
+    target_chat = str(chat_id or CHAT_ID)
+
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
+            data={"chat_id": target_chat, "caption": caption[:1024]},
+            files={"document": (filename, file_bytes)},
+            timeout=15,
+        )
+        if response.status_code == 200:
+            log.debug(f"קובץ {filename} נשלח לטלגרם")
+            return True
+        log.error(f"sendDocument נכשל: {response.status_code}: {response.text}")
+        return False
+    except Exception as e:
+        log.error(f"שגיאה בשליחת קובץ לטלגרם: {e}", exc_info=True)
+        return False
+
+
 def send_error_alert(error: str) -> bool:
     """שולח שגיאה קריטית כהודעת טלגרם (חתוך ל-500 תווים)."""
     truncated = error[:500]
