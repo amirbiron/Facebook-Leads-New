@@ -526,11 +526,12 @@ class TestModelFallback:
         next_m = classifier._rotate_model("gpt-4.1-nano")
         assert next_m == "gpt-4o-mini"
 
-    def test_rotate_model_last_returns_none(self):
+    def test_rotate_model_last_wraps_around(self):
+        """כשהמודל האחרון ברשימה נכשל, עוטף מסביב לראשון."""
         import classifier
 
         result = classifier._rotate_model("gpt-5-nano")
-        assert result is None
+        assert result == classifier._MODEL_PRIORITY[0]
 
     def test_is_model_deprecated_error_404(self):
         import openai

@@ -156,7 +156,7 @@ async def login(page, email: str, password: str):
     pass_field = None
     for selector in pass_selectors:
         try:
-            pass_field = await page.query_selector(selector)
+            pass_field = await page.wait_for_selector(selector, timeout=10000)
             if pass_field:
                 log.debug(f"שדה סיסמה נמצא עם: {selector}")
                 break
