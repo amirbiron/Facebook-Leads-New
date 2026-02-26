@@ -242,15 +242,16 @@ class TestExtractPostId:
 
 class TestClassifyPost:
     def _make_mock_response(self, text: str):
-        """Build a mock Anthropic message response."""
-        content_block = SimpleNamespace(text=text)
-        return SimpleNamespace(content=[content_block], stop_reason="end_turn")
+        """Build a mock OpenAI ChatCompletion response."""
+        message = SimpleNamespace(content=text)
+        choice = SimpleNamespace(message=message, finish_reason="stop")
+        return SimpleNamespace(choices=[choice])
 
     @patch("classifier.client")
     def test_relevant_post(self, mock_client):
         from classifier import classify_post
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '{"relevant": true, "reason": "עסק קטן מחפש מפתח"}'
         )
         result = classify_post("מחפש מפתח לבוט", "קבוצת פרילנסרים")
@@ -261,7 +262,7 @@ class TestClassifyPost:
     def test_not_relevant_post(self, mock_client):
         from classifier import classify_post
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '{"relevant": false, "reason": "שיתוף מאמר"}'
         )
         result = classify_post("מאמר מעניין על AI", "טכנולוגיה")
@@ -271,7 +272,7 @@ class TestClassifyPost:
     def test_markdown_wrapped_json(self, mock_client):
         from classifier import classify_post
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '```json\n{"relevant": true, "reason": "ליד"}\n```'
         )
         result = classify_post("צריך מתכנת", "קבוצה")
@@ -281,7 +282,7 @@ class TestClassifyPost:
     def test_empty_response(self, mock_client):
         from classifier import classify_post
 
-        mock_client.messages.create.return_value = self._make_mock_response("")
+        mock_client.chat.completions.create.return_value = self._make_mock_response("")
         result = classify_post("פוסט", "קבוצה")
         assert result["relevant"] is False
         assert "ריקה" in result["reason"]
@@ -290,7 +291,7 @@ class TestClassifyPost:
     def test_invalid_json(self, mock_client):
         from classifier import classify_post
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             "this is not json"
         )
         result = classify_post("פוסט", "קבוצה")
@@ -298,15 +299,12 @@ class TestClassifyPost:
 
     @patch("classifier.client")
     def test_api_error(self, mock_client):
-        import anthropic
+        import openai
         from classifier import classify_post
 
-        mock_response = MagicMock()
-        mock_response.status_code = 429
-        mock_response.headers = {}
-        mock_client.messages.create.side_effect = anthropic.APIStatusError(
+        mock_client.chat.completions.create.side_effect = openai.APIStatusError(
             message="rate limit",
-            response=mock_response,
+            response=MagicMock(status_code=429, headers={}),
             body={"error": {"message": "rate limit"}},
         )
         result = classify_post("פוסט", "קבוצה")
@@ -321,14 +319,15 @@ class TestClassifyPost:
 
 class TestClassifyBatch:
     def _make_mock_response(self, text: str):
-        content_block = SimpleNamespace(text=text)
-        return SimpleNamespace(content=[content_block], stop_reason="end_turn")
+        message = SimpleNamespace(content=text)
+        choice = SimpleNamespace(message=message, finish_reason="stop")
+        return SimpleNamespace(choices=[choice])
 
     @patch("classifier.client")
     def test_batch_two_posts(self, mock_client):
         from classifier import classify_batch
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '[{"relevant": true, "reason": "מחפש מפתח"}, {"relevant": false, "reason": "שיתוף מאמר"}]'
         )
         posts = [
@@ -340,7 +339,7 @@ class TestClassifyBatch:
         assert results[0]["relevant"] is True
         assert results[1]["relevant"] is False
         # נשלחה בקשה אחת בלבד (לא 2)
-        assert mock_client.messages.create.call_count == 1
+        assert mock_client.chat.completions.create.call_count == 1
 
     @patch("classifier.client")
     def test_batch_empty_list(self, mock_client):
@@ -348,31 +347,33 @@ class TestClassifyBatch:
 
         results = classify_batch([])
         assert results == []
-        mock_client.messages.create.assert_not_called()
+        mock_client.chat.completions.create.assert_not_called()
 
     @patch("classifier.client")
     def test_batch_splits_into_batches(self, mock_client):
         from classifier import classify_batch
 
         def side_effect(**kwargs):
-            msg = kwargs.get("messages", [{}])[0].get("content", "")
-            count = msg.count("--- פוסט")
+            msgs = kwargs.get("messages", [])
+            # הודעת user היא האחרונה ברשימת messages
+            user_msg = msgs[-1].get("content", "") if msgs else ""
+            count = user_msg.count("--- פוסט")
             items = [{"relevant": False, "reason": "לא רלוונטי"}] * count
             return self._make_mock_response(json.dumps(items))
 
-        mock_client.messages.create.side_effect = side_effect
+        mock_client.chat.completions.create.side_effect = side_effect
         posts = [{"content": f"פוסט {i}", "group": "קבוצה"} for i in range(7)]
         results = classify_batch(posts, batch_size=3)
         assert len(results) == 7
         # 7 פוסטים בבאצ'ים של 3: 3 + 3 + 1 = 3 קריאות API
-        assert mock_client.messages.create.call_count == 3
+        assert mock_client.chat.completions.create.call_count == 3
 
     @patch("classifier.client")
     def test_batch_single_post_returns_dict(self, mock_client):
         """באצ' של פוסט בודד — API יכול להחזיר אובייקט במקום מערך."""
         from classifier import classify_batch
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '{"relevant": true, "reason": "ליד"}'
         )
         results = classify_batch([{"content": "צריך מתכנת", "group": "קבוצה"}])
@@ -383,7 +384,7 @@ class TestClassifyBatch:
     def test_batch_markdown_wrapped(self, mock_client):
         from classifier import classify_batch
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '```json\n[{"relevant": true, "reason": "ליד"}]\n```'
         )
         results = classify_batch([{"content": "צריך בוט", "group": "קבוצה"}])
@@ -403,7 +404,7 @@ class TestClassifyBatch:
         single_response = self._make_mock_response(
             '{"relevant": false, "reason": "לא רלוונטי"}'
         )
-        mock_client.messages.create.side_effect = [
+        mock_client.chat.completions.create.side_effect = [
             batch_response, single_response, single_response
         ]
         posts = [
@@ -413,25 +414,21 @@ class TestClassifyBatch:
         results = classify_batch(posts, batch_size=5)
         assert len(results) == 2
         # 1 batch + 2 fallback singles = 3 calls
-        assert mock_client.messages.create.call_count == 3
+        assert mock_client.chat.completions.create.call_count == 3
 
     @patch("classifier.client")
     def test_batch_fallback_on_api_error(self, mock_client):
         """אם API נופל בבאצ' — fallback לסיווג בודד פוסט-פוסט."""
-        import anthropic
+        import openai
         from classifier import classify_batch
-
-        error_response = MagicMock()
-        error_response.status_code = 500
-        error_response.headers = {}
 
         single_ok = self._make_mock_response(
             '{"relevant": false, "reason": "fallback"}'
         )
-        mock_client.messages.create.side_effect = [
-            anthropic.APIStatusError(
+        mock_client.chat.completions.create.side_effect = [
+            openai.APIStatusError(
                 message="server error",
-                response=error_response,
+                response=MagicMock(status_code=500, headers={}),
                 body={"error": {"message": "server error"}},
             ),
             single_ok,
@@ -457,7 +454,7 @@ class TestClassifyBatch:
         single_ok = self._make_mock_response(
             '{"relevant": false, "reason": "fallback"}'
         )
-        mock_client.messages.create.side_effect = [
+        mock_client.chat.completions.create.side_effect = [
             batch_response, single_ok, single_ok
         ]
         posts = [
@@ -467,6 +464,95 @@ class TestClassifyBatch:
         results = classify_batch(posts, batch_size=5)
         # חייבים לקבל בדיוק 2 תוצאות — לא יותר
         assert len(results) == 2
+
+
+# ──────────────────────────────────────────────────────────────
+# 6c. Auto-model-fallback
+# ──────────────────────────────────────────────────────────────
+
+
+class TestModelFallback:
+    def _make_mock_response(self, text: str):
+        message = SimpleNamespace(content=text)
+        choice = SimpleNamespace(message=message, finish_reason="stop")
+        return SimpleNamespace(choices=[choice])
+
+    def setup_method(self):
+        """איפוס מודל פעיל לפני כל טסט."""
+        import classifier
+        classifier._active_model = None
+
+    @patch("classifier.client")
+    def test_deprecated_model_rotates_to_next(self, mock_client):
+        """מודל deprecated → עובר למודל הבא ברשימה ומצליח."""
+        import openai
+        import classifier
+
+        classifier._active_model = "gpt-5-nano"
+        ok_response = self._make_mock_response(
+            '{"relevant": true, "reason": "ליד"}'
+        )
+        mock_client.chat.completions.create.side_effect = [
+            openai.NotFoundError(
+                message="model not found",
+                response=MagicMock(status_code=404, headers={}),
+                body={"error": {"message": "model not found"}},
+            ),
+            ok_response,
+        ]
+        result = classifier.classify_post("צריך מפתח", "קבוצה")
+        assert result["relevant"] is True
+        assert classifier._active_model == "gpt-4.1-nano"
+
+    @patch("classifier.client")
+    def test_all_models_exhausted(self, mock_client):
+        """כל המודלים deprecated → מחזיר שגיאה."""
+        import openai
+        import classifier
+
+        classifier._active_model = "gpt-4o-mini"  # אחרון ברשימה
+        mock_client.chat.completions.create.side_effect = openai.NotFoundError(
+            message="model not found",
+            response=MagicMock(status_code=404, headers={}),
+            body={"error": {"message": "model not found"}},
+        )
+        result = classifier.classify_post("פוסט", "קבוצה")
+        assert result["relevant"] is False
+        assert "API" in result["reason"]
+
+    def test_rotate_model_returns_next(self):
+        import classifier
+
+        next_m = classifier._rotate_model("gpt-5-nano")
+        assert next_m == "gpt-4.1-nano"
+
+    def test_rotate_model_last_returns_none(self):
+        import classifier
+
+        result = classifier._rotate_model("gpt-4o-mini")
+        assert result is None
+
+    def test_is_model_deprecated_error_404(self):
+        import openai
+        import classifier
+
+        err = openai.NotFoundError(
+            message="model not found",
+            response=MagicMock(status_code=404, headers={}),
+            body={},
+        )
+        assert classifier._is_model_deprecated_error(err) is True
+
+    def test_non_deprecated_error_not_detected(self):
+        import openai
+        import classifier
+
+        err = openai.APIStatusError(
+            message="rate limit exceeded",
+            response=MagicMock(status_code=429, headers={}),
+            body={},
+        )
+        assert classifier._is_model_deprecated_error(err) is False
 
 
 # ──────────────────────────────────────────────────────────────
@@ -721,3 +807,271 @@ class TestHealthServer:
             assert resp.status == 200
         finally:
             server.shutdown()
+
+
+# ──────────────────────────────────────────────────────────────
+# 11. Database — get_config / set_config
+# ──────────────────────────────────────────────────────────────
+
+
+class TestConfigCRUD:
+    def test_get_config_default(self, tmp_db):
+        assert database.get_config("nonexistent") == ""
+
+    def test_get_config_custom_default(self, tmp_db):
+        assert database.get_config("nonexistent", "fallback") == "fallback"
+
+    def test_set_and_get_config(self, tmp_db):
+        database.set_config("fb_email", "test@example.com")
+        assert database.get_config("fb_email") == "test@example.com"
+
+    def test_set_config_overwrites(self, tmp_db):
+        database.set_config("interval", "10")
+        database.set_config("interval", "20")
+        assert database.get_config("interval") == "20"
+
+    def test_set_config_does_not_break_feature_flags(self, tmp_db):
+        """set_config לא צריך לשבור את _feature_was_configured."""
+        database.set_config("custom_key", "value")
+        database.add_group("https://m.facebook.com/groups/123")
+        assert database._feature_was_configured("groups") is True
+        assert database.get_config("custom_key") == "value"
+
+
+# ──────────────────────────────────────────────────────────────
+# 12. Panel API
+# ──────────────────────────────────────────────────────────────
+
+from panel import create_app
+
+
+@pytest.fixture
+def panel_client(tmp_db):
+    """Flask test client עם DB זמני."""
+    app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as client:
+        yield client
+
+
+class TestPanelAPI:
+    def test_get_settings(self, panel_client):
+        resp = panel_client.get("/api/settings")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "fb_email" in data
+        assert "classification_criteria" in data
+        assert "interval_minutes" in data
+
+    def test_put_settings(self, panel_client):
+        resp = panel_client.put("/api/settings", json={
+            "fb_email": "new@test.com",
+            "interval_minutes": "15",
+        })
+        assert resp.status_code == 200
+        assert resp.get_json()["ok"] is True
+        # ערכים נשמרו
+        resp2 = panel_client.get("/api/settings")
+        data = resp2.get_json()
+        assert data["fb_email"] == "new@test.com"
+        assert data["interval_minutes"] == "15"
+
+    def test_put_interval_zero_rejected(self, panel_client):
+        """interval_minutes=0 נדחה בצד שרת — מונע לולאת סריקה צמודה."""
+        resp = panel_client.put("/api/settings", json={"interval_minutes": "0"})
+        assert resp.status_code == 400
+        assert resp.get_json()["ok"] is False
+
+    def test_put_interval_negative_rejected(self, panel_client):
+        resp = panel_client.put("/api/settings", json={"interval_minutes": "-5"})
+        assert resp.status_code == 400
+
+    def test_put_interval_valid_accepted(self, panel_client):
+        resp = panel_client.put("/api/settings", json={"interval_minutes": "1"})
+        assert resp.status_code == 200
+
+    def test_get_groups_default(self, panel_client):
+        resp = panel_client.get("/api/groups")
+        data = resp.get_json()
+        assert data["source"] == "default"
+        assert len(data["groups"]) > 0
+
+    def test_add_and_list_groups(self, panel_client):
+        resp = panel_client.post("/api/groups", json={"url": "https://facebook.com/groups/111"})
+        assert resp.get_json()["ok"] is True
+        resp2 = panel_client.get("/api/groups")
+        data = resp2.get_json()
+        assert data["source"] == "custom"
+        assert any("111" in g["url"] for g in data["groups"])
+
+    def test_delete_group(self, panel_client):
+        panel_client.post("/api/groups", json={"url": "https://m.facebook.com/groups/222"})
+        resp = panel_client.delete("/api/groups", json={"url": "https://m.facebook.com/groups/222"})
+        assert resp.get_json()["ok"] is True
+
+    def test_add_empty_group_rejected(self, panel_client):
+        resp = panel_client.post("/api/groups", json={"url": ""})
+        assert resp.status_code == 400
+
+    def test_get_keywords_default(self, panel_client):
+        resp = panel_client.get("/api/keywords/pre_filter")
+        data = resp.get_json()
+        assert data["source"] == "default"
+        assert len(data["keywords"]) > 0
+
+    def test_add_and_list_keywords(self, panel_client):
+        resp = panel_client.post("/api/keywords/pre_filter", json={"word": "טסט"})
+        assert resp.get_json()["ok"] is True
+        resp2 = panel_client.get("/api/keywords/pre_filter")
+        data = resp2.get_json()
+        assert data["source"] == "custom"
+        assert "טסט" in data["keywords"]
+
+    def test_delete_keyword(self, panel_client):
+        panel_client.post("/api/keywords/block", json={"word": "ספאם"})
+        resp = panel_client.delete("/api/keywords/block", json={"word": "ספאם"})
+        assert resp.get_json()["ok"] is True
+
+    def test_invalid_keyword_type(self, panel_client):
+        resp = panel_client.get("/api/keywords/invalid")
+        assert resp.status_code == 400
+
+    def test_add_empty_keyword_rejected(self, panel_client):
+        resp = panel_client.post("/api/keywords/pre_filter", json={"word": ""})
+        assert resp.status_code == 400
+
+    def test_settings_include_default_criteria(self, panel_client):
+        """API מחזיר גם את ברירת המחדל של קריטריוני הסיווג."""
+        resp = panel_client.get("/api/settings")
+        data = resp.get_json()
+        assert "classification_criteria_default" in data
+        assert len(data["classification_criteria_default"]) > 0
+
+    def test_auth_not_required_when_no_token(self, panel_client):
+        resp = panel_client.post("/api/auth")
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["auth_required"] is False
+
+    def test_cleared_quiet_hours_not_refilled_from_env(self, tmp_db, monkeypatch):
+        """ערך ריק ב-DB (המשתמש ביטל) לא צריך לחזור ל-env var."""
+        monkeypatch.setenv("QUIET_HOURS", "02:00-07:00")
+        database.set_config("quiet_hours", "")
+        app = create_app()
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            resp = client.get("/api/settings")
+            data = resp.get_json()
+            assert data["quiet_hours"] == ""
+
+
+class TestPanelAuth:
+    def test_auth_required_blocks_without_token(self, tmp_db, monkeypatch):
+        """כשיש PANEL_TOKEN, בקשות ללא טוקן נחסמות."""
+        monkeypatch.setenv("PANEL_TOKEN", "secret123")
+        app = create_app()
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            resp = client.get("/api/settings")
+            assert resp.status_code == 401
+
+    def test_auth_passes_with_correct_token(self, tmp_db, monkeypatch):
+        monkeypatch.setenv("PANEL_TOKEN", "secret123")
+        app = create_app()
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            resp = client.get("/api/settings",
+                              headers={"Authorization": "Bearer secret123"})
+            assert resp.status_code == 200
+
+    def test_html_page_accessible_without_token(self, tmp_db, monkeypatch):
+        """דף ה-HTML נגיש גם בלי טוקן."""
+        monkeypatch.setenv("PANEL_TOKEN", "secret123")
+        app = create_app()
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            resp = client.get("/")
+            assert resp.status_code == 200
+
+
+# ──────────────────────────────────────────────────────────────
+# 13. Classifier — dynamic criteria loading
+# ──────────────────────────────────────────────────────────────
+
+
+class TestClassifierDynamicCriteria:
+    def test_default_criteria(self, tmp_db):
+        from classifier import _get_classification_criteria, _CLASSIFICATION_CRITERIA_DEFAULT
+        result = _get_classification_criteria()
+        assert result == _CLASSIFICATION_CRITERIA_DEFAULT
+
+    def test_custom_criteria_from_db(self, tmp_db):
+        from classifier import _get_classification_criteria
+        database.set_config("classification_criteria", "קריטריונים מותאמים אישית")
+        result = _get_classification_criteria()
+        assert result == "קריטריונים מותאמים אישית"
+
+    def test_empty_criteria_falls_back_to_default(self, tmp_db):
+        from classifier import _get_classification_criteria, _CLASSIFICATION_CRITERIA_DEFAULT
+        database.set_config("classification_criteria", "  ")
+        result = _get_classification_criteria()
+        assert result == _CLASSIFICATION_CRITERIA_DEFAULT
+
+    def test_build_system_prompt_includes_json_instruction(self, tmp_db):
+        from classifier import _build_system_prompt
+        prompt = _build_system_prompt()
+        assert "JSON" in prompt
+        assert "relevant" in prompt
+
+    def test_build_batch_prompt_includes_array_instruction(self, tmp_db):
+        from classifier import _build_batch_system_prompt
+        prompt = _build_batch_system_prompt()
+        assert "מערך JSON" in prompt
+
+
+# ──────────────────────────────────────────────────────────────
+# 14. Main — dynamic settings loading
+# ──────────────────────────────────────────────────────────────
+
+from main import _load_interval_from_db, _load_quiet_hours_from_db
+
+
+class TestDynamicSettings:
+    def test_interval_from_db(self, tmp_db):
+        database.set_config("interval_minutes", "25")
+        assert _load_interval_from_db() == 25
+
+    def test_interval_zero_floored_to_one(self, tmp_db):
+        """ערך 0 ב-DB מוחזר כ-1 — defense-in-depth מול לולאה צמודה."""
+        database.set_config("interval_minutes", "0")
+        assert _load_interval_from_db() == 1
+
+    def test_interval_fallback_to_env(self, tmp_db):
+        # אין ערך ב-DB — fallback למשתנה סביבה (INTERVAL_MINUTES)
+        result = _load_interval_from_db()
+        assert isinstance(result, int)
+        assert result > 0
+
+    def test_quiet_hours_from_db(self, tmp_db):
+        database.set_config("quiet_hours", "22:00-06:00")
+        result = _load_quiet_hours_from_db()
+        assert result is not None
+        assert result[0].hour == 22
+        assert result[1].hour == 6
+
+    def test_quiet_hours_empty_returns_none(self, tmp_db):
+        database.set_config("quiet_hours", "")
+        result = _load_quiet_hours_from_db()
+        assert result is None
+
+    def test_quiet_hours_invalid_returns_none(self, tmp_db):
+        database.set_config("quiet_hours", "invalid")
+        result = _load_quiet_hours_from_db()
+        assert result is None
+
+    def test_quiet_hours_empty_db_overrides_env(self, tmp_db, monkeypatch):
+        """ערך ריק ב-DB צריך לבטל שעות שקטות גם אם QUIET_HOURS מוגדר ב-env."""
+        monkeypatch.setattr("main.QUIET_HOURS", "02:00-07:00")
+        database.set_config("quiet_hours", "")
+        result = _load_quiet_hours_from_db()
+        assert result is None

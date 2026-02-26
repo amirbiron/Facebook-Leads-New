@@ -1,14 +1,80 @@
 import os
 import json
-import anthropic
+import openai
 from logger import get_logger
 
 log = get_logger("Classifier")
 
-client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY"))
+# אתחול lazy — אם אין מפתח, הקליינט ייווצר עם מפתח ריק
+# ושגיאה תתפס בזמן קריאת API (לא בזמן import)
+client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", "sk-missing"))
 
-# קריטריוני סיווג משותפים — מקום אחד לעדכון
-_CLASSIFICATION_CRITERIA = """אתה מסנן לידים לפרילנסר מפתח ישראלי.
+# ── רשימת מודלים לפי סדר עדיפות (auto-fallback כשמודל יוצא מתוקף) ──
+_MODEL_PRIORITY = [
+    "gpt-5-nano",
+    "gpt-4.1-nano",
+    "gpt-4o-mini",
+]
+
+# מודל פעיל — נטען מ-DB אם שמור, אחרת ברירת מחדל ראשונה ברשימה
+_active_model: str | None = None
+
+
+def _get_active_model() -> str:
+    """מחזיר את המודל הפעיל. אם אין — טוען מ-DB או ברירת מחדל."""
+    global _active_model
+    if _active_model is not None:
+        return _active_model
+    try:
+        from database import get_config
+        saved = get_config("openai_model")
+        if saved and saved in _MODEL_PRIORITY:
+            _active_model = saved
+            return _active_model
+    except Exception:
+        pass
+    _active_model = _MODEL_PRIORITY[0]
+    return _active_model
+
+
+def _rotate_model(failed_model: str) -> str | None:
+    """מסובב למודל הבא ברשימה אחרי שמודל נכשל (deprecated/not found).
+    שומר את המודל החדש ב-DB. מחזיר None אם אין עוד מודלים.
+    """
+    global _active_model
+    try:
+        idx = _MODEL_PRIORITY.index(failed_model)
+    except ValueError:
+        idx = -1
+    next_idx = idx + 1
+    if next_idx >= len(_MODEL_PRIORITY):
+        log.error("כל המודלים ברשימה נכשלו — אין fallback נוסף")
+        return None
+    new_model = _MODEL_PRIORITY[next_idx]
+    _active_model = new_model
+    log.warning(f"מודל {failed_model} לא זמין — עובר ל-{new_model}")
+    try:
+        from database import set_config
+        set_config("openai_model", new_model)
+    except Exception:
+        pass
+    return new_model
+
+
+def _is_model_deprecated_error(e: openai.APIError) -> bool:
+    """בודק אם השגיאה מעידה שהמודל יצא מתוקף או לא קיים."""
+    msg = str(e).lower()
+    if hasattr(e, "status_code"):
+        # 404 = model not found, 410 = gone/deprecated
+        if e.status_code in (404, 410):
+            return True
+    deprecated_hints = ["deprecated", "decommissioned", "does not exist",
+                        "model not found", "invalid model", "not available"]
+    return any(hint in msg for hint in deprecated_hints)
+
+
+# קריטריוני סיווג — ברירת מחדל (ניתן לעדכן דרך הפאנל)
+_CLASSIFICATION_CRITERIA_DEFAULT = """אתה מסנן לידים לפרילנסר מפתח ישראלי.
 תפקידך: לזהות פוסטים בקבוצות פייסבוק שבהם עסק קטן או בעל עסק קטן מחפש מפתח שיבנה לו משהו.
 
 רלוונטי = כן אם:
@@ -24,35 +90,68 @@ _CLASSIFICATION_CRITERIA = """אתה מסנן לידים לפרילנסר מפת
 - שיתוף מאמר / כלי / תוכן
 - דיון כללי על AI או פיתוח"""
 
-SYSTEM_PROMPT = _CLASSIFICATION_CRITERIA + """
+
+def _get_classification_criteria() -> str:
+    """טוען קריטריוני סיווג מ-DB עם fallback לברירת מחדל."""
+    try:
+        from database import get_config
+        custom = get_config("classification_criteria")
+        if custom.strip():
+            return custom
+    except Exception:
+        pass
+    return _CLASSIFICATION_CRITERIA_DEFAULT
+
+
+def _build_system_prompt() -> str:
+    return _get_classification_criteria() + """
 
 החזר JSON בלבד, ללא טקסט נוסף:
 {"relevant": true/false, "reason": "משפט קצר בעברית"}"""
 
-BATCH_SYSTEM_PROMPT = _CLASSIFICATION_CRITERIA + """
+
+def _build_batch_system_prompt() -> str:
+    return _get_classification_criteria() + """
 
 תקבל מספר פוסטים ממוספרים. החזר מערך JSON בלבד, ללא טקסט נוסף.
 כל איבר במערך מתאים לפוסט לפי הסדר:
 [{"relevant": true/false, "reason": "משפט קצר בעברית"}, ...]"""
 
 
+def _chat_completion(system: str, user: str, max_tokens: int) -> str:
+    """קריאת Chat Completion עם auto-fallback למודל הבא אם הנוכחי deprecated."""
+    model = _get_active_model()
+    while True:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            )
+            return response.choices[0].message.content if response.choices else ""
+        except openai.APIError as e:
+            if _is_model_deprecated_error(e):
+                next_model = _rotate_model(model)
+                if next_model is None:
+                    raise  # אין עוד מודלים — מעלים את השגיאה
+                model = next_model
+                continue
+            raise  # שגיאה אחרת (rate limit, server error) — מעלים
+
+
 def classify_post(content: str, group_name: str) -> dict:
     try:
         log.debug(f"שולח לסיווג: {content[:80]}...")
-        message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        raw_text = _chat_completion(
+            system=_build_system_prompt(),
+            user=f"קבוצה: {group_name}\n\nפוסט:\n{content[:1000]}",
             max_tokens=100,
-            system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"קבוצה: {group_name}\n\nפוסט:\n{content[:1000]}"
-                }
-            ]
         )
 
-        raw_text = message.content[0].text if message.content else ""
-        log.debug(f"תשובה גולמית מ-API ({message.stop_reason}): {raw_text[:200]}")
+        log.debug(f"תשובה גולמית מ-API: {raw_text[:200]}")
 
         if not raw_text.strip():
             log.warning("API החזיר תשובה ריקה")
@@ -64,9 +163,10 @@ def classify_post(content: str, group_name: str) -> dict:
     except json.JSONDecodeError as e:
         log.error(f"שגיאה בפירוש JSON: {e} | תשובה: {raw_text[:300]}")
         return {"relevant": False, "reason": "שגיאה בפירוש תשובה"}
-    except anthropic.APIError as e:
-        log.error(f"שגיאת API: {e.status_code} {e.message}")
-        return {"relevant": False, "reason": f"שגיאת API: {e.status_code}"}
+    except openai.APIError as e:
+        status = getattr(e, "status_code", "?")
+        log.error(f"שגיאת API: {status} {e}")
+        return {"relevant": False, "reason": f"שגיאת API: {status}"}
     except Exception as e:
         log.error(f"שגיאה בסיווג: {e}", exc_info=True)
         return {"relevant": False, "reason": "שגיאה בסיווג"}
@@ -108,15 +208,13 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
         user_message = "\n\n".join(parts)
 
         try:
-            message = client.messages.create(
-                model="claude-haiku-4-5-20251001",
+            raw_text = _chat_completion(
+                system=_build_batch_system_prompt(),
+                user=user_message,
                 max_tokens=150 * len(batch),
-                system=BATCH_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_message}],
             )
 
-            raw_text = message.content[0].text if message.content else ""
-            log.debug(f"תשובה באצ' ({message.stop_reason}): {raw_text[:300]}")
+            log.debug(f"תשובה באצ': {raw_text[:300]}")
 
             if not raw_text.strip():
                 log.warning("API החזיר תשובה ריקה בבאצ' — fallback לסיווג בודד")
@@ -154,8 +252,9 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
             log.error(f"שגיאה בפירוש JSON בבאצ': {e} — fallback לסיווג בודד")
             for post in batch:
                 all_results.append(classify_post(post["content"], post["group"]))
-        except anthropic.APIError as e:
-            log.error(f"שגיאת API בבאצ': {e.status_code} {e.message} — fallback לסיווג בודד")
+        except openai.APIError as e:
+            status = getattr(e, "status_code", "?")
+            log.error(f"שגיאת API בבאצ': {status} {e} — fallback לסיווג בודד")
             for post in batch:
                 all_results.append(classify_post(post["content"], post["group"]))
         except Exception as e:
