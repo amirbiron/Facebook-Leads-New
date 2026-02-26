@@ -167,12 +167,25 @@ async def _telegram_control_loop(
             raise RuntimeError(f"Telegram getUpdates failed: {data}")
         return data.get("result") or []
 
+    # ניקוי webhook קודם וביטול polling תקוע מאינסטנס ישן
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{bot_token}/deleteWebhook",
+            json={"drop_pending_updates": False},
+            timeout=10,
+        )
+        log.debug("webhook נוקה בהצלחה")
+    except Exception:
+        pass
+
     offset = load_offset()
     log.info("בקרת טלגרם הופעלה. פקודות: /scan /scan_force /status")
+    conflict_backoff = 5
 
     while True:
         try:
             updates = await asyncio.to_thread(fetch_updates, offset, 30)
+            conflict_backoff = 5  # איפוס backoff אחרי הצלחה
             for upd in updates:
                 try:
                     update_id = int(upd.get("update_id"))
@@ -280,6 +293,15 @@ async def _telegram_control_loop(
                     )
                     continue
 
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 409:
+                # 409 Conflict = אינסטנס אחר עושה polling — ממתין עם backoff
+                log.warning(f"409 Conflict — אינסטנס אחר פעיל. ממתין {conflict_backoff} שניות...")
+                await asyncio.sleep(conflict_backoff)
+                conflict_backoff = min(conflict_backoff * 2, 120)
+            else:
+                log.error(f"שגיאה בלולאת בקרת טלגרם: {e}", exc_info=True)
+                await asyncio.sleep(5)
         except Exception as e:
             log.error(f"שגיאה בלולאת בקרת טלגרם: {e}", exc_info=True)
             await asyncio.sleep(5)
