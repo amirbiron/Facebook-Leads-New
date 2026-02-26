@@ -359,10 +359,8 @@ def get_extraction_stats() -> dict[str, int]:
 
 def reset_extraction_stats():
     """מאפס סטטיסטיקת חילוץ URL."""
-    global _telegram_dumps_sent
     _extraction_stats["success"] = 0
     _extraction_stats["fallback"] = 0
-    _telegram_dumps_sent = 0
 
 
 async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True) -> str:
@@ -730,6 +728,9 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
         else:
             await login(page, email, password)
             await save_session(context)
+
+        global _telegram_dumps_sent
+        _telegram_dumps_sent = 0
 
         for i, group in enumerate(GROUPS, 1):
             log.info(f"--- קבוצה {i}/{len(GROUPS)} ---")
