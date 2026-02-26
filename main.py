@@ -8,7 +8,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from database import (
-    init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats,
+    init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats, get_daily_stats,
     cleanup_old_posts, add_group, remove_group, get_db_groups,
     add_keyword, remove_keyword, get_db_keywords,
     get_config,
@@ -175,6 +175,121 @@ def _parse_allowed_chat_ids(spec: str | None) -> set[int]:
             continue
     return ids
 
+# ── כפתורי תפריט (Inline Keyboard) ──────────────────────────
+def _main_menu_buttons() -> list[list[dict]]:
+    """מחזיר כפתורי תפריט ראשי."""
+    return [
+        [
+            {"text": "\U0001f50d סריקה עכשיו", "callback_data": "scan"},
+            {"text": "\U0001f4ca סטטוס", "callback_data": "status"},
+        ],
+        [
+            {"text": "\U0001f4cb דו\"ח יומי", "callback_data": "daily_report"},
+            {"text": "\u2699\ufe0f הגדרות", "callback_data": "settings"},
+        ],
+    ]
+
+
+def _settings_menu_buttons() -> list[list[dict]]:
+    """מחזיר כפתורי תפריט הגדרות."""
+    return [
+        [
+            {"text": "\U0001f4cb קבוצות", "callback_data": "groups"},
+            {"text": "\U0001f50d מילות מפתח", "callback_data": "keywords"},
+        ],
+        [
+            {"text": "\U0001f6ab מילים חסומות", "callback_data": "blocked"},
+            {"text": "\U0001f519 חזרה", "callback_data": "menu"},
+        ],
+    ]
+
+
+def _back_to_menu_button() -> list[list[dict]]:
+    """כפתור חזרה לתפריט ראשי."""
+    return [[{"text": "\U0001f519 חזרה לתפריט", "callback_data": "menu"}]]
+
+
+def _build_status_text(shared_state: dict) -> str:
+    """בונה טקסט סטטוס — משותף לפקודה ולכפתור."""
+    stats = get_stats()
+    now = _now_local()
+    quiet = shared_state.get("quiet")
+    quiet_now = bool(quiet and _is_quiet_now(now, quiet))
+    qh_db = get_config("quiet_hours", _CONFIG_NOT_SET)
+    quiet_spec = qh_db if qh_db is not _CONFIG_NOT_SET else QUIET_HOURS
+    quiet_desc = f"{quiet_spec} ({TIMEZONE_NAME})" if quiet_spec else "(disabled)"
+    last_started = shared_state.get("last_scan_started")
+    last_finished = shared_state.get("last_scan_finished")
+    in_progress = bool(shared_state.get("scan_in_progress"))
+    block_desc = ", ".join(BLOCK_KEYWORDS) if BLOCK_KEYWORDS else "(ריק)"
+    from scraper import GROUPS
+    groups_count = len(GROUPS)
+    pf_count = len(PRE_FILTER_KEYWORDS)
+    return (
+        "סטטוס בוט:\n"
+        f"- שעה מקומית: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+        f"- שעות שקטות: {quiet_desc} | עכשיו: {'פעיל' if quiet_now else 'לא'}\n"
+        f"- קבוצות פעילות: {groups_count}\n"
+        f"- מילות סינון: {pf_count} | מילים חסומות: {block_desc}\n"
+        f"- סריקה רצה: {'כן' if in_progress else 'לא'}\n"
+        f"- סריקה אחרונה התחילה: {last_started.strftime('%Y-%m-%d %H:%M:%S %Z') if last_started else '-'}\n"
+        f"- סריקה אחרונה הסתיימה: {last_finished.strftime('%Y-%m-%d %H:%M:%S %Z') if last_finished else '-'}\n"
+        f"- סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}"
+    )
+
+
+def _build_daily_report_text(shared_state: dict) -> str:
+    """בונה טקסט דו\"ח יומי — נתונים של היום בלבד."""
+    now = _now_local()
+    today_prefix = now.strftime("%Y-%m-%d")
+    daily = get_daily_stats(today_prefix)
+    total = get_stats()
+    last_started = shared_state.get("last_scan_started")
+    last_finished = shared_state.get("last_scan_finished")
+    in_progress = bool(shared_state.get("scan_in_progress"))
+    return (
+        f"📋 דו\"ח יומי — {today_prefix}\n\n"
+        f"- פוסטים שנסרקו היום: {daily['seen']}\n"
+        f"- לידים שנשלחו היום: {daily['sent']}\n"
+        f"- סריקה רצה כרגע: {'כן' if in_progress else 'לא'}\n"
+        f"- סריקה אחרונה התחילה: {last_started.strftime('%H:%M:%S') if last_started else '-'}\n"
+        f"- סריקה אחרונה הסתיימה: {last_finished.strftime('%H:%M:%S') if last_finished else '-'}\n\n"
+        f"סה\"כ כללי: {total['seen']} נסרקו | {total['sent']} לידים"
+    )
+
+
+def _build_groups_text() -> str:
+    """בונה טקסט רשימת קבוצות."""
+    from scraper import GROUPS
+    if GROUPS:
+        lines = [f"{i}. {g['name']}\n   {g['url']}" for i, g in enumerate(GROUPS, 1)]
+        return f"קבוצות פעילות ({len(GROUPS)}):\n\n" + "\n\n".join(lines)
+    return "אין קבוצות מוגדרות."
+
+
+def _build_keywords_text() -> str:
+    """בונה טקסט מילות מפתח לסינון + מילים חסומות."""
+    pf = PRE_FILTER_KEYWORDS
+    bl = BLOCK_KEYWORDS
+    pf_text = ", ".join(pf) if pf else "(ריק)"
+    bl_text = ", ".join(bl) if bl else "(ריק)"
+    return (
+        f"מילות מפתח לסינון ({len(pf)}):\n{pf_text}\n\n"
+        f"מילים חסומות ({len(bl)}):\n{bl_text}\n\n"
+        "פקודות: /add_keyword <מילה> | /remove_keyword <מילה> | /block <מילה> | /unblock <מילה>"
+    )
+
+
+def _build_blocked_text() -> str:
+    """בונה טקסט מילים חסומות."""
+    bl = BLOCK_KEYWORDS
+    bl_text = ", ".join(bl) if bl else "(ריק)"
+    return (
+        f"מילים חסומות ({len(bl)}):\n{bl_text}\n\n"
+        "פקודות: /block <מילה> | /unblock <מילה>"
+    )
+
+
 async def _telegram_control_loop(
     *,
     scan_now_event: asyncio.Event,
@@ -182,11 +297,8 @@ async def _telegram_control_loop(
     shared_state: dict,
 ):
     """
-    Telegram polling loop for basic control commands.
-    Commands:
-      - /scan: run scan now (respects quiet hours)
-      - /scan_force: run scan now (ignores quiet hours)
-      - /status: show basic status
+    Telegram polling loop — תומך בפקודות טקסט ובכפתורי inline.
+    /menu מציג תפריט עם כפתורים. כל פקודה ישנה ממשיכה לעבוד.
     """
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     allowed_chat_ids = _parse_allowed_chat_ids(os.environ.get("TELEGRAM_CHAT_ID"))
@@ -194,7 +306,10 @@ async def _telegram_control_loop(
         log.info("בקרת טלגרם לא מופעלת (חסרים TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID)")
         return
 
-    from notifier import send_message
+    from notifier import (
+        send_message, send_message_with_buttons,
+        edit_message_text, answer_callback_query,
+    )
     import requests
     import json
 
@@ -217,7 +332,7 @@ async def _telegram_control_loop(
 
     def fetch_updates(offset: int, timeout: int = 30) -> list[dict]:
         url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
-        params: dict = {"timeout": timeout, "allowed_updates": json.dumps(["message", "edited_message"])}
+        params: dict = {"timeout": timeout, "allowed_updates": json.dumps(["message", "edited_message", "callback_query"])}
         if offset:
             params["offset"] = offset
         resp = requests.get(url, params=params, timeout=timeout + 10)
@@ -226,6 +341,102 @@ async def _telegram_control_loop(
         if not data.get("ok"):
             raise RuntimeError(f"Telegram getUpdates failed: {data}")
         return data.get("result") or []
+
+    # ── טיפול ב-callback query (לחיצה על כפתור) ──────────────
+    async def handle_callback(cb: dict):
+        cb_id = cb.get("id", "")
+        cb_data = cb.get("data", "")
+        cb_msg = cb.get("message") or {}
+        chat_id = cb_msg.get("chat", {}).get("id")
+        message_id = cb_msg.get("message_id")
+
+        if chat_id is None:
+            return
+        try:
+            chat_id_int = int(chat_id)
+        except Exception:
+            return
+        if chat_id_int not in allowed_chat_ids:
+            return
+
+        # עונים לטלגרם כדי להסיר אנימציית טעינה
+        await asyncio.to_thread(answer_callback_query, cb_id)
+
+        if cb_data == "menu":
+            await asyncio.to_thread(
+                edit_message_text, chat_id_int, message_id,
+                "תפריט ראשי — בחר פעולה:", _main_menu_buttons(),
+            )
+
+        elif cb_data == "scan":
+            now = _now_local()
+            if shared_state.get("scan_in_progress"):
+                await asyncio.to_thread(
+                    edit_message_text, chat_id_int, message_id,
+                    "כבר יש סריקה שרצה כרגע. אעדכן כשתסתיים.",
+                    _back_to_menu_button(),
+                )
+                return
+            quiet = shared_state.get("quiet")
+            if quiet and _is_quiet_now(now, quiet):
+                qh_db = get_config("quiet_hours", _CONFIG_NOT_SET)
+                quiet_spec = qh_db if qh_db is not _CONFIG_NOT_SET else QUIET_HOURS
+                await asyncio.to_thread(
+                    edit_message_text, chat_id_int, message_id,
+                    f"שעות שקטות פעילות עכשיו ({quiet_spec}, {TIMEZONE_NAME}). השתמש /scan_force לסריקה בכל זאת.",
+                    _back_to_menu_button(),
+                )
+                return
+            scan_now_event.set()
+            await asyncio.to_thread(
+                edit_message_text, chat_id_int, message_id,
+                "מתזמן סריקה עכשיו.",
+                _back_to_menu_button(),
+            )
+
+        elif cb_data == "status":
+            status_text = _build_status_text(shared_state)
+            await asyncio.to_thread(
+                edit_message_text, chat_id_int, message_id,
+                status_text, _back_to_menu_button(),
+            )
+
+        elif cb_data == "daily_report":
+            report_text = _build_daily_report_text(shared_state)
+            await asyncio.to_thread(
+                edit_message_text, chat_id_int, message_id,
+                report_text, _back_to_menu_button(),
+            )
+
+        elif cb_data == "settings":
+            await asyncio.to_thread(
+                edit_message_text, chat_id_int, message_id,
+                "הגדרות — בחר קטגוריה:", _settings_menu_buttons(),
+            )
+
+        elif cb_data == "groups":
+            groups_text = _build_groups_text()
+            await asyncio.to_thread(
+                edit_message_text, chat_id_int, message_id,
+                groups_text,
+                [[{"text": "\U0001f519 חזרה להגדרות", "callback_data": "settings"}]],
+            )
+
+        elif cb_data == "keywords":
+            kw_text = _build_keywords_text()
+            await asyncio.to_thread(
+                edit_message_text, chat_id_int, message_id,
+                kw_text,
+                [[{"text": "\U0001f519 חזרה להגדרות", "callback_data": "settings"}]],
+            )
+
+        elif cb_data == "blocked":
+            bl_text = _build_blocked_text()
+            await asyncio.to_thread(
+                edit_message_text, chat_id_int, message_id,
+                bl_text,
+                [[{"text": "\U0001f519 חזרה להגדרות", "callback_data": "settings"}]],
+            )
 
     # ניקוי webhook קודם וביטול polling תקוע מאינסטנס ישן
     try:
@@ -240,7 +451,7 @@ async def _telegram_control_loop(
         pass
 
     offset = load_offset()
-    log.info("בקרת טלגרם הופעלה. פקודות: /scan /scan_force /status")
+    log.info("בקרת טלגרם הופעלה. פקודות: /menu /scan /status")
     conflict_backoff = 5
 
     while True:
@@ -255,6 +466,12 @@ async def _telegram_control_loop(
 
                 offset = max(offset, update_id + 1)
                 save_offset(offset)
+
+                # ── callback query (לחיצה על כפתור) ──────────
+                cb = upd.get("callback_query")
+                if cb:
+                    await handle_callback(cb)
+                    continue
 
                 msg = upd.get("message") or upd.get("edited_message")
                 if not msg:
@@ -279,61 +496,20 @@ async def _telegram_control_loop(
                 first = text.split()[0].strip()
                 cmd = first.split("@", 1)[0].lower()
 
-                if cmd in ("/help",):
-                    help_text = (
-                        "פקודות:\n"
-                        "/scan - סריקה עכשיו (מכבד שעות שקטות)\n"
-                        "/scan_force - סריקה עכשיו (מתעלם משעות שקטות)\n"
-                        "/status - סטטוס\n"
-                        "\nניהול קבוצות:\n"
-                        "/groups - הצג קבוצות פעילות\n"
-                        "/add_group <url> - הוסף קבוצה\n"
-                        "/remove_group <url> - הסר קבוצה\n"
-                        "\nניהול מילות מפתח:\n"
-                        "/keywords - הצג מילות מפתח\n"
-                        "/add_keyword <מילה> - הוסף מילת סינון\n"
-                        "/remove_keyword <מילה> - הסר מילת סינון\n"
-                        "/block <מילה> - חסום מילה\n"
-                        "/unblock <מילה> - בטל חסימת מילה"
-                    )
+                if cmd in ("/menu", "/start", "/help"):
                     await asyncio.to_thread(
-                        send_message,
-                        help_text,
+                        send_message_with_buttons,
+                        "תפריט ראשי — בחר פעולה:",
+                        _main_menu_buttons(),
                         chat_id=chat_id_int,
-                        disable_web_page_preview=True,
                     )
                     continue
 
                 if cmd in ("/status",):
-                    stats = get_stats()
-                    now = _now_local()
-                    quiet = shared_state.get("quiet")
-                    quiet_now = bool(quiet and _is_quiet_now(now, quiet))
-                    qh_db = get_config("quiet_hours", _CONFIG_NOT_SET)
-                    quiet_spec = qh_db if qh_db is not _CONFIG_NOT_SET else QUIET_HOURS
-                    quiet_desc = f"{quiet_spec} ({TIMEZONE_NAME})" if quiet_spec else "(disabled)"
-                    last_started = shared_state.get("last_scan_started")
-                    last_finished = shared_state.get("last_scan_finished")
-                    in_progress = bool(shared_state.get("scan_in_progress"))
-                    block_desc = ", ".join(BLOCK_KEYWORDS) if BLOCK_KEYWORDS else "(ריק)"
-                    from scraper import GROUPS
-                    groups_count = len(GROUPS)
-                    pf_count = len(PRE_FILTER_KEYWORDS)
-                    msg_text = (
-                        "סטטוס בוט:\n"
-                        f"- שעה מקומית: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
-                        f"- שעות שקטות: {quiet_desc} | עכשיו: {'פעיל' if quiet_now else 'לא'}\n"
-                        f"- קבוצות פעילות: {groups_count}\n"
-                        f"- מילות סינון: {pf_count} | מילים חסומות: {block_desc}\n"
-                        f"- סריקה רצה: {'כן' if in_progress else 'לא'}\n"
-                        f"- סריקה אחרונה התחילה: {last_started.strftime('%Y-%m-%d %H:%M:%S %Z') if last_started else '-'}\n"
-                        f"- סריקה אחרונה הסתיימה: {last_finished.strftime('%Y-%m-%d %H:%M:%S %Z') if last_finished else '-'}\n"
-                        f"- סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}\n"
-                        "\n/help לרשימת פקודות מלאה"
-                    )
+                    status_text = _build_status_text(shared_state)
                     await asyncio.to_thread(
                         send_message,
-                        msg_text,
+                        status_text,
                         chat_id=chat_id_int,
                         disable_web_page_preview=True,
                     )
@@ -384,12 +560,7 @@ async def _telegram_control_loop(
 
                 # ── ניהול קבוצות דינמי ──────────────────────────
                 if cmd in ("/groups",):
-                    from scraper import GROUPS
-                    if GROUPS:
-                        lines = [f"{i}. {g['name']}\n   {g['url']}" for i, g in enumerate(GROUPS, 1)]
-                        msg_text = f"קבוצות פעילות ({len(GROUPS)}):\n\n" + "\n\n".join(lines)
-                    else:
-                        msg_text = "אין קבוצות מוגדרות."
+                    msg_text = _build_groups_text()
                     await asyncio.to_thread(
                         send_message, msg_text, chat_id=chat_id_int,
                         disable_web_page_preview=True,
@@ -434,14 +605,7 @@ async def _telegram_control_loop(
 
                 # ── ניהול מילות מפתח דינמי ──────────────────────
                 if cmd in ("/keywords",):
-                    pf = PRE_FILTER_KEYWORDS
-                    bl = BLOCK_KEYWORDS
-                    pf_text = ", ".join(pf) if pf else "(ריק)"
-                    bl_text = ", ".join(bl) if bl else "(ריק)"
-                    msg_text = (
-                        f"מילות מפתח לסינון ({len(pf)}):\n{pf_text}\n\n"
-                        f"מילים חסומות ({len(bl)}):\n{bl_text}"
-                    )
+                    msg_text = _build_keywords_text()
                     await asyncio.to_thread(
                         send_message, msg_text, chat_id=chat_id_int,
                         disable_web_page_preview=True,
@@ -553,11 +717,10 @@ def start_health_server(port: int = HEALTH_PORT):
 
 
 def _load_interval_from_db() -> int:
-    """טוען תדירות סריקה מ-DB עם fallback למשתנה סביבה."""
-    val = get_config("interval_minutes")
-    if val and val.strip().isdigit():
-        return max(1, int(val))
-    return INTERVAL_MINUTES
+    """מחזיר תדירות סריקה ממשתנה סביבה בלבד.
+    interval_minutes כבר לא ניתן לעריכה מהפאנל — רק דרך env var.
+    """
+    return max(1, INTERVAL_MINUTES)
 
 _CONFIG_NOT_SET = object()
 
