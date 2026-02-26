@@ -40,17 +40,19 @@ def _get_active_model() -> str:
 def _rotate_model(failed_model: str) -> str | None:
     """מסובב למודל הבא ברשימה אחרי שמודל נכשל (deprecated/not found).
     שומר את המודל החדש ב-DB. מחזיר None אם אין עוד מודלים.
+    עוטף מסביב לתחילת הרשימה אם הגענו לסוף (כדי שמודל ישן ב-DB לא יחסום את השרשרת).
     """
     global _active_model
     try:
         idx = _MODEL_PRIORITY.index(failed_model)
     except ValueError:
         idx = -1
-    next_idx = idx + 1
-    if next_idx >= len(_MODEL_PRIORITY):
+    next_idx = (idx + 1) % len(_MODEL_PRIORITY)
+    new_model = _MODEL_PRIORITY[next_idx]
+    if new_model == failed_model:
+        # רק מודל אחד ברשימה — אין לאן לעבור
         log.error("כל המודלים ברשימה נכשלו — אין fallback נוסף")
         return None
-    new_model = _MODEL_PRIORITY[next_idx]
     _active_model = new_model
     log.warning(f"מודל {failed_model} לא זמין — עובר ל-{new_model}")
     try:
@@ -121,6 +123,7 @@ def _build_batch_system_prompt() -> str:
 def _chat_completion(system: str, user: str, max_tokens: int) -> str:
     """קריאת Chat Completion עם auto-fallback למודל הבא אם הנוכחי deprecated."""
     model = _get_active_model()
+    tried: set[str] = set()
     while True:
         try:
             response = client.chat.completions.create(
@@ -134,9 +137,10 @@ def _chat_completion(system: str, user: str, max_tokens: int) -> str:
             return (response.choices[0].message.content or "") if response.choices else ""
         except openai.APIError as e:
             if _is_model_deprecated_error(e):
+                tried.add(model)
                 next_model = _rotate_model(model)
-                if next_model is None:
-                    raise  # אין עוד מודלים — מעלים את השגיאה
+                if next_model is None or next_model in tried:
+                    raise  # כל המודלים נוסו — מעלים את השגיאה
                 model = next_model
                 continue
             raise  # שגיאה אחרת (rate limit, server error) — מעלים
