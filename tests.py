@@ -816,7 +816,7 @@ class TestHealthServer:
 
 class TestConfigCRUD:
     def test_get_config_default(self, tmp_db):
-        assert database.get_config("nonexistent") == ""
+        assert database.get_config("nonexistent") is None
 
     def test_get_config_custom_default(self, tmp_db):
         assert database.get_config("nonexistent", "fallback") == "fallback"

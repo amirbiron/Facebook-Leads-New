@@ -96,7 +96,7 @@ def _get_classification_criteria() -> str:
     try:
         from database import get_config
         custom = get_config("classification_criteria")
-        if custom.strip():
+        if custom and custom.strip():
             return custom
     except Exception:
         pass

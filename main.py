@@ -785,7 +785,8 @@ async def main():
 
             if not did_scan:
                 now = _now_local()
-                quiet_spec = get_config("quiet_hours") or QUIET_HOURS
+                qh_db = get_config("quiet_hours", _CONFIG_NOT_SET)
+                quiet_spec = qh_db if qh_db is not _CONFIG_NOT_SET else QUIET_HOURS
                 if quiet and _is_quiet_now(now, quiet):
                     secs = _seconds_until_quiet_end(now, quiet)
                     sleep_for = max(60, min(int(secs) + 1, 12 * 60 * 60))
