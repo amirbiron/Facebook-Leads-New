@@ -207,7 +207,7 @@ def get_config(key: str, default=None):
     ).fetchone()
     if row is not None:
         return row[0]
-    return "" if default is None else default
+    return default
 
 def set_config(key: str, value: str):
     """שומר ערך בטבלת _config (מחליף אם קיים)."""

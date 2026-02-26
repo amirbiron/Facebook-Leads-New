@@ -1,5 +1,5 @@
 services:
-  - type: worker
+  - type: web
     name: fb-leads-agent
     runtime: docker
     envVars:
@@ -23,5 +23,5 @@ services:
         value: "DEBUG"
       - key: PYTHONUNBUFFERED
         value: "1"
-      - key: PANEL_PORT
-        value: "8501"
+      - key: PANEL_TOKEN
+        sync: false

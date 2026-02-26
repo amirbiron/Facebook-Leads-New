@@ -582,7 +582,7 @@ def _load_quiet_hours_from_db() -> tuple[time, time] | None:
 
 def _start_panel():
     """מפעיל פאנל הגדרות כ-daemon thread (אם Flask מותקן)."""
-    panel_port = int(os.environ.get("PANEL_PORT", "8501"))
+    panel_port = int(os.environ.get("PANEL_PORT", os.environ.get("PORT", "8501")))
     try:
         from panel import create_app
         app = create_app()
@@ -785,7 +785,8 @@ async def main():
 
             if not did_scan:
                 now = _now_local()
-                quiet_spec = get_config("quiet_hours") or QUIET_HOURS
+                qh_db = get_config("quiet_hours", _CONFIG_NOT_SET)
+                quiet_spec = qh_db if qh_db is not _CONFIG_NOT_SET else QUIET_HOURS
                 if quiet and _is_quiet_now(now, quiet):
                     secs = _seconds_until_quiet_end(now, quiet)
                     sleep_for = max(60, min(int(secs) + 1, 12 * 60 * 60))
