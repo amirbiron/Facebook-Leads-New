@@ -245,6 +245,21 @@ class TestCleanPostContent:
         text = "מחפש מפתח לבניית בוט"
         assert clean_post_content(text) == text
 
+    def test_strips_html_img_with_base64(self):
+        text = 'תוכן <img src="data:image/jpg;base64,AAAA"> עוד טקסט'
+        result = clean_post_content(text)
+        assert "<img" not in result
+        assert "base64" not in result
+        assert "תוכן" in result
+        assert "עוד טקסט" in result
+
+    def test_strips_generic_html_tags(self):
+        text = "שלום <b>עולם</b> <span>טקסט</span>"
+        result = clean_post_content(text)
+        assert "<b>" not in result
+        assert "<span>" not in result
+        assert "שלום עולם טקסט" == result
+
 
 # ──────────────────────────────────────────────────────────────
 # 4b. send_error_alert
