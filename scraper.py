@@ -483,7 +483,8 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
 async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
     posts = []
     reset_extraction_stats()
-    log.info(f">>> סורק קבוצה: {group['name']}")
+    group_name = group["name"]
+    log.info(f">>> סורק קבוצה: {group_name}")
     log.debug(f"URL: {group['url']}")
 
     try:
