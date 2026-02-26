@@ -328,8 +328,42 @@ def _is_post_url(href: str) -> bool:
     post_patterns = ["/posts/", "/permalink/", "story_fbid", "/story.php", "multi_permalinks", "/p/", "pfbid"]
     return any(p in href for p in post_patterns)
 
-async def _extract_post_url(el, fallback_url: str) -> str:
-    """מחלץ URL לפוסט מתוך אלמנט — מנסה מספר אסטרטגיות."""
+def _extract_id_from_data_attrs(attrs_json: str) -> str | None:
+    """מחלץ מזהה פוסט מתוך JSON של data attributes (data-ft, data-store)."""
+    try:
+        data = json.loads(attrs_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    # סדר עדיפות — מזהים מוכרים ב-data-ft של פייסבוק מובייל
+    for key in ("mf_story_key", "top_level_post_id", "tl_objid"):
+        val = data.get(key)
+        if val and str(val).strip():
+            return str(val).strip()
+    return None
+
+
+# תיקיית debug ל-HTML dumps של חילוצים שנכשלו
+_DEBUG_DIR = Path("data/debug_html")
+# מונה פנימי לסטטיסטיקת חילוץ URL
+_extraction_stats: dict[str, int] = {"success": 0, "fallback": 0}
+
+
+def get_extraction_stats() -> dict[str, int]:
+    """מחזיר עותק של סטטיסטיקת חילוץ URL (לשימוש בטסטים ולוגים)."""
+    return dict(_extraction_stats)
+
+
+def reset_extraction_stats():
+    """מאפס סטטיסטיקת חילוץ URL."""
+    _extraction_stats["success"] = 0
+    _extraction_stats["fallback"] = 0
+
+
+async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True) -> str:
+    """מחלץ URL לפוסט מתוך אלמנט — מנסה מספר אסטרטגיות.
+
+    dump_on_fail — אם True ושום אסטרטגיה לא הצליחה, שומר HTML dump לניתוח.
+    """
     # אסטרטגיה 1: סלקטורים ישירים לקישורי פוסטים
     direct_selectors = [
         "a[href*='/posts/']",
@@ -345,6 +379,8 @@ async def _extract_post_url(el, fallback_url: str) -> str:
         if link:
             href = await link.get_attribute("href")
             if href:
+                log.debug(f"חילוץ URL — אסטרטגיה 1 (סלקטור ישיר): {sel}")
+                _extraction_stats["success"] += 1
                 return href if href.startswith("http") else f"https://m.facebook.com{href}"
 
     # אסטרטגיה 2: סריקת כל הלינקים — מחפש כל URL שמכיל מזהה פוסט
@@ -352,6 +388,8 @@ async def _extract_post_url(el, fallback_url: str) -> str:
     for a in all_links:
         href = await a.get_attribute("href") or ""
         if _is_post_url(href):
+            log.debug(f"חילוץ URL — אסטרטגיה 2 (סריקת לינקים): {href[:80]}")
+            _extraction_stats["success"] += 1
             return href if href.startswith("http") else f"https://m.facebook.com{href}"
 
     # אסטרטגיה 3: לינק חותמת זמן — במובייל, הזמן ("12 שעות") הוא לינק לפוסט.
@@ -372,12 +410,79 @@ async def _extract_post_url(el, fallback_url: str) -> str:
             full = href if href.startswith("http") else f"https://m.facebook.com{href}"
             # ודא שהקישור ארוך יותר מ-URL הקבוצה (כלומר מכיל מזהה נוסף)
             if len(full) > len(fallback_url) + 5:
+                log.debug(f"חילוץ URL — אסטרטגיה 3 (timestamp): {full[:80]}")
+                _extraction_stats["success"] += 1
                 return full
 
+    # אסטרטגיה 4: חילוץ מזהה פוסט מ-data attributes (data-ft, data-store)
+    # ב-m.facebook.com, אלמנטים מכילים JSON עם מזהי פוסט
+    group_id_match = re.search(r"/groups/([^/?]+)", fallback_url)
+    if group_id_match:
+        group_id = group_id_match.group(1)
+        for attr in ("data-ft", "data-store"):
+            try:
+                attr_val = await el.get_attribute(attr)
+                if attr_val:
+                    post_id = _extract_id_from_data_attrs(attr_val)
+                    if post_id:
+                        url = f"https://m.facebook.com/groups/{group_id}/permalink/{post_id}/"
+                        log.debug(f"חילוץ URL — אסטרטגיה 4 ({attr}): {url}")
+                        _extraction_stats["success"] += 1
+                        return url
+            except Exception:
+                continue
+
+        # חיפוש data-ft/data-store גם באלמנטים פנימיים
+        for attr in ("data-ft", "data-store"):
+            try:
+                inner = await el.query_selector(f"[{attr}]")
+                if inner:
+                    attr_val = await inner.get_attribute(attr)
+                    if attr_val:
+                        post_id = _extract_id_from_data_attrs(attr_val)
+                        if post_id:
+                            url = f"https://m.facebook.com/groups/{group_id}/permalink/{post_id}/"
+                            log.debug(f"חילוץ URL — אסטרטגיה 4 ({attr} פנימי): {url}")
+                            _extraction_stats["success"] += 1
+                            return url
+            except Exception:
+                continue
+
+    # אסטרטגיה 5: חיפוש מזהה פוסט ב-id/aria של האלמנט עצמו
+    try:
+        el_id = await el.get_attribute("id") or ""
+        # פייסבוק לפעמים שם ID כמו "mall_post_123456" או "u_0_xx_yy"
+        id_match = re.search(r'(\d{10,})', el_id)
+        if id_match and group_id_match:
+            post_id = id_match.group(1)
+            url = f"https://m.facebook.com/groups/{group_id_match.group(1)}/permalink/{post_id}/"
+            log.debug(f"חילוץ URL — אסטרטגיה 5 (element id): {url}")
+            _extraction_stats["success"] += 1
+            return url
+    except Exception:
+        pass
+
+    # כל האסטרטגיות נכשלו — שמירת HTML dump לניתוח
+    _extraction_stats["fallback"] += 1
+    if dump_on_fail:
+        try:
+            _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+            snippet = await el.inner_html()
+            # חותכים ל-5000 תווים כדי לא לזרוק דיסק
+            snippet = snippet[:5000]
+            ts = re.sub(r'[:\s]', '_', str(asyncio.get_event_loop().time())[:10])
+            dump_path = _DEBUG_DIR / f"failed_{ts}_{_extraction_stats['fallback']}.html"
+            dump_path.write_text(snippet, encoding="utf-8")
+            log.debug(f"חילוץ URL נכשל — HTML dump נשמר: {dump_path}")
+        except Exception as e:
+            log.debug(f"לא הצלחתי לשמור HTML dump: {e}")
+
+    log.debug(f"חילוץ URL נכשל — משתמש ב-fallback URL: {fallback_url[:60]}")
     return fallback_url
 
 async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
     posts = []
+    reset_extraction_stats()
     log.info(f">>> סורק קבוצה: {group['name']}")
     log.debug(f"URL: {group['url']}")
 
@@ -531,6 +636,22 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         log.error(f"טיימאאוט בקבוצה: {group['name']} (30 שניות)")
     except Exception as e:
         log.error(f"שגיאה בקבוצה {group['name']}: {e}", exc_info=True)
+
+    # סטטיסטיקת חילוץ URL לקבוצה
+    stats = get_extraction_stats()
+    total_attempts = stats["success"] + stats["fallback"]
+    if total_attempts > 0:
+        rate = stats["success"] / total_attempts * 100
+        real_url_posts = sum(1 for p in posts if p.get("has_real_url"))
+        log.info(
+            f"חילוץ URL — הצלחה: {stats['success']}/{total_attempts} ({rate:.0f}%) | "
+            f"פוסטים עם URL אמיתי: {real_url_posts}/{len(posts)}"
+        )
+        if stats["fallback"] > 0:
+            log.warning(
+                f"חילוץ URL נכשל ב-{stats['fallback']} פוסטים — "
+                f"בדוק HTML dumps בתיקייה {_DEBUG_DIR}"
+            )
 
     log.info(f"<<< נמצאו {len(posts)} פוסטים ב-{group_name}")
     return posts
