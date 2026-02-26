@@ -25,10 +25,11 @@ def load_groups() -> list[dict]:
     סדר עדיפות: DB → FB_GROUPS → DEFAULT_GROUPS
     """
     # ניסיון ראשון — טעינה מ-DB
+    # None = מעולם לא הוגדר → fallback.  [] = המשתמש רוקן הכל → רשימה ריקה.
     try:
         from database import get_db_groups
         db_groups = get_db_groups()
-        if db_groups:
+        if db_groups is not None:
             log.info(f"נטענו {len(db_groups)} קבוצות מ-DB")
             return db_groups
     except Exception as e:

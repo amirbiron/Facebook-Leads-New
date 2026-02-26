@@ -123,8 +123,17 @@ def remove_group(raw_url: str) -> tuple[bool, str]:
         return True, f"קבוצה הוסרה: {url}"
     return False, f"קבוצה לא נמצאה: {url}"
 
-def get_db_groups() -> list[dict]:
-    """מחזיר את כל הקבוצות מה-DB."""
+def _table_was_configured(table_name: str) -> bool:
+    """בודק אם אי-פעם הוכנסה שורה לטבלה (דרך sqlite_sequence של AUTOINCREMENT)."""
+    row = _get_conn().execute(
+        "SELECT 1 FROM sqlite_sequence WHERE name = ?", (table_name,)
+    ).fetchone()
+    return row is not None
+
+def get_db_groups() -> list[dict] | None:
+    """מחזיר קבוצות מה-DB, או None אם הטבלה מעולם לא הוגדרה."""
+    if not _table_was_configured("groups"):
+        return None
     rows = _get_conn().execute("SELECT name, url FROM groups ORDER BY id").fetchall()
     return [{"name": r[0], "url": r[1]} for r in rows]
 
@@ -157,8 +166,10 @@ def remove_keyword(word: str, kw_type: str) -> tuple[bool, str]:
         return True, f"מילה הוסרה: {word}"
     return False, f"מילה לא נמצאה: {word}"
 
-def get_db_keywords(kw_type: str) -> list[str]:
-    """מחזיר מילות מפתח מה-DB לפי סוג."""
+def get_db_keywords(kw_type: str) -> list[str] | None:
+    """מחזיר מילות מפתח מה-DB לפי סוג, או None אם הטבלה מעולם לא הוגדרה."""
+    if not _table_was_configured("keywords"):
+        return None
     rows = _get_conn().execute(
         "SELECT word FROM keywords WHERE type = ? ORDER BY id", (kw_type,)
     ).fetchall()

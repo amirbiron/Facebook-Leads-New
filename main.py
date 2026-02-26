@@ -38,20 +38,24 @@ _PRE_FILTER_KEYWORDS_DEFAULT = [
 ]
 
 def _load_block_keywords() -> list[str]:
-    """טוען מילים חסומות מ-DB עם fallback למשתנה סביבה."""
+    """טוען מילים חסומות מ-DB עם fallback למשתנה סביבה.
+    None מ-DB = מעולם לא הוגדר → fallback.  [] = המשתמש רוקן הכל → רשימה ריקה.
+    """
     try:
         db_kw = get_db_keywords("block")
-        if db_kw:
+        if db_kw is not None:
             return db_kw
     except Exception:
         pass
     return _BLOCK_KEYWORDS_ENV
 
 def _load_pre_filter_keywords() -> list[str]:
-    """טוען מילות מפתח לסינון מוקדם מ-DB עם fallback לרשימת ברירת מחדל."""
+    """טוען מילות מפתח לסינון מוקדם מ-DB עם fallback לרשימת ברירת מחדל.
+    None מ-DB = מעולם לא הוגדר → fallback.  [] = המשתמש רוקן הכל → רשימה ריקה.
+    """
     try:
         db_kw = get_db_keywords("pre_filter")
-        if db_kw:
+        if db_kw is not None:
             return db_kw
     except Exception:
         pass

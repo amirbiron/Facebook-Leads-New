@@ -339,6 +339,15 @@ class TestGroupsCRUD:
         assert "m.facebook.com" in groups[0]["url"]
         assert not groups[0]["url"].endswith("/")
 
+    def test_never_configured_returns_none(self, tmp_db):
+        assert database.get_db_groups() is None
+
+    def test_add_then_remove_all_returns_empty_list(self, tmp_db):
+        database.add_group("https://m.facebook.com/groups/111")
+        database.remove_group("https://m.facebook.com/groups/111")
+        groups = database.get_db_groups()
+        assert groups == []
+
 
 # ──────────────────────────────────────────────────────────────
 # 8. Database — Keywords CRUD
@@ -398,6 +407,16 @@ class TestKeywordsCRUD:
         kws = database.get_db_keywords("block")
         assert kws == ["spam"]
 
+    def test_never_configured_returns_none(self, tmp_db):
+        assert database.get_db_keywords("pre_filter") is None
+        assert database.get_db_keywords("block") is None
+
+    def test_add_then_remove_all_returns_empty_list(self, tmp_db):
+        database.add_keyword("בוט", "pre_filter")
+        database.remove_keyword("בוט", "pre_filter")
+        kws = database.get_db_keywords("pre_filter")
+        assert kws == []
+
 
 # ──────────────────────────────────────────────────────────────
 # 9. reload_keywords
@@ -414,8 +433,17 @@ class TestReloadKeywords:
         assert "חדשה" in PRE_FILTER_KEYWORDS
         assert "חסימה" in BLOCK_KEYWORDS
 
-    def test_fallback_to_defaults_when_db_empty(self, tmp_db):
+    def test_fallback_to_defaults_when_never_configured(self, tmp_db):
         from main import reload_keywords, _PRE_FILTER_KEYWORDS_DEFAULT
         reload_keywords()
         from main import PRE_FILTER_KEYWORDS
         assert PRE_FILTER_KEYWORDS == _PRE_FILTER_KEYWORDS_DEFAULT
+
+    def test_empty_list_when_all_removed(self, tmp_db):
+        """הוספה ומחיקה של כל המילות מפתח צריכה להחזיר רשימה ריקה, לא defaults."""
+        from main import reload_keywords
+        database.add_keyword("זמני", "pre_filter")
+        database.remove_keyword("זמני", "pre_filter")
+        reload_keywords()
+        from main import PRE_FILTER_KEYWORDS
+        assert PRE_FILTER_KEYWORDS == []
