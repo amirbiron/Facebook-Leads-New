@@ -536,7 +536,7 @@ async def run_cycle():
     # (like quiet-hours logic) without Playwright installed.
     from scraper import scrape_all
     from classifier import classify_batch
-    from notifier import send_lead
+    from notifier import send_lead, send_error_alert
 
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
 
@@ -566,6 +566,10 @@ async def run_cycle():
         log.info(f"סך הכל פוסטים שנמצאו: {len(posts)}")
     except Exception as e:
         log.error(f"שגיאה בגרידה: {e}", exc_info=True)
+        try:
+            await asyncio.to_thread(send_error_alert, f"שגיאה בגרידה: {e}")
+        except Exception:
+            pass
         return
 
     # הדפדפן כבר סגור כאן — משחררים זיכרון לפני הסיווג
@@ -712,6 +716,11 @@ async def main():
                 await run_scan_guarded()
         except Exception as e:
             log.error(f"שגיאה לא צפויה: {e}", exc_info=True)
+            try:
+                from notifier import send_error_alert
+                await asyncio.to_thread(send_error_alert, f"שגיאה לא צפויה: {e}")
+            except Exception:
+                pass
 
         log.info(f"ממתין {INTERVAL_MINUTES} דקות לסבב הבא... (או /scan)")
         try:

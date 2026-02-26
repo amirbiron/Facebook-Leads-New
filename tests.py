@@ -139,7 +139,7 @@ class TestIsQuietNow:
 # 4. clean_post_content
 # ──────────────────────────────────────────────────────────────
 
-from notifier import clean_post_content
+from notifier import clean_post_content, send_error_alert
 
 
 class TestCleanPostContent:
@@ -168,6 +168,38 @@ class TestCleanPostContent:
     def test_normal_text_unchanged(self):
         text = "מחפש מפתח לבניית בוט"
         assert clean_post_content(text) == text
+
+
+# ──────────────────────────────────────────────────────────────
+# 4b. send_error_alert
+# ──────────────────────────────────────────────────────────────
+
+
+class TestSendErrorAlert:
+    @patch("notifier.send_message")
+    def test_sends_error_message(self, mock_send):
+        mock_send.return_value = True
+        result = send_error_alert("something broke")
+        assert result is True
+        mock_send.assert_called_once()
+        call_text = mock_send.call_args[0][0]
+        assert "⚠️" in call_text
+        assert "something broke" in call_text
+
+    @patch("notifier.send_message")
+    def test_truncates_long_error(self, mock_send):
+        mock_send.return_value = True
+        long_error = "x" * 1000
+        send_error_alert(long_error)
+        call_text = mock_send.call_args[0][0]
+        # הודעת השגיאה חתוכה ל-500 תווים מהשגיאה עצמה
+        assert len(call_text) < 600
+
+    @patch("notifier.send_message")
+    def test_send_failure_returns_false(self, mock_send):
+        mock_send.return_value = False
+        result = send_error_alert("error")
+        assert result is False
 
 
 # ──────────────────────────────────────────────────────────────
