@@ -21,7 +21,7 @@ from logger import get_logger
 
 log = get_logger("Panel")
 
-PANEL_PORT = int(os.environ.get("PANEL_PORT", os.environ.get("PORT", "8501")))
+PANEL_PORT = int(os.environ.get("PANEL_PORT", os.environ.get("PORT", "8080")))
 
 
 def create_app() -> Flask:

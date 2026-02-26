@@ -131,7 +131,7 @@ def _chat_completion(system: str, user: str, max_tokens: int) -> str:
                     {"role": "user", "content": user},
                 ],
             )
-            return response.choices[0].message.content if response.choices else ""
+            return (response.choices[0].message.content or "") if response.choices else ""
         except openai.APIError as e:
             if _is_model_deprecated_error(e):
                 next_model = _rotate_model(model)
@@ -148,7 +148,7 @@ def classify_post(content: str, group_name: str) -> dict:
         raw_text = _chat_completion(
             system=_build_system_prompt(),
             user=f"קבוצה: {group_name}\n\nפוסט:\n{content[:1000]}",
-            max_tokens=100,
+            max_tokens=1024,
         )
 
         log.debug(f"תשובה גולמית מ-API: {raw_text[:200]}")
@@ -211,7 +211,7 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
             raw_text = _chat_completion(
                 system=_build_batch_system_prompt(),
                 user=user_message,
-                max_tokens=150 * len(batch),
+                max_tokens=max(1024, 300 * len(batch)),
             )
 
             log.debug(f"תשובה באצ': {raw_text[:300]}")

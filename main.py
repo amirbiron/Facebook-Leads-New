@@ -22,7 +22,7 @@ TIMEZONE_NAME = os.environ.get("TIMEZONE", "UTC")
 QUIET_HOURS = os.environ.get("QUIET_HOURS", "").strip()
 TELEGRAM_CONTROL = os.environ.get("TELEGRAM_CONTROL", "1").strip().lower() not in ("0", "false", "no", "off")
 
-HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8080"))
+HEALTH_PORT = int(os.environ.get("HEALTH_PORT", os.environ.get("PORT", "8080")))
 
 FB_EMAIL = os.environ.get("FB_EMAIL")
 FB_PASSWORD = os.environ.get("FB_PASSWORD")
@@ -745,7 +745,7 @@ def _load_quiet_hours_from_db() -> tuple[time, time] | None:
 
 def _get_panel_port() -> int:
     """מחזיר את הפורט שהפאנל ישתמש בו."""
-    return int(os.environ.get("PANEL_PORT", os.environ.get("PORT", "8501")))
+    return int(os.environ.get("PANEL_PORT", os.environ.get("PORT", "8080")))
 
 
 def _start_panel() -> bool:
