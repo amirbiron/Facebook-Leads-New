@@ -21,16 +21,20 @@ _BAD_TITLES = {"facebook", "content not found", "page not found",
 
 def _extract_name_from_title(page_title: str) -> str | None:
     """מחלץ שם קבוצה מכותרת דף פייסבוק. מחזיר None אם הכותרת לא תקינה."""
-    if not page_title or " | " not in page_title:
+    if not page_title:
         return None
-    extracted = page_title.split(" | ")[0].strip()
+    # ניקוי תווי כיווניות (LRM/RLM) שפייסבוק מוסיף
+    cleaned = page_title.replace("\u200e", "").replace("\u200f", "").strip()
+    # פורמט נפוץ: "שם הקבוצה | Facebook" — לוקחים רק את החלק הראשון
+    if " | " in cleaned:
+        cleaned = cleaned.split(" | ")[0].strip()
     # פענוח HTML entities (למשל &amp;)
-    extracted = html_mod.unescape(extracted)
-    if (extracted
-            and len(extracted) > 2
-            and extracted.lower() not in _BAD_TITLES
-            and "אינו נתמך" not in extracted):
-        return extracted
+    cleaned = html_mod.unescape(cleaned)
+    if (cleaned
+            and len(cleaned) > 2
+            and cleaned.lower() not in _BAD_TITLES
+            and "אינו נתמך" not in cleaned):
+        return cleaned
     return None
 
 
