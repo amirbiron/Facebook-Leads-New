@@ -5,7 +5,7 @@ import sys
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from database import init_db, is_seen, mark_seen, save_lead, get_stats, cleanup_old_posts
+from database import init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats, cleanup_old_posts
 from logger import get_logger
 
 log = get_logger("Main")
@@ -398,6 +398,9 @@ async def run_cycle():
 
         if result.get("relevant"):
             reason = result.get("reason", "")
+            if is_lead_sent(post["id"]):
+                log.debug(f"ליד כבר נשלח בעבר — דילוג: {post['id']}")
+                continue
             send_lead(
                 group_name=post["group"],
                 content=post["content"],

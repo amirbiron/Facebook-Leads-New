@@ -58,6 +58,12 @@ def save_lead(post_id: str, group_name: str, content: str, reason: str):
     )
     conn.commit()
 
+def is_lead_sent(post_id: str) -> bool:
+    row = _get_conn().execute(
+        "SELECT 1 FROM sent_leads WHERE post_id = ?", (post_id,)
+    ).fetchone()
+    return row is not None
+
 def get_stats() -> dict:
     conn = _get_conn()
     seen = conn.execute("SELECT COUNT(*) FROM seen_posts").fetchone()[0]
