@@ -18,6 +18,11 @@ TELEGRAM_CONTROL = os.environ.get("TELEGRAM_CONTROL", "1").strip().lower() not i
 FB_EMAIL = os.environ.get("FB_EMAIL")
 FB_PASSWORD = os.environ.get("FB_PASSWORD")
 
+# מילים חסומות — פוסט שמכיל מילה מהרשימה לא יישלח ל-AI
+# ניתן לערוך דרך משתנה סביבה BLOCK_KEYWORDS (מופרד בפסיקים)
+_block_env = os.environ.get("BLOCK_KEYWORDS", "").strip()
+BLOCK_KEYWORDS = [w.strip().lower() for w in _block_env.split(",") if w.strip()] if _block_env else []
+
 # מילות מפתח לסינון מוקדם — רק פוסטים שמכילים לפחות מילה אחת יעברו ל-AI
 PRE_FILTER_KEYWORDS = [
     "בוט", "אוטומציה", "סקריפט", "מתכנת", "פיתוח", "מחפש מפתח",
@@ -30,6 +35,13 @@ def passes_keyword_filter(text: str) -> bool:
     """בודק אם הפוסט מכיל לפחות מילת מפתח אחת."""
     text_lower = text.lower()
     return any(kw in text_lower for kw in PRE_FILTER_KEYWORDS)
+
+def is_blocked(text: str) -> bool:
+    """בודק אם הפוסט מכיל מילה חסומה — אם כן, לא יישלח ל-AI."""
+    if not BLOCK_KEYWORDS:
+        return False
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in BLOCK_KEYWORDS)
 
 def _now_local() -> datetime:
     try:
@@ -236,10 +248,12 @@ async def _telegram_control_loop(
                     last_started = state.get("last_scan_started")
                     last_finished = state.get("last_scan_finished")
                     in_progress = bool(state.get("scan_in_progress"))
+                    block_desc = ", ".join(BLOCK_KEYWORDS) if BLOCK_KEYWORDS else "(ריק)"
                     msg_text = (
                         "סטטוס בוט:\n"
                         f"- שעה מקומית: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
                         f"- שעות שקטות: {quiet_desc} | עכשיו: {'פעיל' if quiet_now else 'לא'}\n"
+                        f"- מילים חסומות: {block_desc}\n"
                         f"- סריקה רצה: {'כן' if in_progress else 'לא'}\n"
                         f"- סריקה אחרונה התחילה: {last_started.strftime('%Y-%m-%d %H:%M:%S %Z') if last_started else '-'}\n"
                         f"- סריקה אחרונה הסתיימה: {last_finished.strftime('%Y-%m-%d %H:%M:%S %Z') if last_finished else '-'}\n"
@@ -352,7 +366,15 @@ async def run_cycle():
     for post in new_posts:
         mark_seen(post["id"], post["group"])
 
-    # שלב 3 — סינון מילות מפתח לפני שליחה ל-AI
+    # שלב 3א — סינון מילים חסומות (BLOCK_KEYWORDS)
+    if BLOCK_KEYWORDS:
+        before_block = len(new_posts)
+        new_posts = [p for p in new_posts if not is_blocked(p["content"])]
+        blocked_count = before_block - len(new_posts)
+        if blocked_count:
+            log.info(f"נחסמו {blocked_count} פוסטים לפי מילים חסומות (BLOCK_KEYWORDS)")
+
+    # שלב 3ב — סינון מילות מפתח לפני שליחה ל-AI
     filtered_posts = [p for p in new_posts if passes_keyword_filter(p["content"])]
     skipped_by_filter = len(new_posts) - len(filtered_posts)
     if skipped_by_filter:
@@ -392,7 +414,8 @@ async def main():
     log.info(
         f"מתחיל. סבב כל {INTERVAL_MINUTES} דקות. "
         f"LOG_LEVEL={os.environ.get('LOG_LEVEL', 'DEBUG')} "
-        f"TIMEZONE={TIMEZONE_NAME} QUIET_HOURS={QUIET_HOURS or '(disabled)'}"
+        f"TIMEZONE={TIMEZONE_NAME} QUIET_HOURS={QUIET_HOURS or '(disabled)'} "
+        f"BLOCK_KEYWORDS={', '.join(BLOCK_KEYWORDS) if BLOCK_KEYWORDS else '(disabled)'}"
     )
 
     quiet = None
