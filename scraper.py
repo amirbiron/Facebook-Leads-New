@@ -485,13 +485,14 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
             if _telegram_dumps_sent < _MAX_TELEGRAM_DUMPS:
                 group_name = fallback_url.rstrip("/").split("/")[-1]
                 caption = f"🔍 HTML dump — חילוץ URL נכשל\nקבוצה: {group_name}"
-                await asyncio.to_thread(
+                sent = await asyncio.to_thread(
                     send_document,
                     snippet.encode("utf-8"),
                     filename,
                     caption,
                 )
-                _telegram_dumps_sent += 1
+                if sent:
+                    _telegram_dumps_sent += 1
         except Exception as e:
             log.debug(f"לא הצלחתי לשמור HTML dump: {e}")
 
