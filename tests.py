@@ -1597,3 +1597,117 @@ class TestIsPostUrl:
 
     def test_multi_permalinks(self):
         assert _is_post_url("https://m.facebook.com/groups/123/?multi_permalinks=456") is True
+
+
+# ──────────────────────────────────────────────────────────────
+# 24. _extract_name_from_title — חילוץ שם קבוצה מכותרת דף
+# ──────────────────────────────────────────────────────────────
+
+from scraper import _extract_name_from_title
+
+
+class TestExtractNameFromTitle:
+    def test_standard_title(self):
+        assert _extract_name_from_title("בינה מלאכותית AI ISRAEL | Facebook") == "בינה מלאכותית AI ISRAEL"
+
+    def test_no_separator(self):
+        """כותרת ללא ' | ' — לא ניתן לחלץ."""
+        assert _extract_name_from_title("Facebook") is None
+
+    def test_empty_string(self):
+        assert _extract_name_from_title("") is None
+
+    def test_none_input(self):
+        assert _extract_name_from_title(None) is None
+
+    def test_bad_title_login(self):
+        """כותרת כניסה — לא שם קבוצה אמיתי."""
+        assert _extract_name_from_title("Log in | Facebook") is None
+
+    def test_bad_title_hebrew(self):
+        assert _extract_name_from_title("התחברות | Facebook") is None
+
+    def test_bad_title_error(self):
+        assert _extract_name_from_title("Error | Facebook") is None
+
+    def test_short_name_rejected(self):
+        """שם קצר מדי (2 תווים או פחות) נדחה."""
+        assert _extract_name_from_title("AB | Facebook") is None
+
+    def test_unsupported_browser(self):
+        """כותרת 'אינו נתמך' נדחית."""
+        assert _extract_name_from_title("הדפדפן אינו נתמך | Facebook") is None
+
+    def test_html_entities_unescaped(self):
+        """HTML entities מפוענחים כראוי."""
+        assert _extract_name_from_title("AI &amp; ML Israel | Facebook") == "AI & ML Israel"
+
+    def test_multiple_separators(self):
+        """כותרת עם כמה מפרידים — רק החלק הראשון."""
+        assert _extract_name_from_title("שם קבוצה | תת-כותרת | Facebook") == "שם קבוצה"
+
+
+# ──────────────────────────────────────────────────────────────
+# 25. fetch_group_name — חילוץ שם קבוצה מפייסבוק ב-HTTP
+# ──────────────────────────────────────────────────────────────
+
+from scraper import fetch_group_name
+
+
+class TestFetchGroupName:
+    def test_no_session_file(self, tmp_path, monkeypatch):
+        """אם אין קובץ סשן — מחזיר None."""
+        import scraper
+        monkeypatch.setattr(scraper, "SESSION_FILE", tmp_path / "no_such_file.json")
+        assert fetch_group_name("https://m.facebook.com/groups/123") is None
+
+    def test_successful_fetch(self, tmp_path, monkeypatch):
+        """חילוץ שם מוצלח מ-HTML תקין."""
+        import scraper
+        session_file = tmp_path / "session.json"
+        session_file.write_text(json.dumps([{"name": "c_user", "value": "123"}]))
+        monkeypatch.setattr(scraper, "SESSION_FILE", session_file)
+
+        fake_html = "<html><head><title>קבוצת טסט מגניבה | Facebook</title></head></html>"
+        fake_resp = SimpleNamespace(text=fake_html)
+        monkeypatch.setattr(scraper._requests, "get", lambda *a, **kw: fake_resp)
+
+        assert fetch_group_name("https://m.facebook.com/groups/123") == "קבוצת טסט מגניבה"
+
+    def test_login_page_returns_none(self, tmp_path, monkeypatch):
+        """דף לוגין — מחזיר None."""
+        import scraper
+        session_file = tmp_path / "session.json"
+        session_file.write_text(json.dumps([{"name": "c_user", "value": "123"}]))
+        monkeypatch.setattr(scraper, "SESSION_FILE", session_file)
+
+        fake_html = "<html><head><title>Log in | Facebook</title></head></html>"
+        fake_resp = SimpleNamespace(text=fake_html)
+        monkeypatch.setattr(scraper._requests, "get", lambda *a, **kw: fake_resp)
+
+        assert fetch_group_name("https://m.facebook.com/groups/123") is None
+
+    def test_network_error_returns_none(self, tmp_path, monkeypatch):
+        """שגיאת רשת — מחזיר None."""
+        import scraper
+        session_file = tmp_path / "session.json"
+        session_file.write_text(json.dumps([{"name": "c_user", "value": "123"}]))
+        monkeypatch.setattr(scraper, "SESSION_FILE", session_file)
+
+        def raise_error(*a, **kw):
+            raise ConnectionError("network down")
+        monkeypatch.setattr(scraper._requests, "get", raise_error)
+
+        assert fetch_group_name("https://m.facebook.com/groups/123") is None
+
+    def test_no_title_tag_returns_none(self, tmp_path, monkeypatch):
+        """HTML ללא תגית title — מחזיר None."""
+        import scraper
+        session_file = tmp_path / "session.json"
+        session_file.write_text(json.dumps([{"name": "c_user", "value": "123"}]))
+        monkeypatch.setattr(scraper, "SESSION_FILE", session_file)
+
+        fake_resp = SimpleNamespace(text="<html><head></head></html>")
+        monkeypatch.setattr(scraper._requests, "get", lambda *a, **kw: fake_resp)
+
+        assert fetch_group_name("https://m.facebook.com/groups/123") is None
