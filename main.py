@@ -865,6 +865,9 @@ async def run_cycle():
     log.debug("זיכרון שוחרר אחרי סגירת דפדפן")
 
     # שלב 2 — סינון כפילויות (בלי דפדפן — זיכרון נמוך)
+    # לפוסטים עם URL אמיתי — בודקים לפי post_id ב-DB.
+    # לפוסטים ללא URL אמיתי — ה-ID מבוסס hash תוכן (ייחודי לכל פוסט),
+    # כך שגם הם נבדקים כראוי מול seen_posts.
     new_posts = [p for p in posts if not is_seen(p["id"])]
     log.info(f"פוסטים חדשים (לא נראו קודם): {len(new_posts)}")
 

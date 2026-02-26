@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import html as html_mod
 import json
 import os
@@ -524,12 +525,19 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                     except Exception:
                         pass
 
-                    post_id = extract_post_id(post_url)
                     has_real_url = post_url != group["url"]
 
+                    if has_real_url:
+                        post_id = extract_post_id(post_url)
+                    else:
+                        # fallback URL = URL הקבוצה → ID זהה לכל הפוסטים בקבוצה.
+                        # משתמשים ב-hash של התוכן כ-ID ייחודי לכל פוסט,
+                        # כדי למנוע סימון שגוי כ"נראה" לכל הפוסטים בקבוצה.
+                        post_id = "c_" + hashlib.md5(text.encode()).hexdigest()[:16]
+
                     # בדיקה אם הגענו לפוסט מסריקה קודמת.
-                    # רק אם יש URL אמיתי לפוסט — fallback ל-URL הקבוצה מייצר
-                    # ID זהה לכל הפוסטים שנכשלים בחילוץ, ויגרום לעצירה מוקדמת שגויה.
+                    # רק אם יש URL אמיתי לפוסט — hash תוכן עלול להשתנות
+                    # בגלל שינויי timestamp, ולא מתאים לזיהוי עצירת גלילה.
                     # דורשים רצף של KNOWN_THRESHOLD פוסטים מוכרים לפני עצירה,
                     # כדי למנוע עצירה מוקדמת בגלל פוסט מוצמד (pinned) בראש הפיד.
                     if has_real_url and seen_checker and seen_checker(post_id):
@@ -547,7 +555,8 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         "id": post_id,
                         "content": text,
                         "url": post_url,
-                        "group": group_name
+                        "group": group_name,
+                        "has_real_url": has_real_url,
                     })
 
                     if len(posts) >= MAX_POSTS:
