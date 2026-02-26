@@ -1002,17 +1002,42 @@ async def run_cycle():
     for post in new_posts:
         mark_seen(post["id"], post["group"])
 
-    # שלב 3א — סינון מילים חסומות (BLOCK_KEYWORDS)
+    leads_found = 0
+
+    # שלב 3 — "שלח תמיד": פוסטים עם מילת force_send עוקפים את כל הסינון (block/pre_filter/AI)
+    force_send_posts = []
+    rest_posts = []
+    for post in new_posts:
+        matched_kw = matches_force_send(post["content"])
+        if matched_kw and not is_lead_sent(post["id"]):
+            reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
+            send_lead(
+                group_name=post["group"],
+                content=post["content"],
+                post_url=post["url"],
+                reason=reason,
+            )
+            save_lead(post["id"], post["group"], post["content"], reason)
+            leads_found += 1
+            log.info(f"ליד (force_send): {matched_kw}")
+            force_send_posts.append(post)
+        else:
+            rest_posts.append(post)
+
+    if force_send_posts:
+        log.info(f"נשלחו {len(force_send_posts)} לידים ישירות (force_send)")
+
+    # שלב 4א — סינון מילים חסומות (BLOCK_KEYWORDS)
     if BLOCK_KEYWORDS:
-        before_block = len(new_posts)
-        new_posts = [p for p in new_posts if not is_blocked(p["content"])]
-        blocked_count = before_block - len(new_posts)
+        before_block = len(rest_posts)
+        rest_posts = [p for p in rest_posts if not is_blocked(p["content"])]
+        blocked_count = before_block - len(rest_posts)
         if blocked_count:
             log.info(f"נחסמו {blocked_count} פוסטים לפי מילים חסומות (BLOCK_KEYWORDS)")
 
-    # שלב 3ב — סינון מילות מפתח לפני שליחה ל-AI
-    filtered_posts = [p for p in new_posts if passes_keyword_filter(p["content"])]
-    skipped_by_filter = len(new_posts) - len(filtered_posts)
+    # שלב 4ב — סינון מילות מפתח לפני שליחה ל-AI
+    filtered_posts = [p for p in rest_posts if passes_keyword_filter(p["content"])]
+    skipped_by_filter = len(rest_posts) - len(filtered_posts)
     if skipped_by_filter:
         log.info(f"סונן לפי מילות מפתח: {skipped_by_filter} פוסטים לא רלוונטיים דולגו")
     log.info(f"פוסטים שעוברים לסיווג AI: {len(filtered_posts)}")
@@ -1026,25 +1051,7 @@ async def run_cycle():
     if skipped_already_sent:
         log.debug(f"דילוג על {skipped_already_sent} פוסטים שכבר נשלחו כלידים")
 
-    leads_found = 0
-
-    # שלב 4 — "שלח תמיד": פוסטים שמכילים מילת force_send נשלחים ישירות ללא AI
-    to_classify = []
-    for post in not_yet_sent:
-        matched_kw = matches_force_send(post["content"])
-        if matched_kw:
-            reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
-            send_lead(
-                group_name=post["group"],
-                content=post["content"],
-                post_url=post["url"],
-                reason=reason,
-            )
-            save_lead(post["id"], post["group"], post["content"], reason)
-            leads_found += 1
-            log.info(f"ליד (force_send): {matched_kw}")
-        else:
-            to_classify.append(post)
+    to_classify = not_yet_sent
 
     if to_classify:
         # סיווג באצ'ים — שליחת מספר פוסטים ל-AI בבקשה אחת
