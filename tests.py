@@ -918,6 +918,18 @@ class TestPanelAPI:
         assert data["source"] == "custom"
         assert "טסט" in data["keywords"]
 
+    def test_add_and_list_block_keywords(self, panel_client):
+        """הוספת מילה חסומה דרך הפאנל — בדיקת זרימה מלאה."""
+        resp = panel_client.post("/api/keywords/block", json={"word": "ספאם"})
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert resp.status_code == 200
+
+        resp2 = panel_client.get("/api/keywords/block")
+        data2 = resp2.get_json()
+        assert data2["source"] == "custom"
+        assert "ספאם" in data2["keywords"]
+
     def test_delete_keyword(self, panel_client):
         panel_client.post("/api/keywords/block", json={"word": "ספאם"})
         resp = panel_client.delete("/api/keywords/block", json={"word": "ספאם"})
