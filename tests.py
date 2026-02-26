@@ -1835,44 +1835,6 @@ class TestExtractIdFromDataAttrs:
 from scraper import _extract_post_url, get_extraction_stats, reset_extraction_stats
 
 
-class _FakeElement:
-    """אלמנט מדומה לטסטים — מחקה Playwright ElementHandle."""
-
-    def __init__(self, *, links=None, attrs=None, inner_els=None, el_id=None, html="<div></div>"):
-        # links: list of (selector_match, href) — לסימולציה של query_selector
-        self._links = links or []
-        # attrs: dict of attribute -> value
-        self._attrs = attrs or {}
-        # inner_els: dict of selector -> _FakeElement
-        self._inner_els = inner_els or {}
-        self._el_id = el_id
-        self._html = html
-
-    async def query_selector(self, selector):
-        # בדיקה ב-inner_els קודם (למשל "[data-ft]")
-        if selector in self._inner_els:
-            return self._inner_els[selector]
-        for sel, href in self._links:
-            if sel == selector:
-                return _FakeLink(href)
-        return None
-
-    async def query_selector_all(self, selector):
-        # מחזיר את כל הלינקים
-        if "a[href]" in selector:
-            return [_FakeLink(href, text=text) for _, href, text in self._links
-                    if len((_,)) and True]  # fallback
-        return []
-
-    async def get_attribute(self, name):
-        if name == "id":
-            return self._el_id
-        return self._attrs.get(name)
-
-    async def inner_html(self):
-        return self._html
-
-
 class _FakeLink:
     """לינק מדומה עם href ו-text."""
 
