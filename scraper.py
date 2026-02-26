@@ -300,10 +300,8 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         FALLBACK_SELECTORS = "div[dir='auto']"
 
         reached_known = False
-        processed_count = 0
         seen_texts = set()
         skipped_short = 0
-        skipped_dup = 0
 
         log.debug("מתחיל גלילה חכמה...")
 
@@ -326,26 +324,23 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                     pass
                 break
 
-            # מעבדים רק אלמנטים חדשים (שנטענו מאז הגלילה האחרונה)
-            new_elements = post_elements[processed_count:]
-            processed_count = len(post_elements)
+            # מעבדים את כל האלמנטים ומדלגים על כאלה שכבר ראינו לפי תוכן.
+            # לא משתמשים במעקב לפי אינדקס כי ה-DOM יכול להשתנות בגלילה
+            # (virtualization, החלפת selector) מה שגורם לדילוג על אלמנטים חדשים.
+            prev_seen_count = len(seen_texts)
 
-            if not new_elements and scroll_i > 0:
-                log.debug("אין אלמנטים חדשים אחרי גלילה — עוצרים")
-                break
-
-            for el in new_elements:
+            for el in post_elements:
                 try:
                     text = await asyncio.wait_for(el.inner_text(), timeout=5)
                     text = text.strip()
 
+                    if text in seen_texts:
+                        continue
+                    seen_texts.add(text)
+
                     if len(text) < 50:
                         skipped_short += 1
                         continue
-                    if text in seen_texts:
-                        skipped_dup += 1
-                        continue
-                    seen_texts.add(text)
 
                     post_url = group["url"]
                     try:
@@ -383,10 +378,14 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             if reached_known:
                 break
 
-        if not reached_known:
-            log.debug(f"לא הגענו לפוסט מוכר — נעצרנו אחרי {MAX_SCROLLS} גלילות")
+            if scroll_i > 0 and len(seen_texts) == prev_seen_count:
+                log.debug("אין אלמנטים חדשים אחרי גלילה — עוצרים")
+                break
 
-        log.debug(f"סטטיסטיקה — דולגו: {skipped_short} קצרים, {skipped_dup} כפולים")
+        if not reached_known:
+            log.debug(f"לא הגענו לפוסט מוכר — נעצרנו אחרי {scroll_i} גלילות")
+
+        log.debug(f"סטטיסטיקה — דולגו: {skipped_short} קצרים")
 
     except PlaywrightTimeout:
         log.error(f"טיימאאוט בקבוצה: {group['name']} (30 שניות)")
