@@ -74,6 +74,102 @@ def clean_post_content(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
+def send_message_with_buttons(
+    text: str,
+    buttons: list[list[dict]],
+    *,
+    chat_id: str | int | None = None,
+    parse_mode: str | None = None,
+) -> dict | None:
+    """שולח הודעה עם InlineKeyboard.
+    buttons — מערך דו-ממדי של כפתורים, כל dict: {"text": "...", "callback_data": "..."}.
+    מחזיר dict של ההודעה שנשלחה (כולל message_id) או None בשגיאה.
+    """
+    if not BOT_TOKEN or not (chat_id or CHAT_ID):
+        log.error("חסרים TELEGRAM_BOT_TOKEN או TELEGRAM_CHAT_ID")
+        return None
+
+    target_chat = str(chat_id or CHAT_ID)
+
+    payload: dict = {
+        "chat_id": target_chat,
+        "text": text,
+        "reply_markup": {"inline_keyboard": buttons},
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json=payload,
+            timeout=10,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("result")
+        log.error(f"טלגרם החזיר סטטוס {response.status_code}: {response.text}")
+        return None
+    except Exception as e:
+        log.error(f"שגיאה בשליחת הודעה עם כפתורים: {e}", exc_info=True)
+        return None
+
+
+def edit_message_text(
+    chat_id: int | str,
+    message_id: int,
+    text: str,
+    buttons: list[list[dict]] | None = None,
+    *,
+    parse_mode: str | None = None,
+) -> bool:
+    """עורך הודעה קיימת (טקסט + כפתורים אופציונליים)."""
+    if not BOT_TOKEN:
+        return False
+
+    payload: dict = {
+        "chat_id": str(chat_id),
+        "message_id": message_id,
+        "text": text,
+    }
+    if buttons is not None:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
+            json=payload,
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return True
+        log.error(f"editMessageText נכשל: {response.status_code}: {response.text}")
+        return False
+    except Exception as e:
+        log.error(f"שגיאה בעריכת הודעה: {e}", exc_info=True)
+        return False
+
+
+def answer_callback_query(callback_query_id: str, text: str = "") -> bool:
+    """עונה ל-callback query (מסיר את אנימציית הטעינה מהכפתור)."""
+    if not BOT_TOKEN:
+        return False
+    payload: dict = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
+            json=payload,
+            timeout=10,
+        )
+        return response.status_code == 200
+    except Exception:
+        return False
+
+
 def send_error_alert(error: str) -> bool:
     """שולח שגיאה קריטית כהודעת טלגרם (חתוך ל-500 תווים)."""
     truncated = error[:500]

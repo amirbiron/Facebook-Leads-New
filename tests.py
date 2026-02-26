@@ -866,7 +866,6 @@ class TestPanelAPI:
     def test_put_settings(self, panel_client):
         resp = panel_client.put("/api/settings", json={
             "fb_email": "new@test.com",
-            "interval_minutes": "15",
         })
         assert resp.status_code == 200
         assert resp.get_json()["ok"] is True
@@ -874,21 +873,12 @@ class TestPanelAPI:
         resp2 = panel_client.get("/api/settings")
         data = resp2.get_json()
         assert data["fb_email"] == "new@test.com"
-        assert data["interval_minutes"] == "15"
 
-    def test_put_interval_zero_rejected(self, panel_client):
-        """interval_minutes=0 נדחה בצד שרת — מונע לולאת סריקה צמודה."""
-        resp = panel_client.put("/api/settings", json={"interval_minutes": "0"})
-        assert resp.status_code == 400
-        assert resp.get_json()["ok"] is False
-
-    def test_put_interval_negative_rejected(self, panel_client):
-        resp = panel_client.put("/api/settings", json={"interval_minutes": "-5"})
-        assert resp.status_code == 400
-
-    def test_put_interval_valid_accepted(self, panel_client):
-        resp = panel_client.put("/api/settings", json={"interval_minutes": "1"})
+    def test_put_quiet_hours(self, panel_client):
+        resp = panel_client.put("/api/settings", json={"quiet_hours": "22:00-06:00"})
         assert resp.status_code == 200
+        resp2 = panel_client.get("/api/settings")
+        assert resp2.get_json()["quiet_hours"] == "22:00-06:00"
 
     def test_get_groups_default(self, panel_client):
         resp = panel_client.get("/api/groups")
@@ -1075,3 +1065,270 @@ class TestDynamicSettings:
         database.set_config("quiet_hours", "")
         result = _load_quiet_hours_from_db()
         assert result is None
+
+
+# ──────────────────────────────────────────────────────────────
+# 15. Inline Keyboard — כפתורי תפריט
+# ──────────────────────────────────────────────────────────────
+
+from main import (
+    _main_menu_buttons, _settings_menu_buttons, _back_to_menu_button,
+    _build_status_text, _build_daily_report_text,
+    _build_groups_text, _build_keywords_text, _build_blocked_text,
+)
+
+
+class TestMenuButtons:
+    def test_main_menu_structure(self):
+        """תפריט ראשי — 2 שורות, 2 כפתורים בכל שורה."""
+        buttons = _main_menu_buttons()
+        assert len(buttons) == 2
+        assert len(buttons[0]) == 2
+        assert len(buttons[1]) == 2
+
+    def test_main_menu_callback_data(self):
+        """כל כפתור בתפריט ראשי מכיל callback_data תקין."""
+        buttons = _main_menu_buttons()
+        expected = {"scan", "status", "daily_report", "settings"}
+        actual = {btn["callback_data"] for row in buttons for btn in row}
+        assert actual == expected
+
+    def test_main_menu_buttons_have_text(self):
+        """כל כפתור מכיל שדה text."""
+        buttons = _main_menu_buttons()
+        for row in buttons:
+            for btn in row:
+                assert "text" in btn
+                assert len(btn["text"]) > 0
+
+    def test_settings_menu_structure(self):
+        """תפריט הגדרות — 2 שורות, 2 כפתורים בכל שורה."""
+        buttons = _settings_menu_buttons()
+        assert len(buttons) == 2
+        assert len(buttons[0]) == 2
+        assert len(buttons[1]) == 2
+
+    def test_settings_menu_callback_data(self):
+        buttons = _settings_menu_buttons()
+        expected = {"groups", "keywords", "blocked", "menu"}
+        actual = {btn["callback_data"] for row in buttons for btn in row}
+        assert actual == expected
+
+    def test_back_to_menu_button(self):
+        """כפתור חזרה — שורה אחת, כפתור אחד."""
+        buttons = _back_to_menu_button()
+        assert len(buttons) == 1
+        assert len(buttons[0]) == 1
+        assert buttons[0][0]["callback_data"] == "menu"
+
+
+class TestBuildStatusText:
+    def test_contains_key_fields(self, tmp_db):
+        shared = {
+            "quiet": None,
+            "scan_in_progress": False,
+            "last_scan_started": None,
+            "last_scan_finished": None,
+        }
+        text = _build_status_text(shared)
+        assert "סטטוס בוט" in text
+        assert "שעה מקומית" in text
+        assert "סך נראו" in text
+
+    def test_scan_in_progress(self, tmp_db):
+        shared = {
+            "quiet": None,
+            "scan_in_progress": True,
+            "last_scan_started": datetime(2026, 1, 1, 10, 0),
+            "last_scan_finished": None,
+        }
+        text = _build_status_text(shared)
+        assert "כן" in text
+
+
+class TestBuildDailyReport:
+    def test_contains_report_fields(self, tmp_db):
+        shared = {
+            "scan_in_progress": False,
+            "last_scan_started": None,
+            "last_scan_finished": None,
+        }
+        text = _build_daily_report_text(shared)
+        assert "דו\"ח יומי" in text
+        assert "סך פוסטים" in text
+        assert "סך לידים" in text
+
+
+class TestBuildGroupsText:
+    def test_no_groups(self):
+        with patch("scraper.GROUPS", []):
+            text = _build_groups_text()
+            assert "אין קבוצות" in text
+
+    def test_with_groups(self):
+        fake = [{"name": "טסט", "url": "https://m.facebook.com/groups/123"}]
+        with patch("scraper.GROUPS", fake):
+            text = _build_groups_text()
+            assert "טסט" in text
+            assert "1." in text
+
+
+class TestBuildKeywordsText:
+    def test_empty_keywords(self):
+        with patch("main.PRE_FILTER_KEYWORDS", []):
+            from main import _build_keywords_text
+            text = _build_keywords_text()
+            assert "(ריק)" in text
+
+    def test_with_keywords(self):
+        with patch("main.PRE_FILTER_KEYWORDS", ["בוט", "אוטומציה"]):
+            from main import _build_keywords_text
+            text = _build_keywords_text()
+            assert "בוט" in text
+            assert "אוטומציה" in text
+
+
+class TestBuildBlockedText:
+    def test_empty_blocked(self):
+        with patch("main.BLOCK_KEYWORDS", []):
+            from main import _build_blocked_text
+            text = _build_blocked_text()
+            assert "(ריק)" in text
+
+    def test_with_blocked(self):
+        with patch("main.BLOCK_KEYWORDS", ["ספאם"]):
+            from main import _build_blocked_text
+            text = _build_blocked_text()
+            assert "ספאם" in text
+
+
+# ──────────────────────────────────────────────────────────────
+# 16. Notifier — inline keyboard functions
+# ──────────────────────────────────────────────────────────────
+
+from notifier import send_message_with_buttons, edit_message_text, answer_callback_query
+
+
+class TestSendMessageWithButtons:
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.requests.post")
+    def test_sends_with_reply_markup(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"ok": True, "result": {"message_id": 42}}
+        mock_post.return_value = mock_resp
+
+        buttons = [[{"text": "כפתור", "callback_data": "test"}]]
+        result = send_message_with_buttons("טקסט", buttons, chat_id=123)
+        assert result is not None
+        assert result["message_id"] == 42
+
+        call_payload = mock_post.call_args[1]["json"]
+        assert "reply_markup" in call_payload
+        assert call_payload["reply_markup"]["inline_keyboard"] == buttons
+
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.requests.post")
+    def test_returns_none_on_error(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 400
+        mock_resp.text = "Bad Request"
+        mock_post.return_value = mock_resp
+
+        result = send_message_with_buttons("טקסט", [[]], chat_id=123)
+        assert result is None
+
+    def test_no_token_returns_none(self, monkeypatch):
+        monkeypatch.setattr("notifier.BOT_TOKEN", None)
+        result = send_message_with_buttons("טקסט", [[]], chat_id=123)
+        assert result is None
+
+
+class TestEditMessageText:
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.requests.post")
+    def test_edits_message(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+
+        buttons = [[{"text": "כפתור", "callback_data": "test"}]]
+        result = edit_message_text(123, 42, "טקסט חדש", buttons)
+        assert result is True
+
+        call_payload = mock_post.call_args[1]["json"]
+        assert call_payload["message_id"] == 42
+        assert call_payload["text"] == "טקסט חדש"
+        assert "reply_markup" in call_payload
+
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.requests.post")
+    def test_edit_without_buttons(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+
+        result = edit_message_text(123, 42, "טקסט")
+        assert result is True
+
+        call_payload = mock_post.call_args[1]["json"]
+        assert "reply_markup" not in call_payload
+
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.requests.post")
+    def test_returns_false_on_error(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 400
+        mock_resp.text = "Bad Request"
+        mock_post.return_value = mock_resp
+
+        result = edit_message_text(123, 42, "טקסט")
+        assert result is False
+
+
+class TestAnswerCallbackQuery:
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.requests.post")
+    def test_answers_query(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+
+        result = answer_callback_query("cb_123", "הודעה")
+        assert result is True
+
+        call_payload = mock_post.call_args[1]["json"]
+        assert call_payload["callback_query_id"] == "cb_123"
+        assert call_payload["text"] == "הודעה"
+
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.requests.post")
+    def test_answers_without_text(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_post.return_value = mock_resp
+
+        answer_callback_query("cb_123")
+        call_payload = mock_post.call_args[1]["json"]
+        assert "text" not in call_payload
+
+    def test_no_token_returns_false(self, monkeypatch):
+        monkeypatch.setattr("notifier.BOT_TOKEN", None)
+        result = answer_callback_query("cb_123")
+        assert result is False
+
+
+# ──────────────────────────────────────────────────────────────
+# 17. Panel — scan frequency removed
+# ──────────────────────────────────────────────────────────────
+
+
+class TestPanelIntervalRemoved:
+    def test_put_interval_ignored(self, panel_client):
+        """interval_minutes כבר לא ניתן לעריכה מהפאנל."""
+        resp = panel_client.put("/api/settings", json={"interval_minutes": "99"})
+        assert resp.status_code == 200
+        # ערך לא נשמר
+        resp2 = panel_client.get("/api/settings")
+        data = resp2.get_json()
+        assert data["interval_minutes"] != "99"

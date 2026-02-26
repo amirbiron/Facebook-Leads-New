@@ -770,7 +770,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
           </svg>
-          <span>לוח זמנים</span>
+          <span>שעות שקטות</span>
         </a>
       </div>
     </nav>
@@ -919,17 +919,11 @@
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
           </svg>
-          לוח זמנים
+          שעות שקטות
         </h3>
-        <p class="card-desc">תדירות הסריקה והגדרת שעות שקטות שבהן הבוט לא יסרוק</p>
+        <p class="card-desc">הגדרת שעות שבהן הבוט לא יסרוק</p>
 
-        <div class="form-group">
-          <label for="interval">תדירות סריקה (בדקות)</label>
-          <input type="number" id="interval" min="1" max="1440" value="10" style="max-width: 200px;">
-          <p class="hint">כל כמה דקות הבוט יסרוק את הקבוצות</p>
-        </div>
-
-        <div class="form-row" style="margin-top: 16px;">
+        <div class="form-row">
           <div class="form-group">
             <label for="quiet-start">שעות שקטות — התחלה</label>
             <input type="time" id="quiet-start" dir="ltr">
@@ -1054,7 +1048,6 @@
         document.getElementById('fb-email').value = currentSettings.fb_email || '';
         document.getElementById('fb-password').value = currentSettings.fb_password || '';
         document.getElementById('criteria-text').value = currentSettings.classification_criteria || '';
-        document.getElementById('interval').value = currentSettings.interval_minutes || '10';
 
         // שעות שקטות
         const qh = currentSettings.quiet_hours || '';
@@ -1133,7 +1126,6 @@
         await api('/api/settings', {
           method: 'PUT',
           body: {
-            interval_minutes: document.getElementById('interval').value,
             quiet_hours: quietHours,
           },
         });

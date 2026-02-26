@@ -99,13 +99,8 @@ def create_app() -> Flask:
     @require_auth
     def update_settings():
         data = request.get_json(force=True)
-        # ולידציה — interval_minutes חייב להיות מספר שלם >= 1
-        if "interval_minutes" in data:
-            raw = str(data["interval_minutes"]).strip()
-            if not raw.isdigit() or int(raw) < 1:
-                return jsonify({"ok": False, "message": "interval_minutes חייב להיות מספר שלם >= 1"}), 400
         allowed = ("fb_email", "fb_password", "classification_criteria",
-                    "quiet_hours", "interval_minutes")
+                    "quiet_hours")
         for key in allowed:
             if key in data:
                 set_config(key, str(data[key]).strip())
