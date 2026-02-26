@@ -399,8 +399,10 @@ async def main():
                 state["scan_in_progress"] = False
                 state["last_scan_finished"] = _now_local()
 
+    # שמירת רפרנס ל-task כדי למנוע garbage collection
+    _control_task = None
     if TELEGRAM_CONTROL:
-        asyncio.create_task(
+        _control_task = asyncio.create_task(
             _telegram_control_loop(
                 scan_now_event=scan_now_event,
                 scan_force_event=scan_force_event,
