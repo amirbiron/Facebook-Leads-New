@@ -80,6 +80,7 @@ def send_message_with_buttons(
     *,
     chat_id: str | int | None = None,
     parse_mode: str | None = None,
+    disable_web_page_preview: bool = False,
 ) -> dict | None:
     """שולח הודעה עם InlineKeyboard.
     buttons — מערך דו-ממדי של כפתורים, כל dict: {"text": "...", "callback_data": "..."}.
@@ -95,6 +96,7 @@ def send_message_with_buttons(
         "chat_id": target_chat,
         "text": text,
         "reply_markup": {"inline_keyboard": buttons},
+        "disable_web_page_preview": disable_web_page_preview,
     }
     if parse_mode:
         payload["parse_mode"] = parse_mode

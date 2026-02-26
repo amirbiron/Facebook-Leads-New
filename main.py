@@ -42,6 +42,56 @@ _PRE_FILTER_KEYWORDS_DEFAULT = [
     "צ'אטבוט", "צאטבוט",
 ]
 
+def _load_force_send_keywords() -> list[str]:
+    """טוען מילות 'שלח תמיד' מ-DB. פוסט שמכיל מילה כזו נשלח ישירות ללא AI."""
+    import json as _json
+    try:
+        raw = get_config("force_send_keywords")
+        if raw:
+            return _json.loads(raw)
+    except Exception:
+        pass
+    return []
+
+def _save_force_send_keywords(keywords: list[str]):
+    """שומר מילות 'שלח תמיד' ב-DB."""
+    import json as _json
+    from database import set_config
+    set_config("force_send_keywords", _json.dumps(keywords))
+
+def add_force_send_keyword(word: str) -> tuple[bool, str]:
+    """מוסיף מילת 'שלח תמיד'. מחזיר (success, message)."""
+    word = word.strip().lower()
+    if not word:
+        return False, "מילה ריקה"
+    keywords = _load_force_send_keywords()
+    if word in keywords:
+        return False, f"המילה כבר קיימת: {word}"
+    keywords.append(word)
+    _save_force_send_keywords(keywords)
+    return True, f"מילת 'שלח תמיד' נוספה: {word}"
+
+def remove_force_send_keyword(word: str) -> tuple[bool, str]:
+    """מסיר מילת 'שלח תמיד'. מחזיר (success, message)."""
+    word = word.strip().lower()
+    keywords = _load_force_send_keywords()
+    if word not in keywords:
+        return False, f"מילה לא נמצאה: {word}"
+    keywords.remove(word)
+    _save_force_send_keywords(keywords)
+    return True, f"מילה הוסרה: {word}"
+
+def matches_force_send(text: str) -> str | None:
+    """בודק אם הפוסט מכיל מילת 'שלח תמיד'. מחזיר את המילה שנמצאה או None."""
+    if not FORCE_SEND_KEYWORDS:
+        return None
+    text_lower = text.lower()
+    for kw in FORCE_SEND_KEYWORDS:
+        if kw in text_lower:
+            return kw
+    return None
+
+
 def _load_block_keywords() -> list[str]:
     """טוען מילים חסומות מ-DB עם fallback למשתנה סביבה.
     None מ-DB = מעולם לא הוגדר → fallback.  [] = המשתמש רוקן הכל → רשימה ריקה.
@@ -69,12 +119,14 @@ def _load_pre_filter_keywords() -> list[str]:
 # טעינה ראשונית — יתעדכנו דינמית בכל סבב
 BLOCK_KEYWORDS = _load_block_keywords()
 PRE_FILTER_KEYWORDS = _load_pre_filter_keywords()
+FORCE_SEND_KEYWORDS = _load_force_send_keywords()
 
 def reload_keywords():
     """טוען מחדש את מילות המפתח מ-DB (נקרא אחרי שינוי דרך טלגרם)."""
-    global BLOCK_KEYWORDS, PRE_FILTER_KEYWORDS
+    global BLOCK_KEYWORDS, PRE_FILTER_KEYWORDS, FORCE_SEND_KEYWORDS
     BLOCK_KEYWORDS = _load_block_keywords()
     PRE_FILTER_KEYWORDS = _load_pre_filter_keywords()
+    FORCE_SEND_KEYWORDS = _load_force_send_keywords()
 
 def passes_keyword_filter(text: str) -> bool:
     """בודק אם הפוסט מכיל לפחות מילת מפתח אחת.
@@ -450,6 +502,37 @@ async def _telegram_control_loop(
     except Exception:
         pass
 
+    # רישום פקודות בוט בטלגרם — כפתור "/" יציג את הפקודות הזמינות
+    try:
+        await asyncio.to_thread(
+            requests.post,
+            f"https://api.telegram.org/bot{bot_token}/setMyCommands",
+            json={"commands": [
+                {"command": "menu", "description": "תפריט ראשי עם כפתורים"},
+                {"command": "scan", "description": "סריקה עכשיו"},
+                {"command": "status", "description": "סטטוס הבוט"},
+                {"command": "groups", "description": "רשימת קבוצות"},
+                {"command": "keywords", "description": "מילות מפתח"},
+                {"command": "force_send", "description": "מילות 'שלח תמיד' (עוקף AI)"},
+            ]},
+            timeout=10,
+        )
+        log.debug("פקודות בוט נרשמו בטלגרם")
+    except Exception:
+        pass
+
+    # שליחת תפריט ראשי בהפעלה — כדי שהכפתורים יופיעו מיד
+    for cid in allowed_chat_ids:
+        try:
+            await asyncio.to_thread(
+                send_message_with_buttons,
+                "הבוט פעיל — בחר פעולה:",
+                _main_menu_buttons(),
+                chat_id=cid,
+            )
+        except Exception:
+            pass
+
     offset = load_offset()
     log.info("בקרת טלגרם הופעלה. פקודות: /menu /scan /status")
     conflict_backoff = 5
@@ -508,8 +591,9 @@ async def _telegram_control_loop(
                 if cmd in ("/status",):
                     status_text = _build_status_text(shared_state)
                     await asyncio.to_thread(
-                        send_message,
+                        send_message_with_buttons,
                         status_text,
+                        _back_to_menu_button(),
                         chat_id=chat_id_int,
                         disable_web_page_preview=True,
                     )
@@ -562,7 +646,9 @@ async def _telegram_control_loop(
                 if cmd in ("/groups",):
                     msg_text = _build_groups_text()
                     await asyncio.to_thread(
-                        send_message, msg_text, chat_id=chat_id_int,
+                        send_message_with_buttons, msg_text,
+                        _back_to_menu_button(),
+                        chat_id=chat_id_int,
                         disable_web_page_preview=True,
                     )
                     continue
@@ -619,7 +705,9 @@ async def _telegram_control_loop(
                 if cmd in ("/keywords",):
                     msg_text = _build_keywords_text()
                     await asyncio.to_thread(
-                        send_message, msg_text, chat_id=chat_id_int,
+                        send_message_with_buttons, msg_text,
+                        _back_to_menu_button(),
+                        chat_id=chat_id_int,
                         disable_web_page_preview=True,
                     )
                     continue
@@ -686,6 +774,45 @@ async def _telegram_control_loop(
                         )
                         continue
                     ok, result_msg = remove_keyword(parts[1].strip(), "block")
+                    if ok:
+                        reload_keywords()
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                # ── "שלח תמיד" — עוקף סיווג AI ──────────────────
+                if cmd in ("/force_send",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        fs = FORCE_SEND_KEYWORDS
+                        fs_text = ", ".join(fs) if fs else "(ריק)"
+                        await asyncio.to_thread(
+                            send_message,
+                            f"מילות 'שלח תמיד' ({len(fs)}):\n{fs_text}\n\n"
+                            "שימוש: /force_send <מילה> — פוסט שמכיל מילה זו יישלח ישירות ללא AI",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    ok, result_msg = add_force_send_keyword(parts[1].strip())
+                    if ok:
+                        reload_keywords()
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/unforce",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /unforce <מילה>",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    ok, result_msg = remove_force_send_keyword(parts[1].strip())
                     if ok:
                         reload_keywords()
                     await asyncio.to_thread(
@@ -875,17 +1002,42 @@ async def run_cycle():
     for post in new_posts:
         mark_seen(post["id"], post["group"])
 
-    # שלב 3א — סינון מילים חסומות (BLOCK_KEYWORDS)
+    leads_found = 0
+
+    # שלב 3 — "שלח תמיד": פוסטים עם מילת force_send עוקפים את כל הסינון (block/pre_filter/AI)
+    force_send_posts = []
+    rest_posts = []
+    for post in new_posts:
+        matched_kw = matches_force_send(post["content"])
+        if matched_kw and not is_lead_sent(post["id"]):
+            reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
+            send_lead(
+                group_name=post["group"],
+                content=post["content"],
+                post_url=post["url"],
+                reason=reason,
+            )
+            save_lead(post["id"], post["group"], post["content"], reason)
+            leads_found += 1
+            log.info(f"ליד (force_send): {matched_kw}")
+            force_send_posts.append(post)
+        else:
+            rest_posts.append(post)
+
+    if force_send_posts:
+        log.info(f"נשלחו {len(force_send_posts)} לידים ישירות (force_send)")
+
+    # שלב 4א — סינון מילים חסומות (BLOCK_KEYWORDS)
     if BLOCK_KEYWORDS:
-        before_block = len(new_posts)
-        new_posts = [p for p in new_posts if not is_blocked(p["content"])]
-        blocked_count = before_block - len(new_posts)
+        before_block = len(rest_posts)
+        rest_posts = [p for p in rest_posts if not is_blocked(p["content"])]
+        blocked_count = before_block - len(rest_posts)
         if blocked_count:
             log.info(f"נחסמו {blocked_count} פוסטים לפי מילים חסומות (BLOCK_KEYWORDS)")
 
-    # שלב 3ב — סינון מילות מפתח לפני שליחה ל-AI
-    filtered_posts = [p for p in new_posts if passes_keyword_filter(p["content"])]
-    skipped_by_filter = len(new_posts) - len(filtered_posts)
+    # שלב 4ב — סינון מילות מפתח לפני שליחה ל-AI
+    filtered_posts = [p for p in rest_posts if passes_keyword_filter(p["content"])]
+    skipped_by_filter = len(rest_posts) - len(filtered_posts)
     if skipped_by_filter:
         log.info(f"סונן לפי מילות מפתח: {skipped_by_filter} פוסטים לא רלוונטיים דולגו")
     log.info(f"פוסטים שעוברים לסיווג AI: {len(filtered_posts)}")
@@ -894,12 +1046,12 @@ async def run_cycle():
         log.info("אין פוסטים רלוונטיים — מדלג על סיווג")
 
     # סינון פוסטים שכבר נשלחו כלידים
-    to_classify = [p for p in filtered_posts if not is_lead_sent(p["id"])]
-    skipped_already_sent = len(filtered_posts) - len(to_classify)
+    not_yet_sent = [p for p in filtered_posts if not is_lead_sent(p["id"])]
+    skipped_already_sent = len(filtered_posts) - len(not_yet_sent)
     if skipped_already_sent:
         log.debug(f"דילוג על {skipped_already_sent} פוסטים שכבר נשלחו כלידים")
 
-    leads_found = 0
+    to_classify = not_yet_sent
 
     if to_classify:
         # סיווג באצ'ים — שליחת מספר פוסטים ל-AI בבקשה אחת

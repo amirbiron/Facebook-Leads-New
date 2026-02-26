@@ -68,6 +68,82 @@ class TestIsBlocked:
 
 
 # ──────────────────────────────────────────────────────────────
+# 2b. matches_force_send
+# ──────────────────────────────────────────────────────────────
+
+from main import matches_force_send
+
+
+class TestForceSend:
+    def test_no_force_keywords(self):
+        with patch("main.FORCE_SEND_KEYWORDS", []):
+            assert matches_force_send("כל טקסט שהוא") is None
+
+    def test_match_returns_keyword(self):
+        with patch("main.FORCE_SEND_KEYWORDS", ["skill", "getdrip"]):
+            assert matches_force_send("פוסט על Skill כלשהו") == "skill"
+
+    def test_no_match_returns_none(self):
+        with patch("main.FORCE_SEND_KEYWORDS", ["skill"]):
+            assert matches_force_send("פוסט רגיל") is None
+
+    def test_case_insensitive(self):
+        with patch("main.FORCE_SEND_KEYWORDS", ["skill"]):
+            assert matches_force_send("SKILL is great") == "skill"
+
+    def test_multiple_keywords_first_match(self):
+        with patch("main.FORCE_SEND_KEYWORDS", ["skill", "getdrip"]):
+            result = matches_force_send("GetDRIP הוא כלי מעולה")
+            assert result == "getdrip"
+
+
+class TestForceSendCRUD:
+    def test_add_and_load(self, monkeypatch, tmp_path):
+        """הוספת מילה ל-force_send ושליפה."""
+        import database
+        monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
+        database.init_db()
+        ok, msg = add_force_send_keyword("skill")
+        assert ok
+        keywords = _load_force_send_keywords()
+        assert "skill" in keywords
+
+    def test_add_duplicate(self, monkeypatch, tmp_path):
+        import database
+        monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
+        database.init_db()
+        add_force_send_keyword("skill")
+        ok, msg = add_force_send_keyword("skill")
+        assert not ok
+
+    def test_remove(self, monkeypatch, tmp_path):
+        import database
+        monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
+        database.init_db()
+        add_force_send_keyword("skill")
+        ok, msg = remove_force_send_keyword("skill")
+        assert ok
+        assert "skill" not in _load_force_send_keywords()
+
+    def test_remove_not_found(self, monkeypatch, tmp_path):
+        import database
+        monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
+        database.init_db()
+        ok, msg = remove_force_send_keyword("nonexistent")
+        assert not ok
+
+    def test_lowercased(self, monkeypatch, tmp_path):
+        import database
+        monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
+        database.init_db()
+        add_force_send_keyword("SKILL")
+        assert "skill" in _load_force_send_keywords()
+
+
+from main import add_force_send_keyword, remove_force_send_keyword, _load_force_send_keywords
+
+
+# ──────────────────────────────────────────────────────────────
 # 3. _parse_quiet_hours / _is_quiet_now
 # ──────────────────────────────────────────────────────────────
 
