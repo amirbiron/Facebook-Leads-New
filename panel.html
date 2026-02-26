@@ -655,6 +655,7 @@
     .card:nth-child(3) { animation-delay: 0.15s; }
     .card:nth-child(4) { animation-delay: 0.2s; }
     .card:nth-child(5) { animation-delay: 0.25s; }
+    .card:nth-child(6) { animation-delay: 0.3s; }
 
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(8px); }
@@ -764,6 +765,13 @@
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
           </svg>
           <span>מילות מפתח</span>
+        </a>
+
+        <a href="#force-send" class="nav-item" data-section="force-send">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+          </svg>
+          <span>שלח תמיד</span>
         </a>
 
         <a href="#schedule" class="nav-item" data-section="schedule">
@@ -911,6 +919,33 @@
 
           <div id="block-list" class="chips"></div>
         </div>
+      </section>
+
+      <!-- ═══ שלח תמיד ═══ -->
+      <section id="force-send" class="card">
+        <h3 class="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+          </svg>
+          שלח תמיד
+        </h3>
+        <p class="card-desc">
+          פוסט שמכיל מילה מרשימה זו יישלח ישירות לטלגרם — ללא סיווג AI, ללא סינון מוקדם.
+          שימושי למילים שתמיד מצביעות על ליד רלוונטי.
+        </p>
+
+        <div class="input-group">
+          <input type="text" id="new-force-send" placeholder="הוסף מילת 'שלח תמיד'..."
+                 onkeydown="if(event.key==='Enter')addForceSend()">
+          <button class="btn btn-primary btn-sm" onclick="addForceSend()">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            הוסף
+          </button>
+        </div>
+
+        <div id="force-send-list" class="chips"></div>
       </section>
 
       <!-- ═══ לוח זמנים ═══ -->
@@ -1238,7 +1273,7 @@
         btn.className = 'chip-remove';
         btn.title = 'הסר';
         btn.innerHTML = '&times;';
-        btn.addEventListener('click', () => removeKeyword(w, type));
+        btn.addEventListener('click', () => type === 'force_send' ? removeForceSend(w) : removeKeyword(w, type));
         span.appendChild(btn);
         el.appendChild(span);
       });
@@ -1287,6 +1322,55 @@
         if (data.ok) {
           toast(data.message);
           await loadKeywords(type);
+        } else {
+          toast(data.message, 'error');
+        }
+      } catch (e) {
+        toast('שגיאה: ' + e.message, 'error');
+      }
+    }
+
+    // ═══ Force Send ═══════════════════════════════════════
+
+    async function loadForceSend() {
+      try {
+        const data = await api('/api/force_send');
+        renderChips('force-send-list', data.keywords, 'force_send');
+      } catch (e) {
+        toast('שגיאה בטעינת מילות שלח תמיד: ' + e.message, 'error');
+      }
+    }
+
+    async function addForceSend() {
+      const input = document.getElementById('new-force-send');
+      const word = input.value.trim();
+      if (!word) return;
+      try {
+        const data = await api('/api/force_send', {
+          method: 'POST',
+          body: { word },
+        });
+        if (data.ok) {
+          toast(data.message);
+          input.value = '';
+          await loadForceSend();
+        } else {
+          toast(data.message, 'error');
+        }
+      } catch (e) {
+        toast('שגיאה: ' + e.message, 'error');
+      }
+    }
+
+    async function removeForceSend(word) {
+      try {
+        const data = await api('/api/force_send', {
+          method: 'DELETE',
+          body: { word },
+        });
+        if (data.ok) {
+          toast(data.message);
+          await loadForceSend();
         } else {
           toast(data.message, 'error');
         }
@@ -1348,6 +1432,7 @@
         loadGroups(),
         loadKeywords('pre_filter'),
         loadKeywords('block'),
+        loadForceSend(),
       ]);
     }
 

@@ -138,6 +138,37 @@ def create_app() -> Flask:
         ok, msg = remove_group(url)
         return jsonify({"ok": ok, "message": msg})
 
+    # ── מילות "שלח תמיד" (force_send) ────────────────────────
+
+    @app.route("/api/force_send", methods=["GET"])
+    @require_auth
+    def list_force_send():
+        from main import _load_force_send_keywords
+        keywords = _load_force_send_keywords()
+        return jsonify({"keywords": keywords})
+
+    @app.route("/api/force_send", methods=["POST"])
+    @require_auth
+    def create_force_send():
+        data = request.get_json(force=True)
+        word = data.get("word", "").strip()
+        if not word:
+            return jsonify({"ok": False, "message": "מילה ריקה"}), 400
+        from main import add_force_send_keyword
+        ok, msg = add_force_send_keyword(word)
+        return jsonify({"ok": ok, "message": msg})
+
+    @app.route("/api/force_send", methods=["DELETE"])
+    @require_auth
+    def delete_force_send():
+        data = request.get_json(force=True)
+        word = data.get("word", "").strip()
+        if not word:
+            return jsonify({"ok": False, "message": "מילה ריקה"}), 400
+        from main import remove_force_send_keyword
+        ok, msg = remove_force_send_keyword(word)
+        return jsonify({"ok": ok, "message": msg})
+
     # ── מילות מפתח ────────────────────────────────────────────
 
     @app.route("/api/keywords/<kw_type>", methods=["GET"])
