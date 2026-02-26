@@ -348,7 +348,7 @@ async def run_cycle():
 
     # שלב 1 — גרידה (דפדפן פתוח)
     try:
-        posts = await scrape_all(FB_EMAIL, FB_PASSWORD)
+        posts = await scrape_all(FB_EMAIL, FB_PASSWORD, seen_checker=is_seen)
         log.info(f"סך הכל פוסטים שנמצאו: {len(posts)}")
     except Exception as e:
         log.error(f"שגיאה בגרידה: {e}", exc_info=True)

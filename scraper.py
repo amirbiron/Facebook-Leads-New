@@ -66,12 +66,6 @@ async def block_heavy_resources(page):
     await page.route("**/*", handle_route)
     log.debug("חסימת משאבים כבדים הופעלה (תמונות, וידאו, פונטים)")
 
-async def human_scroll(page, times=2):
-    for i in range(times):
-        await page.evaluate("window.scrollBy(0, Math.random() * 300 + 200)")
-        log.debug(f"גלילה {i+1}/{times}")
-        await random_delay(1, 2)
-
 async def save_session(context):
     SESSION_FILE.parent.mkdir(exist_ok=True)
     cookies = await context.cookies()
@@ -269,7 +263,7 @@ async def _extract_post_url(el, fallback_url: str) -> str:
 
     return fallback_url
 
-async def scrape_group(page, group: dict) -> list[dict]:
+async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
     posts = []
     log.info(f">>> סורק קבוצה: {group['name']}")
     log.debug(f"URL: {group['url']}")
@@ -298,62 +292,96 @@ async def scrape_group(page, group: dict) -> list[dict]:
             pass
 
         await random_delay(2, 4)
-        log.debug("מתחיל גלילה...")
-        await human_scroll(page, times=2)
 
-        # סלקטורים לאתר מובייל — DOM פשוט יותר
-        log.debug("מחפש אלמנטים של פוסטים...")
-        post_elements = await page.query_selector_all("article, div[data-ft], div[role='article']")
-        log.debug(f"נמצאו {len(post_elements)} אלמנטים (article/data-ft/role)")
+        # גלילה חכמה — גוללים עד שמגיעים לפוסט שכבר נראה בסריקה קודמת
+        MAX_SCROLLS = 10
+        MAX_POSTS = 30
+        SELECTORS = "article, div[data-ft], div[role='article']"
+        FALLBACK_SELECTORS = "div[dir='auto']"
 
-        # fallback — מחפש div עם טקסט
-        if not post_elements:
-            post_elements = await page.query_selector_all("div[dir='auto']")
-            log.debug(f"fallback מצא {len(post_elements)} אלמנטים (dir=auto)")
-
-        if not post_elements:
-            log.warning(f"לא נמצאו אלמנטים בכלל בקבוצה: {group_name}")
-            try:
-                await page.screenshot(path=f"data/debug_{group_name[:20]}.png")
-            except Exception:
-                pass
-
+        reached_known = False
+        processed_count = 0
         seen_texts = set()
         skipped_short = 0
         skipped_dup = 0
 
-        for el in post_elements[:15]:
-            try:
-                text = await asyncio.wait_for(el.inner_text(), timeout=5)
-                text = text.strip()
+        log.debug("מתחיל גלילה חכמה...")
 
-                if len(text) < 50:
-                    skipped_short += 1
-                    continue
-                if text in seen_texts:
-                    skipped_dup += 1
-                    continue
+        for scroll_i in range(MAX_SCROLLS + 1):
+            # בסיבוב הראשון לא גוללים — מעבדים מה שכבר נטען
+            if scroll_i > 0:
+                await page.evaluate("window.scrollBy(0, Math.random() * 300 + 200)")
+                log.debug(f"גלילה {scroll_i}/{MAX_SCROLLS}")
+                await random_delay(1, 2)
 
-                seen_texts.add(text)
+            post_elements = await page.query_selector_all(SELECTORS)
+            if not post_elements:
+                post_elements = await page.query_selector_all(FALLBACK_SELECTORS)
 
-                post_url = group["url"]
+            if not post_elements and scroll_i == 0:
+                log.warning(f"לא נמצאו אלמנטים בכלל בקבוצה: {group_name}")
                 try:
-                    post_url = await _extract_post_url(el, group["url"])
+                    await page.screenshot(path=f"data/debug_{group_name[:20]}.png")
                 except Exception:
                     pass
+                break
 
-                post_id = extract_post_id(post_url)
+            # מעבדים רק אלמנטים חדשים (שנטענו מאז הגלילה האחרונה)
+            new_elements = post_elements[processed_count:]
+            processed_count = len(post_elements)
 
-                posts.append({
-                    "id": post_id,
-                    "content": text,
-                    "url": post_url,
-                    "group": group_name
-                })
+            if not new_elements and scroll_i > 0:
+                log.debug("אין אלמנטים חדשים אחרי גלילה — עוצרים")
+                break
 
-            except Exception as e:
-                log.debug(f"שגיאה בעיבוד אלמנט: {e}")
-                continue
+            for el in new_elements:
+                try:
+                    text = await asyncio.wait_for(el.inner_text(), timeout=5)
+                    text = text.strip()
+
+                    if len(text) < 50:
+                        skipped_short += 1
+                        continue
+                    if text in seen_texts:
+                        skipped_dup += 1
+                        continue
+                    seen_texts.add(text)
+
+                    post_url = group["url"]
+                    try:
+                        post_url = await _extract_post_url(el, group["url"])
+                    except Exception:
+                        pass
+
+                    post_id = extract_post_id(post_url)
+
+                    # בדיקה אם הגענו לפוסט מסריקה קודמת — אם כן, עוצרים
+                    if seen_checker and seen_checker(post_id):
+                        reached_known = True
+                        log.info(f"הגענו לפוסט שכבר נראה — עוצרים גלילה (אחרי {scroll_i} גלילות)")
+                        break
+
+                    posts.append({
+                        "id": post_id,
+                        "content": text,
+                        "url": post_url,
+                        "group": group_name
+                    })
+
+                    if len(posts) >= MAX_POSTS:
+                        log.debug(f"הגענו למקסימום {MAX_POSTS} פוסטים — עוצרים")
+                        reached_known = True
+                        break
+
+                except Exception as e:
+                    log.debug(f"שגיאה בעיבוד אלמנט: {e}")
+                    continue
+
+            if reached_known:
+                break
+
+        if not reached_known:
+            log.debug(f"לא הגענו לפוסט מוכר — נעצרנו אחרי {MAX_SCROLLS} גלילות")
 
         log.debug(f"סטטיסטיקה — דולגו: {skipped_short} קצרים, {skipped_dup} כפולים")
 
@@ -365,7 +393,7 @@ async def scrape_group(page, group: dict) -> list[dict]:
     log.info(f"<<< נמצאו {len(posts)} פוסטים ב-{group_name}")
     return posts
 
-async def scrape_all(email: str, password: str) -> list[dict]:
+async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]:
     all_posts = []
 
     log.info(f"מתחיל סריקה של {len(GROUPS)} קבוצות (מובייל)")
@@ -421,7 +449,7 @@ async def scrape_all(email: str, password: str) -> list[dict]:
 
         for i, group in enumerate(GROUPS, 1):
             log.info(f"--- קבוצה {i}/{len(GROUPS)} ---")
-            posts = await scrape_group(page, group)
+            posts = await scrape_group(page, group, seen_checker=seen_checker)
             all_posts.extend(posts)
 
             # ניקוי זיכרון — מנווט לדף ריק כדי לשחרר את ה-DOM
