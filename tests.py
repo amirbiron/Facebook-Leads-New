@@ -139,7 +139,7 @@ class TestIsQuietNow:
 # 4. clean_post_content
 # ──────────────────────────────────────────────────────────────
 
-from notifier import clean_post_content
+from notifier import clean_post_content, send_error_alert
 
 
 class TestCleanPostContent:
@@ -168,6 +168,38 @@ class TestCleanPostContent:
     def test_normal_text_unchanged(self):
         text = "מחפש מפתח לבניית בוט"
         assert clean_post_content(text) == text
+
+
+# ──────────────────────────────────────────────────────────────
+# 4b. send_error_alert
+# ──────────────────────────────────────────────────────────────
+
+
+class TestSendErrorAlert:
+    @patch("notifier.send_message")
+    def test_sends_error_message(self, mock_send):
+        mock_send.return_value = True
+        result = send_error_alert("something broke")
+        assert result is True
+        mock_send.assert_called_once()
+        call_text = mock_send.call_args[0][0]
+        assert "⚠️" in call_text
+        assert "something broke" in call_text
+
+    @patch("notifier.send_message")
+    def test_truncates_long_error(self, mock_send):
+        mock_send.return_value = True
+        long_error = "x" * 1000
+        send_error_alert(long_error)
+        call_text = mock_send.call_args[0][0]
+        # הודעת השגיאה חתוכה ל-500 תווים מהשגיאה עצמה
+        assert len(call_text) < 600
+
+    @patch("notifier.send_message")
+    def test_send_failure_returns_false(self, mock_send):
+        mock_send.return_value = False
+        result = send_error_alert("error")
+        assert result is False
 
 
 # ──────────────────────────────────────────────────────────────
@@ -657,3 +689,35 @@ class TestReloadKeywords:
         from main import PRE_FILTER_KEYWORDS, BLOCK_KEYWORDS
         assert PRE_FILTER_KEYWORDS == _PRE_FILTER_KEYWORDS_DEFAULT
         assert BLOCK_KEYWORDS == ["ספאם"]
+
+
+# ──────────────────────────────────────────────────────────────
+# 10. Health server
+# ──────────────────────────────────────────────────────────────
+
+import urllib.request
+
+from main import _HealthHandler, start_health_server
+
+
+class TestHealthServer:
+    def test_returns_200_ok(self):
+        """שרת healthcheck מחזיר 200 עם גוף 'ok'."""
+        server = start_health_server(port=0)  # פורט 0 = OS בוחר פורט פנוי
+        try:
+            port = server.server_address[1]
+            resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/")
+            assert resp.status == 200
+            assert resp.read() == b"ok"
+        finally:
+            server.shutdown()
+
+    def test_any_path_returns_200(self):
+        """כל נתיב מחזיר 200 (לא רק /)."""
+        server = start_health_server(port=0)
+        try:
+            port = server.server_address[1]
+            resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz")
+            assert resp.status == 200
+        finally:
+            server.shutdown()

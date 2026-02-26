@@ -74,6 +74,15 @@ def clean_post_content(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
+def send_error_alert(error: str) -> bool:
+    """שולח שגיאה קריטית כהודעת טלגרם (חתוך ל-500 תווים)."""
+    truncated = error[:500]
+    return send_message(
+        f"⚠️ שגיאה בבוט:\n{truncated}",
+        disable_web_page_preview=True,
+    )
+
+
 def send_lead(group_name: str, content: str, post_url: str, reason: str):
     if not BOT_TOKEN or not CHAT_ID:
         log.error("חסרים משתני סביבה של טלגרם (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
