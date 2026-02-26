@@ -69,12 +69,7 @@ def classify_post(content: str, group_name: str) -> dict:
             log.warning("API החזיר תשובה ריקה")
             return {"relevant": False, "reason": "תשובה ריקה מ-API"}
 
-        # מנסה לחלץ JSON גם אם עטוף ב-markdown
-        text = raw_text.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-
-        result = json.loads(text)
+        result = _parse_json_response(raw_text)
         log.debug(f"תוצאה: relevant={result.get('relevant')} reason={result.get('reason', '')}")
         return result
     except json.JSONDecodeError as e:
