@@ -466,13 +466,67 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
     except Exception:
         pass
 
+    # אסטרטגיה 6: טיפוס בעץ ה-DOM — כשהאלמנט קטן (למשל div[dir='auto'])
+    # ולא מכיל לינקים, מחפשים באלמנטים הורים עד שמוצאים קישור לפוסט.
+    try:
+        parent = await el.evaluate_handle("el => el.parentElement")
+        for _level in range(5):
+            if not parent:
+                break
+            # מחפשים לינק ישיר לפוסט בהורה
+            for sel in direct_selectors:
+                link = await parent.query_selector(sel)
+                if link:
+                    href = await link.get_attribute("href")
+                    if href:
+                        log.debug(f"חילוץ URL — אסטרטגיה 6 (הורה רמה {_level + 1}, סלקטור): {sel}")
+                        _extraction_stats["success"] += 1
+                        return href if href.startswith("http") else f"https://m.facebook.com{href}"
+            # מחפשים לינק timestamp בהורה
+            parent_links = await parent.query_selector_all("a[href]")
+            for a in parent_links:
+                href = await a.get_attribute("href") or ""
+                if _is_post_url(href):
+                    log.debug(f"חילוץ URL — אסטרטגיה 6 (הורה רמה {_level + 1}, סריקה): {href[:80]}")
+                    _extraction_stats["success"] += 1
+                    return href if href.startswith("http") else f"https://m.facebook.com{href}"
+            # מחפשים לינק timestamp
+            for a in parent_links:
+                href = await a.get_attribute("href") or ""
+                try:
+                    text = (await a.inner_text()).strip()
+                except Exception:
+                    continue
+                is_timestamp = (
+                    re.search(r'\d+\s*(שע|דק|יו|שני|חוד)', text)
+                    or text in ("עכשיו", "אתמול")
+                    or re.search(r'^\d+\s*[hdmwHDMW]$', text)
+                    or text.lower() in ("just now", "yesterday")
+                )
+                if is_timestamp and "/groups/" in href and href != fallback_url:
+                    full = href if href.startswith("http") else f"https://m.facebook.com{href}"
+                    if len(full) > len(fallback_url) + 5:
+                        log.debug(f"חילוץ URL — אסטרטגיה 6 (הורה רמה {_level + 1}, timestamp): {full[:80]}")
+                        _extraction_stats["success"] += 1
+                        return full
+            # עולים רמה נוספת
+            parent = await parent.evaluate_handle("el => el.parentElement")
+    except Exception:
+        pass
+
     # כל האסטרטגיות נכשלו — שמירת HTML dump לניתוח + שליחה לטלגרם
     global _telegram_dumps_sent
     _extraction_stats["fallback"] += 1
     if dump_on_fail:
         try:
             _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-            snippet = await el.inner_html()
+            # שומרים HTML של ההורה (רמה 3) כדי לכלול גם לינקים סביב האלמנט
+            try:
+                snippet = await el.evaluate(
+                    "el => (el.parentElement?.parentElement?.parentElement || el).outerHTML"
+                )
+            except Exception:
+                snippet = await el.inner_html()
             # חותכים ל-5000 תווים כדי לא לזרוק דיסק
             snippet = snippet[:5000]
             ts = re.sub(r'[:\s]', '_', str(asyncio.get_event_loop().time())[:10])
