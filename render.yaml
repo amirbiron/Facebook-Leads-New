@@ -25,5 +25,3 @@ services:
         value: "1"
       - key: PANEL_TOKEN
         sync: false
-      - key: PANEL_PORT
-        value: "8501"

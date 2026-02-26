@@ -582,7 +582,7 @@ def _load_quiet_hours_from_db() -> tuple[time, time] | None:
 
 def _start_panel():
     """מפעיל פאנל הגדרות כ-daemon thread (אם Flask מותקן)."""
-    panel_port = int(os.environ.get("PANEL_PORT", "8501"))
+    panel_port = int(os.environ.get("PANEL_PORT", os.environ.get("PORT", "8501")))
     try:
         from panel import create_app
         app = create_app()
