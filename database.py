@@ -16,24 +16,23 @@ def _get_conn() -> sqlite3.Connection:
 # ── Init ──────────────────────────────────────────────────────
 def init_db():
     DB_PATH.parent.mkdir(exist_ok=True)
-    conn = _get_conn()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS seen_posts (
-            post_id TEXT PRIMARY KEY,
-            group_name TEXT,
-            seen_at TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS sent_leads (
-            post_id TEXT PRIMARY KEY,
-            group_name TEXT,
-            content TEXT,
-            reason TEXT,
-            sent_at TEXT
-        )
-    """)
-    conn.commit()
+    with _get_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS seen_posts (
+                post_id TEXT PRIMARY KEY,
+                group_name TEXT,
+                seen_at TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sent_leads (
+                post_id TEXT PRIMARY KEY,
+                group_name TEXT,
+                content TEXT,
+                reason TEXT,
+                sent_at TEXT
+            )
+        """)
 
 # ── CRUD ──────────────────────────────────────────────────────
 def is_seen(post_id: str) -> bool:
@@ -43,20 +42,18 @@ def is_seen(post_id: str) -> bool:
     return row is not None
 
 def mark_seen(post_id: str, group_name: str):
-    conn = _get_conn()
-    conn.execute(
-        "INSERT OR IGNORE INTO seen_posts (post_id, group_name, seen_at) VALUES (?, ?, ?)",
-        (post_id, group_name, datetime.now().isoformat())
-    )
-    conn.commit()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO seen_posts (post_id, group_name, seen_at) VALUES (?, ?, ?)",
+            (post_id, group_name, datetime.now().isoformat())
+        )
 
 def save_lead(post_id: str, group_name: str, content: str, reason: str):
-    conn = _get_conn()
-    conn.execute(
-        "INSERT OR IGNORE INTO sent_leads (post_id, group_name, content, reason, sent_at) VALUES (?, ?, ?, ?, ?)",
-        (post_id, group_name, content, reason, datetime.now().isoformat())
-    )
-    conn.commit()
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO sent_leads (post_id, group_name, content, reason, sent_at) VALUES (?, ?, ?, ?, ?)",
+            (post_id, group_name, content, reason, datetime.now().isoformat())
+        )
 
 def is_lead_sent(post_id: str) -> bool:
     row = _get_conn().execute(
@@ -74,9 +71,8 @@ def get_stats() -> dict:
 def cleanup_old_posts(days: int = 30) -> int:
     """מוחק רשומות ישנות מטבלת seen_posts (ברירת מחדל: מעל 30 יום)."""
     cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-    conn = _get_conn()
-    deleted = conn.execute(
-        "DELETE FROM seen_posts WHERE seen_at < ?", (cutoff,)
-    ).rowcount
-    conn.commit()
+    with _get_conn() as conn:
+        deleted = conn.execute(
+            "DELETE FROM seen_posts WHERE seen_at < ?", (cutoff,)
+        ).rowcount
     return deleted
