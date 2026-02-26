@@ -10,7 +10,7 @@
 |-------|--------|
 | `scraper.py` | גלישה בפייסבוק עם Playwright (אתר מובייל) |
 | `main.py` | אורקסטרציה, לולאת טלגרם, שעות שקטות |
-| `classifier.py` | סיווג פוסטים עם Claude Haiku — תומך סיווג באצ'ים (`classify_batch`) |
+| `classifier.py` | סיווג פוסטים עם OpenAI gpt-5-nano — תומך סיווג באצ'ים (`classify_batch`) + auto-fallback למודל הבא |
 | `notifier.py` | שליחת הודעות טלגרם |
 | `database.py` | SQLite — seen_posts, sent_leads, groups, keywords, _config |
 | `logger.py` | לוגר |
@@ -63,8 +63,11 @@
 - **חילוץ URL** — 3 אסטרטגיות (סלקטורים ישירים → סריקת כל הלינקים → לינק timestamp). Fallback ל-URL קבוצה אם הכל נכשל.
 
 ## סיווג (classifier.py)
+- משתמש ב-OpenAI Chat Completions API (מודל `gpt-5-nano`). משתנה סביבה: `OPENAI_API_KEY`.
 - `classify_post()` — סיווג פוסט בודד (fallback).
 - `classify_batch()` — סיווג מספר פוסטים בבקשה אחת (ברירת מחדל: 5 לבאצ').
+- `_chat_completion()` — פונקציית עזר לקריאת API עם auto-fallback למודל הבא אם הנוכחי deprecated (404/410).
+- `_MODEL_PRIORITY` — רשימת מודלים לפי סדר עדיפות. כשמודל נכשל, עובר אוטומטית לבא ושומר ב-DB.
 - פונקציית עזר `_parse_json_response()` — חילוץ JSON כולל unwrap של markdown. **חייבים להשתמש בה בכל פירוש תשובה מ-API** (לא לשכפל את הלוגיקה).
 - fallback חכם: אם באצ' נכשל (שגיאת API, JSON לא תקין, אורך שגוי, אלמנט null) — נופל לסיווג בודד פוסט-פוסט.
 

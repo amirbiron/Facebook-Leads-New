@@ -10,7 +10,7 @@
 | # | שאלה | לאיפה זה הולך |
 |---|-------|---------------|
 | 1 | אימייל וסיסמה של חשבון פייסבוק לסריקה | משתני סביבה `FB_EMAIL`, `FB_PASSWORD` |
-| 2 | מפתח API של Anthropic (Claude) | משתנה סביבה `CLAUDE_API_KEY` |
+| 2 | מפתח API של OpenAI | משתנה סביבה `OPENAI_API_KEY` |
 | 3 | טוקן של בוט טלגרם (ליצור דרך @BotFather) | משתנה סביבה `TELEGRAM_BOT_TOKEN` |
 | 4 | Chat ID של טלגרם (הקבוצה/צ'אט שאליו נשלחים הלידים) | משתנה סביבה `TELEGRAM_CHAT_ID` |
 | 5 | רשימת קבוצות פייסבוק לסריקה (URLים) | `scraper.py` שורות 15-21 (`DEFAULT_GROUPS`) או **פאנל הגדרות** |
@@ -34,7 +34,7 @@
 |--------|--------|-------|
 | `FB_EMAIL` | אימייל פייסבוק | `client@gmail.com` |
 | `FB_PASSWORD` | סיסמת פייסבוק | `••••••` |
-| `CLAUDE_API_KEY` | מפתח Anthropic API | `sk-ant-...` |
+| `OPENAI_API_KEY` | מפתח OpenAI API | `sk-proj-...` |
 | `TELEGRAM_BOT_TOKEN` | טוקן בוט טלגרם | `123456:ABC-DEF...` |
 | `TELEGRAM_CHAT_ID` | Chat ID (אפשר כמה מופרדים בפסיק) | `-100123456789` |
 | `TIMEZONE` | אזור זמן | `Asia/Jerusalem` |

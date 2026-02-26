@@ -242,15 +242,16 @@ class TestExtractPostId:
 
 class TestClassifyPost:
     def _make_mock_response(self, text: str):
-        """Build a mock Anthropic message response."""
-        content_block = SimpleNamespace(text=text)
-        return SimpleNamespace(content=[content_block], stop_reason="end_turn")
+        """Build a mock OpenAI ChatCompletion response."""
+        message = SimpleNamespace(content=text)
+        choice = SimpleNamespace(message=message, finish_reason="stop")
+        return SimpleNamespace(choices=[choice])
 
     @patch("classifier.client")
     def test_relevant_post(self, mock_client):
         from classifier import classify_post
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '{"relevant": true, "reason": "עסק קטן מחפש מפתח"}'
         )
         result = classify_post("מחפש מפתח לבוט", "קבוצת פרילנסרים")
@@ -261,7 +262,7 @@ class TestClassifyPost:
     def test_not_relevant_post(self, mock_client):
         from classifier import classify_post
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '{"relevant": false, "reason": "שיתוף מאמר"}'
         )
         result = classify_post("מאמר מעניין על AI", "טכנולוגיה")
@@ -271,7 +272,7 @@ class TestClassifyPost:
     def test_markdown_wrapped_json(self, mock_client):
         from classifier import classify_post
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '```json\n{"relevant": true, "reason": "ליד"}\n```'
         )
         result = classify_post("צריך מתכנת", "קבוצה")
@@ -281,7 +282,7 @@ class TestClassifyPost:
     def test_empty_response(self, mock_client):
         from classifier import classify_post
 
-        mock_client.messages.create.return_value = self._make_mock_response("")
+        mock_client.chat.completions.create.return_value = self._make_mock_response("")
         result = classify_post("פוסט", "קבוצה")
         assert result["relevant"] is False
         assert "ריקה" in result["reason"]
@@ -290,7 +291,7 @@ class TestClassifyPost:
     def test_invalid_json(self, mock_client):
         from classifier import classify_post
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             "this is not json"
         )
         result = classify_post("פוסט", "קבוצה")
@@ -298,15 +299,12 @@ class TestClassifyPost:
 
     @patch("classifier.client")
     def test_api_error(self, mock_client):
-        import anthropic
+        import openai
         from classifier import classify_post
 
-        mock_response = MagicMock()
-        mock_response.status_code = 429
-        mock_response.headers = {}
-        mock_client.messages.create.side_effect = anthropic.APIStatusError(
+        mock_client.chat.completions.create.side_effect = openai.APIStatusError(
             message="rate limit",
-            response=mock_response,
+            response=MagicMock(status_code=429, headers={}),
             body={"error": {"message": "rate limit"}},
         )
         result = classify_post("פוסט", "קבוצה")
@@ -321,14 +319,15 @@ class TestClassifyPost:
 
 class TestClassifyBatch:
     def _make_mock_response(self, text: str):
-        content_block = SimpleNamespace(text=text)
-        return SimpleNamespace(content=[content_block], stop_reason="end_turn")
+        message = SimpleNamespace(content=text)
+        choice = SimpleNamespace(message=message, finish_reason="stop")
+        return SimpleNamespace(choices=[choice])
 
     @patch("classifier.client")
     def test_batch_two_posts(self, mock_client):
         from classifier import classify_batch
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '[{"relevant": true, "reason": "מחפש מפתח"}, {"relevant": false, "reason": "שיתוף מאמר"}]'
         )
         posts = [
@@ -340,7 +339,7 @@ class TestClassifyBatch:
         assert results[0]["relevant"] is True
         assert results[1]["relevant"] is False
         # נשלחה בקשה אחת בלבד (לא 2)
-        assert mock_client.messages.create.call_count == 1
+        assert mock_client.chat.completions.create.call_count == 1
 
     @patch("classifier.client")
     def test_batch_empty_list(self, mock_client):
@@ -348,31 +347,33 @@ class TestClassifyBatch:
 
         results = classify_batch([])
         assert results == []
-        mock_client.messages.create.assert_not_called()
+        mock_client.chat.completions.create.assert_not_called()
 
     @patch("classifier.client")
     def test_batch_splits_into_batches(self, mock_client):
         from classifier import classify_batch
 
         def side_effect(**kwargs):
-            msg = kwargs.get("messages", [{}])[0].get("content", "")
-            count = msg.count("--- פוסט")
+            msgs = kwargs.get("messages", [])
+            # הודעת user היא האחרונה ברשימת messages
+            user_msg = msgs[-1].get("content", "") if msgs else ""
+            count = user_msg.count("--- פוסט")
             items = [{"relevant": False, "reason": "לא רלוונטי"}] * count
             return self._make_mock_response(json.dumps(items))
 
-        mock_client.messages.create.side_effect = side_effect
+        mock_client.chat.completions.create.side_effect = side_effect
         posts = [{"content": f"פוסט {i}", "group": "קבוצה"} for i in range(7)]
         results = classify_batch(posts, batch_size=3)
         assert len(results) == 7
         # 7 פוסטים בבאצ'ים של 3: 3 + 3 + 1 = 3 קריאות API
-        assert mock_client.messages.create.call_count == 3
+        assert mock_client.chat.completions.create.call_count == 3
 
     @patch("classifier.client")
     def test_batch_single_post_returns_dict(self, mock_client):
         """באצ' של פוסט בודד — API יכול להחזיר אובייקט במקום מערך."""
         from classifier import classify_batch
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '{"relevant": true, "reason": "ליד"}'
         )
         results = classify_batch([{"content": "צריך מתכנת", "group": "קבוצה"}])
@@ -383,7 +384,7 @@ class TestClassifyBatch:
     def test_batch_markdown_wrapped(self, mock_client):
         from classifier import classify_batch
 
-        mock_client.messages.create.return_value = self._make_mock_response(
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
             '```json\n[{"relevant": true, "reason": "ליד"}]\n```'
         )
         results = classify_batch([{"content": "צריך בוט", "group": "קבוצה"}])
@@ -403,7 +404,7 @@ class TestClassifyBatch:
         single_response = self._make_mock_response(
             '{"relevant": false, "reason": "לא רלוונטי"}'
         )
-        mock_client.messages.create.side_effect = [
+        mock_client.chat.completions.create.side_effect = [
             batch_response, single_response, single_response
         ]
         posts = [
@@ -413,25 +414,21 @@ class TestClassifyBatch:
         results = classify_batch(posts, batch_size=5)
         assert len(results) == 2
         # 1 batch + 2 fallback singles = 3 calls
-        assert mock_client.messages.create.call_count == 3
+        assert mock_client.chat.completions.create.call_count == 3
 
     @patch("classifier.client")
     def test_batch_fallback_on_api_error(self, mock_client):
         """אם API נופל בבאצ' — fallback לסיווג בודד פוסט-פוסט."""
-        import anthropic
+        import openai
         from classifier import classify_batch
-
-        error_response = MagicMock()
-        error_response.status_code = 500
-        error_response.headers = {}
 
         single_ok = self._make_mock_response(
             '{"relevant": false, "reason": "fallback"}'
         )
-        mock_client.messages.create.side_effect = [
-            anthropic.APIStatusError(
+        mock_client.chat.completions.create.side_effect = [
+            openai.APIStatusError(
                 message="server error",
-                response=error_response,
+                response=MagicMock(status_code=500, headers={}),
                 body={"error": {"message": "server error"}},
             ),
             single_ok,
@@ -457,7 +454,7 @@ class TestClassifyBatch:
         single_ok = self._make_mock_response(
             '{"relevant": false, "reason": "fallback"}'
         )
-        mock_client.messages.create.side_effect = [
+        mock_client.chat.completions.create.side_effect = [
             batch_response, single_ok, single_ok
         ]
         posts = [
@@ -467,6 +464,95 @@ class TestClassifyBatch:
         results = classify_batch(posts, batch_size=5)
         # חייבים לקבל בדיוק 2 תוצאות — לא יותר
         assert len(results) == 2
+
+
+# ──────────────────────────────────────────────────────────────
+# 6c. Auto-model-fallback
+# ──────────────────────────────────────────────────────────────
+
+
+class TestModelFallback:
+    def _make_mock_response(self, text: str):
+        message = SimpleNamespace(content=text)
+        choice = SimpleNamespace(message=message, finish_reason="stop")
+        return SimpleNamespace(choices=[choice])
+
+    def setup_method(self):
+        """איפוס מודל פעיל לפני כל טסט."""
+        import classifier
+        classifier._active_model = None
+
+    @patch("classifier.client")
+    def test_deprecated_model_rotates_to_next(self, mock_client):
+        """מודל deprecated → עובר למודל הבא ברשימה ומצליח."""
+        import openai
+        import classifier
+
+        classifier._active_model = "gpt-5-nano"
+        ok_response = self._make_mock_response(
+            '{"relevant": true, "reason": "ליד"}'
+        )
+        mock_client.chat.completions.create.side_effect = [
+            openai.NotFoundError(
+                message="model not found",
+                response=MagicMock(status_code=404, headers={}),
+                body={"error": {"message": "model not found"}},
+            ),
+            ok_response,
+        ]
+        result = classifier.classify_post("צריך מפתח", "קבוצה")
+        assert result["relevant"] is True
+        assert classifier._active_model == "gpt-4.1-nano"
+
+    @patch("classifier.client")
+    def test_all_models_exhausted(self, mock_client):
+        """כל המודלים deprecated → מחזיר שגיאה."""
+        import openai
+        import classifier
+
+        classifier._active_model = "gpt-4o-mini"  # אחרון ברשימה
+        mock_client.chat.completions.create.side_effect = openai.NotFoundError(
+            message="model not found",
+            response=MagicMock(status_code=404, headers={}),
+            body={"error": {"message": "model not found"}},
+        )
+        result = classifier.classify_post("פוסט", "קבוצה")
+        assert result["relevant"] is False
+        assert "API" in result["reason"]
+
+    def test_rotate_model_returns_next(self):
+        import classifier
+
+        next_m = classifier._rotate_model("gpt-5-nano")
+        assert next_m == "gpt-4.1-nano"
+
+    def test_rotate_model_last_returns_none(self):
+        import classifier
+
+        result = classifier._rotate_model("gpt-4o-mini")
+        assert result is None
+
+    def test_is_model_deprecated_error_404(self):
+        import openai
+        import classifier
+
+        err = openai.NotFoundError(
+            message="model not found",
+            response=MagicMock(status_code=404, headers={}),
+            body={},
+        )
+        assert classifier._is_model_deprecated_error(err) is True
+
+    def test_non_deprecated_error_not_detected(self):
+        import openai
+        import classifier
+
+        err = openai.APIStatusError(
+            message="rate limit exceeded",
+            response=MagicMock(status_code=429, headers={}),
+            body={},
+        )
+        assert classifier._is_model_deprecated_error(err) is False
 
 
 # ──────────────────────────────────────────────────────────────

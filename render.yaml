@@ -7,7 +7,7 @@ services:
         sync: false
       - key: FB_PASSWORD
         sync: false
-      - key: CLAUDE_API_KEY
+      - key: OPENAI_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
