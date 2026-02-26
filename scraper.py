@@ -6,7 +6,6 @@ import random
 import re
 from pathlib import Path
 
-import requests as _requests
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from logger import get_logger
 
@@ -34,63 +33,71 @@ def _extract_name_from_title(page_title: str) -> str | None:
     return None
 
 
-def fetch_group_name(url: str) -> str | None:
-    """מנסה לחלץ את שם הקבוצה האמיתי מפייסבוק דרך HTTP GET.
-    משתמש ב-URL דסקטופ + cookies שמורים כדי לקבל HTML עם metadata.
-    פונקציה סינכרונית — יש לקרוא לה דרך asyncio.to_thread().
+async def _async_fetch_group_name(url: str) -> str | None:
+    """מחלץ שם קבוצה אמיתי מפייסבוק באמצעות Playwright.
+    אמין יותר מ-HTTP GET כי פייסבוק מרנדר את התוכן ב-JavaScript.
     """
     try:
-        # המרה ל-URL דסקטופ — מחזיר HTML עם og:title לצורכי SEO
-        desktop_url = url.replace("m.facebook.com", "www.facebook.com")
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/120.0.0.0 Safari/537.36",
-            "Accept-Language": "he-IL,he;q=0.9,en;q=0.8",
-            "Accept": "text/html,application/xhtml+xml",
-        }
-
-        # טעינת cookies מסשן שמור (אם קיים)
-        cookie_dict = {}
-        if SESSION_FILE.exists():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-extensions",
+                    "--single-process",
+                    "--renderer-process-limit=1",
+                    "--js-flags=--max-old-space-size=64",
+                ],
+            )
             try:
-                cookies = json.loads(SESSION_FILE.read_text())
-                cookie_dict = {c["name"]: c["value"] for c in cookies}
-            except Exception:
-                pass
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) "
+                               "AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/120.0.0.0 Mobile Safari/537.36",
+                    viewport={"width": 360, "height": 640},
+                    locale="he-IL",
+                )
+                page = await context.new_page()
+                await block_heavy_resources(page)
 
-        resp = _requests.get(
-            desktop_url, cookies=cookie_dict, headers=headers,
-            timeout=15, allow_redirects=True,
-        )
-        body = resp.text
+                # טעינת סשן שמור
+                await load_session(context)
 
-        # אסטרטגיה 1: og:title — פייסבוק מכניס אותו ב-HTML הגולמי לצורכי SEO
-        og_match = re.search(
-            r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']',
-            body, re.IGNORECASE,
-        )
-        if og_match:
-            name = html_mod.unescape(og_match.group(1).strip())
-            if name and len(name) > 2 and name.lower() not in _BAD_TITLES:
-                log.debug(f"שם קבוצה מ-og:title: {name}")
-                return name
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
 
-        # אסטרטגיה 2: <title> — כותרת הדף
-        title_match = re.search(
-            r"<title[^>]*>(.*?)</title>", body,
-            re.IGNORECASE | re.DOTALL,
-        )
-        if title_match:
-            result = _extract_name_from_title(title_match.group(1).strip())
-            if result:
-                log.debug(f"שם קבוצה מ-<title>: {result}")
-                return result
+                if "login" in page.url:
+                    log.debug("דף לוגין — לא ניתן לחלץ שם קבוצה בלי סשן תקין")
+                    return None
 
-        return None
+                # פייסבוק הוא SPA — הכותרת מתעדכנת ע"י JS אחרי domcontentloaded.
+                # ממתינים עד שהכותרת מכילה " | " (פורמט: "שם קבוצה | Facebook")
+                try:
+                    await page.wait_for_function(
+                        "() => document.title.includes(' | ')",
+                        timeout=10000,
+                    )
+                except PlaywrightTimeout:
+                    log.debug("timeout בהמתנה לכותרת דף — ממשיך עם מה שיש")
+
+                page_title = await page.title()
+                return _extract_name_from_title(page_title)
+            finally:
+                await browser.close()
     except Exception as e:
         log.debug(f"לא הצלחתי לחלץ שם קבוצה מ-{url}: {e}")
+        return None
+
+
+def fetch_group_name(url: str) -> str | None:
+    """מחלץ שם קבוצה אמיתי מפייסבוק — wrapper סינכרוני סביב Playwright.
+    בטוח לקרוא מ-Flask (סינכרוני) או דרך asyncio.to_thread().
+    """
+    try:
+        return asyncio.run(_async_fetch_group_name(url))
+    except Exception as e:
+        log.debug(f"fetch_group_name נכשל: {e}")
         return None
 
 
