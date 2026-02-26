@@ -494,7 +494,8 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         "id": post_id,
                         "content": text,
                         "url": post_url,
-                        "group": group_name
+                        "group": group_name,
+                        "has_real_url": has_real_url,
                     })
 
                     if len(posts) >= MAX_POSTS:

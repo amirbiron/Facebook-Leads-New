@@ -183,7 +183,8 @@ def _to_desktop_url(url: str) -> str:
     """ממיר URL מובייל ל-URL דסקטופ (m.facebook.com → www.facebook.com)."""
     return url.replace("://m.facebook.com", "://www.facebook.com")
 
-def send_lead(group_name: str, content: str, post_url: str, reason: str):
+def send_lead(group_name: str, content: str, post_url: str, reason: str,
+              has_real_url: bool = True):
     if not BOT_TOKEN or not CHAT_ID:
         log.error("חסרים משתני סביבה של טלגרם (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
         return False
@@ -199,7 +200,7 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str):
         f"📌 *קבוצה:* {group_name}\n\n"
         f"{short_content}\n\n"
         f"💡 *למה רלוונטי:* {reason}\n\n"
-        f"🔗 [פתח פוסט]({desktop_url})"
+        f"🔗 [{'פתח פוסט' if has_real_url else 'פתח קבוצה'}]({desktop_url})"
     )
     return send_message(
         text,
