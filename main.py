@@ -309,7 +309,8 @@ async def _telegram_control_loop(
                     now = _now_local()
                     quiet = shared_state.get("quiet")
                     quiet_now = bool(quiet and _is_quiet_now(now, quiet))
-                    quiet_spec = get_config("quiet_hours") or QUIET_HOURS
+                    qh_db = get_config("quiet_hours", _CONFIG_NOT_SET)
+                    quiet_spec = qh_db if qh_db is not _CONFIG_NOT_SET else QUIET_HOURS
                     quiet_desc = f"{quiet_spec} ({TIMEZONE_NAME})" if quiet_spec else "(disabled)"
                     last_started = shared_state.get("last_scan_started")
                     last_finished = shared_state.get("last_scan_finished")
@@ -350,7 +351,8 @@ async def _telegram_control_loop(
                         continue
 
                     quiet = shared_state.get("quiet")
-                    quiet_spec = get_config("quiet_hours") or QUIET_HOURS
+                    qh_db = get_config("quiet_hours", _CONFIG_NOT_SET)
+                    quiet_spec = qh_db if qh_db is not _CONFIG_NOT_SET else QUIET_HOURS
                     if quiet and _is_quiet_now(now, quiet):
                         await asyncio.to_thread(
                             send_message,

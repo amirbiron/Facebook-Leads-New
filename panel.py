@@ -1,7 +1,6 @@
 """פאנל הגדרות — שרת Flask לניהול הגדרות הבוט דרך ממשק ווב."""
 
 import os
-import secrets
 from functools import wraps
 from pathlib import Path
 
@@ -64,6 +63,9 @@ def create_app() -> Flask:
 
     # ── הגדרות כלליות ─────────────────────────────────────────
 
+    # sentinel — מבדיל בין "אין ערך ב-DB" ל-"ערך ריק ב-DB"
+    _NOT_SET = object()
+
     @app.route("/api/settings", methods=["GET"])
     @require_auth
     def get_settings():
@@ -71,14 +73,26 @@ def create_app() -> Flask:
 
         criteria_db = get_config("classification_criteria")
         is_default = not bool(criteria_db.strip()) if criteria_db else True
+
+        # quiet_hours — ערך ריק ב-DB = המשתמש ביטל דרך הפאנל → לא לחזור ל-env
+        qh_db = get_config("quiet_hours", _NOT_SET)
+        quiet_hours = qh_db if qh_db is not _NOT_SET else os.environ.get("QUIET_HOURS", "")
+
+        # interval_minutes — אותו דפוס
+        iv_db = get_config("interval_minutes", _NOT_SET)
+        interval = iv_db if iv_db is not _NOT_SET else os.environ.get("INTERVAL_MINUTES", "10")
+        # ברירת מחדל אם ריק
+        if not interval.strip():
+            interval = os.environ.get("INTERVAL_MINUTES", "10")
+
         return jsonify({
             "fb_email": get_config("fb_email") or os.environ.get("FB_EMAIL", ""),
             "fb_password": get_config("fb_password") or os.environ.get("FB_PASSWORD", ""),
             "classification_criteria": criteria_db or _CLASSIFICATION_CRITERIA_DEFAULT,
             "classification_criteria_default": _CLASSIFICATION_CRITERIA_DEFAULT,
             "criteria_is_default": is_default,
-            "quiet_hours": get_config("quiet_hours") or os.environ.get("QUIET_HOURS", ""),
-            "interval_minutes": get_config("interval_minutes") or os.environ.get("INTERVAL_MINUTES", "10"),
+            "quiet_hours": quiet_hours,
+            "interval_minutes": interval,
         })
 
     @app.route("/api/settings", methods=["PUT"])

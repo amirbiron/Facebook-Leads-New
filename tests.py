@@ -939,6 +939,17 @@ class TestPanelAPI:
         assert data["ok"] is True
         assert data["auth_required"] is False
 
+    def test_cleared_quiet_hours_not_refilled_from_env(self, tmp_db, monkeypatch):
+        """ערך ריק ב-DB (המשתמש ביטל) לא צריך לחזור ל-env var."""
+        monkeypatch.setenv("QUIET_HOURS", "02:00-07:00")
+        database.set_config("quiet_hours", "")
+        app = create_app()
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            resp = client.get("/api/settings")
+            data = resp.get_json()
+            assert data["quiet_hours"] == ""
+
 
 class TestPanelAuth:
     def test_auth_required_blocks_without_token(self, tmp_db, monkeypatch):
