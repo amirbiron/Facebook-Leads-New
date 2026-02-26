@@ -18,8 +18,6 @@ from database import (
     remove_keyword,
     get_db_keywords,
     ensure_keywords_migrated,
-    _normalize_group_url,
-    update_group_name,
 )
 from logger import get_logger
 
@@ -128,14 +126,6 @@ def create_app() -> Flask:
         from scraper import DEFAULT_GROUPS
         ensure_groups_migrated(DEFAULT_GROUPS)
         ok, msg = add_group(url)
-        if ok:
-            # ניסיון לחלץ שם קבוצה אמיתי מפייסבוק
-            from scraper import fetch_group_name
-            normalized_url = _normalize_group_url(url)
-            real_name = fetch_group_name(normalized_url)
-            if real_name:
-                update_group_name(normalized_url, real_name)
-                msg = f"קבוצה נוספה: {real_name}\n{normalized_url}"
         return jsonify({"ok": ok, "message": msg})
 
     @app.route("/api/groups", methods=["DELETE"])

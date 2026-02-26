@@ -579,18 +579,8 @@ async def _telegram_control_loop(
                     ensure_groups_migrated(DEFAULT_GROUPS)
                     ok, result_msg = add_group(parts[1].strip())
                     if ok:
-                        from scraper import reload_groups, fetch_group_name
+                        from scraper import reload_groups
                         reload_groups()
-                        # ניסיון לחלץ שם קבוצה אמיתי מפייסבוק
-                        from database import _normalize_group_url, update_group_name
-                        normalized_url = _normalize_group_url(parts[1].strip())
-                        real_name = await asyncio.to_thread(
-                            fetch_group_name, normalized_url,
-                        )
-                        if real_name:
-                            update_group_name(normalized_url, real_name)
-                            reload_groups()
-                            result_msg = f"קבוצה נוספה: {real_name}\n{normalized_url}"
                     await asyncio.to_thread(
                         send_message, result_msg,
                         chat_id=chat_id_int, disable_web_page_preview=True,
