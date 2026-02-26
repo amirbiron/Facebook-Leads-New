@@ -35,34 +35,60 @@ def _extract_name_from_title(page_title: str) -> str | None:
 
 
 def fetch_group_name(url: str) -> str | None:
-    """מנסה לחלץ את שם הקבוצה האמיתי מפייסבוק דרך HTTP GET עם cookies שמורים.
+    """מנסה לחלץ את שם הקבוצה האמיתי מפייסבוק דרך HTTP GET.
+    משתמש ב-URL דסקטופ + cookies שמורים כדי לקבל HTML עם metadata.
     פונקציה סינכרונית — יש לקרוא לה דרך asyncio.to_thread().
     """
     try:
-        if not SESSION_FILE.exists():
-            return None
-        cookies = json.loads(SESSION_FILE.read_text())
-        cookie_dict = {c["name"]: c["value"] for c in cookies}
+        # המרה ל-URL דסקטופ — מחזיר HTML עם og:title לצורכי SEO
+        desktop_url = url.replace("m.facebook.com", "www.facebook.com")
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) "
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/120.0.0.0 Mobile Safari/537.36",
-            "Accept-Language": "he-IL,he;q=0.9",
+                          "Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "he-IL,he;q=0.9,en;q=0.8",
+            "Accept": "text/html,application/xhtml+xml",
         }
 
+        # טעינת cookies מסשן שמור (אם קיים)
+        cookie_dict = {}
+        if SESSION_FILE.exists():
+            try:
+                cookies = json.loads(SESSION_FILE.read_text())
+                cookie_dict = {c["name"]: c["value"] for c in cookies}
+            except Exception:
+                pass
+
         resp = _requests.get(
-            url, cookies=cookie_dict, headers=headers,
+            desktop_url, cookies=cookie_dict, headers=headers,
             timeout=15, allow_redirects=True,
         )
+        body = resp.text
 
-        # חילוץ <title> מה-HTML
-        match = re.search(r"<title[^>]*>(.*?)</title>", resp.text,
-                          re.IGNORECASE | re.DOTALL)
-        if not match:
-            return None
+        # אסטרטגיה 1: og:title — פייסבוק מכניס אותו ב-HTML הגולמי לצורכי SEO
+        og_match = re.search(
+            r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']',
+            body, re.IGNORECASE,
+        )
+        if og_match:
+            name = html_mod.unescape(og_match.group(1).strip())
+            if name and len(name) > 2 and name.lower() not in _BAD_TITLES:
+                log.debug(f"שם קבוצה מ-og:title: {name}")
+                return name
 
-        return _extract_name_from_title(match.group(1).strip())
+        # אסטרטגיה 2: <title> — כותרת הדף
+        title_match = re.search(
+            r"<title[^>]*>(.*?)</title>", body,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if title_match:
+            result = _extract_name_from_title(title_match.group(1).strip())
+            if result:
+                log.debug(f"שם קבוצה מ-<title>: {result}")
+                return result
+
+        return None
     except Exception as e:
         log.debug(f"לא הצלחתי לחלץ שם קבוצה מ-{url}: {e}")
         return None
