@@ -46,11 +46,30 @@ def send_message(
         log.error(f"שגיאה בשליחה לטלגרם: {e}", exc_info=True)
         return False
 
-def clean_facebook_icons(text: str) -> str:
-    """מנקה תווי Unicode פרטיים של פייסבוק שמופיעים כ-X בטלגרם."""
+def clean_post_content(text: str) -> str:
+    """מנקה תוכן פוסט מ-Unicode פרטי של פייסבוק ורעשי UI."""
     # הסרת תווים מ-Private Use Areas (U+E000–U+F8FF, U+F0000–U+10FFFF)
     text = re.sub(r'[\uE000-\uF8FF]', '', text)
     text = re.sub(r'[\U000F0000-\U0010FFFF]', '', text)
+
+    # הסרת שורות רעש של פייסבוק (לייקים, תגובות, שיתופים)
+    lines = text.split('\n')
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        # דילוג על שורות שהן רק מספרים (ספירת לייקים/תגובות)
+        if re.match(r'^\d+$', stripped):
+            continue
+        # דילוג על "ו-עוד X אחרים" (רשימת מגיבים)
+        if re.search(r'ו-עוד \d+ אחרי', stripped):
+            continue
+        # דילוג על שורות ריקות לגמרי (אחרי ניקוי Unicode)
+        if not stripped:
+            cleaned.append('')
+            continue
+        cleaned.append(line)
+
+    text = '\n'.join(cleaned)
     # ניקוי שורות ריקות מיותרות שנשארו
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
@@ -60,7 +79,7 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str):
         log.error("חסרים משתני סביבה של טלגרם (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
         return False
 
-    content = clean_facebook_icons(content)
+    content = clean_post_content(content)
     short_content = content[:350] + "..." if len(content) > 350 else content
 
     text = (
