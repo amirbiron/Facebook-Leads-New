@@ -488,7 +488,7 @@ class TestModelFallback:
         import openai
         import classifier
 
-        classifier._active_model = "gpt-5-nano"
+        classifier._active_model = "gpt-4.1-nano"
         ok_response = self._make_mock_response(
             '{"relevant": true, "reason": "ליד"}'
         )
@@ -502,7 +502,7 @@ class TestModelFallback:
         ]
         result = classifier.classify_post("צריך מפתח", "קבוצה")
         assert result["relevant"] is True
-        assert classifier._active_model == "gpt-4.1-nano"
+        assert classifier._active_model == "gpt-4o-mini"
 
     @patch("classifier.client")
     def test_all_models_exhausted(self, mock_client):
@@ -510,7 +510,7 @@ class TestModelFallback:
         import openai
         import classifier
 
-        classifier._active_model = "gpt-4o-mini"  # אחרון ברשימה
+        classifier._active_model = "gpt-5-nano"  # אחרון ברשימה
         mock_client.chat.completions.create.side_effect = openai.NotFoundError(
             message="model not found",
             response=MagicMock(status_code=404, headers={}),
@@ -523,13 +523,13 @@ class TestModelFallback:
     def test_rotate_model_returns_next(self):
         import classifier
 
-        next_m = classifier._rotate_model("gpt-5-nano")
-        assert next_m == "gpt-4.1-nano"
+        next_m = classifier._rotate_model("gpt-4.1-nano")
+        assert next_m == "gpt-4o-mini"
 
     def test_rotate_model_last_returns_none(self):
         import classifier
 
-        result = classifier._rotate_model("gpt-4o-mini")
+        result = classifier._rotate_model("gpt-5-nano")
         assert result is None
 
     def test_is_model_deprecated_error_404(self):
