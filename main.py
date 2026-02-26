@@ -535,7 +535,7 @@ async def run_cycle():
     # Lazy imports to keep startup light and allow running parts of the codebase
     # (like quiet-hours logic) without Playwright installed.
     from scraper import scrape_all
-    from classifier import classify_post
+    from classifier import classify_batch
     from notifier import send_lead
 
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
@@ -598,30 +598,32 @@ async def run_cycle():
     if not filtered_posts:
         log.info("אין פוסטים רלוונטיים — מדלג על סיווג")
 
+    # סינון פוסטים שכבר נשלחו כלידים
+    to_classify = [p for p in filtered_posts if not is_lead_sent(p["id"])]
+    skipped_already_sent = len(filtered_posts) - len(to_classify)
+    if skipped_already_sent:
+        log.debug(f"דילוג על {skipped_already_sent} פוסטים שכבר נשלחו כלידים")
+
     leads_found = 0
 
-    for i, post in enumerate(filtered_posts, 1):
-        if is_lead_sent(post["id"]):
-            log.debug(f"ליד כבר נשלח בעבר — דילוג על סיווג: {post['id']}")
-            continue
+    if to_classify:
+        # סיווג באצ'ים — שליחת מספר פוסטים ל-AI בבקשה אחת
+        results = classify_batch(to_classify)
 
-        log.debug(f"מסווג פוסט {i}/{len(filtered_posts)} מקבוצה: {post['group']}")
-
-        result = classify_post(post["content"], post["group"])
-
-        if result.get("relevant"):
-            reason = result.get("reason", "")
-            send_lead(
-                group_name=post["group"],
-                content=post["content"],
-                post_url=post["url"],
-                reason=reason
-            )
-            save_lead(post["id"], post["group"], post["content"], reason)
-            leads_found += 1
-            log.info(f"ליד נשלח: {reason}")
-        else:
-            log.debug(f"לא רלוונטי: {result.get('reason', '')}")
+        for post, result in zip(to_classify, results):
+            if result.get("relevant"):
+                reason = result.get("reason", "")
+                send_lead(
+                    group_name=post["group"],
+                    content=post["content"],
+                    post_url=post["url"],
+                    reason=reason
+                )
+                save_lead(post["id"], post["group"], post["content"], reason)
+                leads_found += 1
+                log.info(f"ליד נשלח: {reason}")
+            else:
+                log.debug(f"לא רלוונטי: {result.get('reason', '')}")
 
     stats = get_stats()
     log.info(f"סבב הסתיים | לידים בסבב: {leads_found} | סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}")
