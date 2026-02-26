@@ -300,6 +300,8 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         FALLBACK_SELECTORS = "div[dir='auto']"
 
         reached_known = False
+        consecutive_known = 0
+        KNOWN_THRESHOLD = 3  # כמה פוסטים מוכרים ברצף לפני עצירה (מונע עצירה על פוסט מוצמד)
         seen_texts = set()
         skipped_short = 0
 
@@ -351,13 +353,21 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                     post_id = extract_post_id(post_url)
                     has_real_url = post_url != group["url"]
 
-                    # בדיקה אם הגענו לפוסט מסריקה קודמת — אם כן, עוצרים.
+                    # בדיקה אם הגענו לפוסט מסריקה קודמת.
                     # רק אם יש URL אמיתי לפוסט — fallback ל-URL הקבוצה מייצר
                     # ID זהה לכל הפוסטים שנכשלים בחילוץ, ויגרום לעצירה מוקדמת שגויה.
+                    # דורשים רצף של KNOWN_THRESHOLD פוסטים מוכרים לפני עצירה,
+                    # כדי למנוע עצירה מוקדמת בגלל פוסט מוצמד (pinned) בראש הפיד.
                     if has_real_url and seen_checker and seen_checker(post_id):
-                        reached_known = True
-                        log.info(f"הגענו לפוסט שכבר נראה — עוצרים גלילה (אחרי {scroll_i} גלילות)")
-                        break
+                        consecutive_known += 1
+                        if consecutive_known >= KNOWN_THRESHOLD:
+                            reached_known = True
+                            log.info(f"הגענו ל-{KNOWN_THRESHOLD} פוסטים מוכרים ברצף — עוצרים גלילה (אחרי {scroll_i} גלילות)")
+                            break
+                        log.debug(f"פוסט מוכר ({consecutive_known}/{KNOWN_THRESHOLD}), ממשיכים")
+                        continue
+                    else:
+                        consecutive_known = 0
 
                     posts.append({
                         "id": post_id,
