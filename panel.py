@@ -153,9 +153,8 @@ def create_app() -> Flask:
                 from main import _PRE_FILTER_KEYWORDS_DEFAULT
                 return jsonify({"keywords": _PRE_FILTER_KEYWORDS_DEFAULT, "source": "default"})
             else:
-                block_env = os.environ.get("BLOCK_KEYWORDS", "").strip()
-                defaults = [w.strip().lower() for w in block_env.split(",") if w.strip()] if block_env else []
-                return jsonify({"keywords": defaults, "source": "default"})
+                from main import _BLOCK_KEYWORDS_ENV
+                return jsonify({"keywords": _BLOCK_KEYWORDS_ENV, "source": "default"})
         return jsonify({"keywords": kws, "source": "custom"})
 
     @app.route("/api/keywords/<kw_type>", methods=["POST"])
@@ -172,9 +171,8 @@ def create_app() -> Flask:
             from main import _PRE_FILTER_KEYWORDS_DEFAULT
             ensure_keywords_migrated(kw_type, _PRE_FILTER_KEYWORDS_DEFAULT)
         elif kw_type == "block":
-            block_env = os.environ.get("BLOCK_KEYWORDS", "").strip()
-            block_defaults = [w.strip().lower() for w in block_env.split(",") if w.strip()] if block_env else []
-            ensure_keywords_migrated(kw_type, block_defaults)
+            from main import _BLOCK_KEYWORDS_ENV
+            ensure_keywords_migrated(kw_type, _BLOCK_KEYWORDS_ENV)
         ok, msg = add_keyword(word, kw_type)
         return jsonify({"ok": ok, "message": msg})
 

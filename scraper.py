@@ -365,13 +365,19 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             return posts
 
         # חילוץ שם הקבוצה מכותרת הדף (אמין יותר מסלקטורים בתוך ה-DOM)
+        # רשימת כותרות גנריות/שגויות שלא מייצגות שם קבוצה אמיתי
+        _BAD_TITLES = {"facebook", "content not found", "page not found",
+                       "error", "log in", "התחברות", "תוכן לא נמצא", "שגיאה"}
         group_name = group["name"]
         try:
             page_title = await page.title()
             # כותרת דף בפייסבוק: "שם הקבוצה | Facebook" או "שם הקבוצה"
-            if page_title:
-                extracted = page_title.split(" | ")[0].strip() if " | " in page_title else page_title.strip()
-                if extracted and "אינו נתמך" not in extracted and len(extracted) > 2:
+            if page_title and " | " in page_title:
+                extracted = page_title.split(" | ")[0].strip()
+                if (extracted
+                        and len(extracted) > 2
+                        and extracted.lower() not in _BAD_TITLES
+                        and "אינו נתמך" not in extracted):
                     group_name = extracted
                     log.debug(f"שם קבוצה מכותרת הדף: {group_name}")
                     # עדכון שם הקבוצה ב-DB כדי שישתמר לסבבים הבאים
