@@ -5,7 +5,7 @@ import sys
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from database import init_db, is_seen, mark_seen, save_lead, get_stats
+from database import init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats, cleanup_old_posts
 from logger import get_logger
 
 log = get_logger("Main")
@@ -342,6 +342,11 @@ async def run_cycle():
 
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
 
+    # ניקוי פוסטים ישנים (מעל 30 יום) מטבלת seen_posts
+    deleted = cleanup_old_posts()
+    if deleted:
+        log.info(f"נמחקו {deleted} פוסטים ישנים מטבלת seen_posts")
+
     if not FB_EMAIL or not FB_PASSWORD:
         log.error("חסרים FB_EMAIL או FB_PASSWORD — לא ניתן לסרוק")
         return
@@ -387,6 +392,10 @@ async def run_cycle():
     leads_found = 0
 
     for i, post in enumerate(filtered_posts, 1):
+        if is_lead_sent(post["id"]):
+            log.debug(f"ליד כבר נשלח בעבר — דילוג על סיווג: {post['id']}")
+            continue
+
         log.debug(f"מסווג פוסט {i}/{len(filtered_posts)} מקבוצה: {post['group']}")
 
         result = classify_post(post["content"], post["group"])
