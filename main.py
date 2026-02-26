@@ -2,7 +2,9 @@ import asyncio
 import os
 import signal
 import sys
+import threading
 from datetime import datetime, time, timedelta
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from database import (
@@ -18,6 +20,8 @@ INTERVAL_MINUTES = int(os.environ.get("INTERVAL_MINUTES", "10"))
 TIMEZONE_NAME = os.environ.get("TIMEZONE", "UTC")
 QUIET_HOURS = os.environ.get("QUIET_HOURS", "").strip()
 TELEGRAM_CONTROL = os.environ.get("TELEGRAM_CONTROL", "1").strip().lower() not in ("0", "false", "no", "off")
+
+HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8080"))
 
 FB_EMAIL = os.environ.get("FB_EMAIL")
 FB_PASSWORD = os.environ.get("FB_PASSWORD")
@@ -519,6 +523,29 @@ async def _telegram_control_loop(
             log.error(f"שגיאה בלולאת בקרת טלגרם: {e}", exc_info=True)
             await asyncio.sleep(5)
 
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Healthcheck endpoint — מחזיר 200 OK לכל בקשת GET."""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def log_message(self, format, *args):
+        # השתקת לוג של http.server כדי לא להציף את הלוגים
+        pass
+
+
+def start_health_server(port: int = HEALTH_PORT):
+    """מפעיל שרת HTTP פשוט לבדיקת חיוּת על daemon thread."""
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    log.info(f"Health server רץ על פורט {port}")
+    return server
+
+
 _shutting_down = False
 
 def handle_signal(sig, frame):
@@ -635,6 +662,7 @@ async def run_cycle():
 async def main():
     log.info("מאתחל מסד נתונים...")
     init_db()
+    start_health_server()
     log.info(
         f"מתחיל. סבב כל {INTERVAL_MINUTES} דקות. "
         f"LOG_LEVEL={os.environ.get('LOG_LEVEL', 'DEBUG')} "

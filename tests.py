@@ -689,3 +689,35 @@ class TestReloadKeywords:
         from main import PRE_FILTER_KEYWORDS, BLOCK_KEYWORDS
         assert PRE_FILTER_KEYWORDS == _PRE_FILTER_KEYWORDS_DEFAULT
         assert BLOCK_KEYWORDS == ["ספאם"]
+
+
+# ──────────────────────────────────────────────────────────────
+# 10. Health server
+# ──────────────────────────────────────────────────────────────
+
+import urllib.request
+
+from main import _HealthHandler, start_health_server
+
+
+class TestHealthServer:
+    def test_returns_200_ok(self):
+        """שרת healthcheck מחזיר 200 עם גוף 'ok'."""
+        server = start_health_server(port=0)  # פורט 0 = OS בוחר פורט פנוי
+        try:
+            port = server.server_address[1]
+            resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/")
+            assert resp.status == 200
+            assert resp.read() == b"ok"
+        finally:
+            server.shutdown()
+
+    def test_any_path_returns_200(self):
+        """כל נתיב מחזיר 200 (לא רק /)."""
+        server = start_health_server(port=0)
+        try:
+            port = server.server_address[1]
+            resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz")
+            assert resp.status == 200
+        finally:
+            server.shutdown()
