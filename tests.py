@@ -413,6 +413,29 @@ class TestClassifyBatch:
         assert len(results) == 2
         assert all(r["relevant"] is False for r in results)
 
+    @patch("classifier.client")
+    def test_batch_fallback_on_null_element(self, mock_client):
+        """אם אלמנט במערך הוא null — fallback בודד ללא תוצאות חלקיות."""
+        from classifier import classify_batch
+
+        # batch מחזיר מערך שבו אלמנט הוא None (לא dict)
+        batch_response = self._make_mock_response(
+            '[{"relevant": true, "reason": "ליד"}, null]'
+        )
+        single_ok = self._make_mock_response(
+            '{"relevant": false, "reason": "fallback"}'
+        )
+        mock_client.messages.create.side_effect = [
+            batch_response, single_ok, single_ok
+        ]
+        posts = [
+            {"content": "פוסט 1", "group": "קבוצה"},
+            {"content": "פוסט 2", "group": "קבוצה"},
+        ]
+        results = classify_batch(posts, batch_size=5)
+        # חייבים לקבל בדיוק 2 תוצאות — לא יותר
+        assert len(results) == 2
+
 
 # ──────────────────────────────────────────────────────────────
 # 7. Database — Groups CRUD

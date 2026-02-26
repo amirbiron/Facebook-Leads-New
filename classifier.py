@@ -110,7 +110,6 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
         return []
 
     all_results: list[dict] = []
-    fallback = {"relevant": False, "reason": "שגיאה בסיווג באצ'"}
 
     for start in range(0, len(posts), batch_size):
         batch = posts[start : start + batch_size]
@@ -156,12 +155,16 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
                     all_results.append(classify_post(post["content"], post["group"]))
                 continue
 
+            # אוספים תוצאות לרשימה זמנית — אם אלמנט לא תקין, ה-exception
+            # ייתפס לפני שמוסיפים תוצאות חלקיות ל-all_results
+            batch_results = []
             for idx, result in enumerate(parsed):
                 log.debug(
                     f"פוסט {start + idx + 1}: "
                     f"relevant={result.get('relevant')} reason={result.get('reason', '')}"
                 )
-                all_results.append(result)
+                batch_results.append(result)
+            all_results.extend(batch_results)
 
         except json.JSONDecodeError as e:
             log.error(f"שגיאה בפירוש JSON בבאצ': {e} — fallback לסיווג בודד")
