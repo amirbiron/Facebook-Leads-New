@@ -8,7 +8,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from database import (
-    init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats,
+    init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats, get_daily_stats,
     cleanup_old_posts, add_group, remove_group, get_db_groups,
     add_keyword, remove_keyword, get_db_keywords,
     get_config,
@@ -239,19 +239,22 @@ def _build_status_text(shared_state: dict) -> str:
 
 
 def _build_daily_report_text(shared_state: dict) -> str:
-    """בונה טקסט דו\"ח יומי."""
-    stats = get_stats()
+    """בונה טקסט דו\"ח יומי — נתונים של היום בלבד."""
     now = _now_local()
+    today_prefix = now.strftime("%Y-%m-%d")
+    daily = get_daily_stats(today_prefix)
+    total = get_stats()
     last_started = shared_state.get("last_scan_started")
     last_finished = shared_state.get("last_scan_finished")
     in_progress = bool(shared_state.get("scan_in_progress"))
     return (
-        f"📋 דו\"ח יומי — {now.strftime('%Y-%m-%d')}\n\n"
-        f"- סך פוסטים שנסרקו: {stats['seen']}\n"
-        f"- סך לידים שנשלחו: {stats['sent']}\n"
+        f"📋 דו\"ח יומי — {today_prefix}\n\n"
+        f"- פוסטים שנסרקו היום: {daily['seen']}\n"
+        f"- לידים שנשלחו היום: {daily['sent']}\n"
         f"- סריקה רצה כרגע: {'כן' if in_progress else 'לא'}\n"
         f"- סריקה אחרונה התחילה: {last_started.strftime('%H:%M:%S') if last_started else '-'}\n"
-        f"- סריקה אחרונה הסתיימה: {last_finished.strftime('%H:%M:%S') if last_finished else '-'}"
+        f"- סריקה אחרונה הסתיימה: {last_finished.strftime('%H:%M:%S') if last_finished else '-'}\n\n"
+        f"סה\"כ כללי: {total['seen']} נסרקו | {total['sent']} לידים"
     )
 
 
@@ -265,12 +268,15 @@ def _build_groups_text() -> str:
 
 
 def _build_keywords_text() -> str:
-    """בונה טקסט מילות מפתח לסינון."""
+    """בונה טקסט מילות מפתח לסינון + מילים חסומות."""
     pf = PRE_FILTER_KEYWORDS
+    bl = BLOCK_KEYWORDS
     pf_text = ", ".join(pf) if pf else "(ריק)"
+    bl_text = ", ".join(bl) if bl else "(ריק)"
     return (
         f"מילות מפתח לסינון ({len(pf)}):\n{pf_text}\n\n"
-        "פקודות: /add_keyword <מילה> | /remove_keyword <מילה>"
+        f"מילים חסומות ({len(bl)}):\n{bl_text}\n\n"
+        "פקודות: /add_keyword <מילה> | /remove_keyword <מילה> | /block <מילה> | /unblock <מילה>"
     )
 
 

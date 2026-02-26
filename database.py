@@ -91,6 +91,23 @@ def get_stats() -> dict:
     sent = conn.execute("SELECT COUNT(*) FROM sent_leads").fetchone()[0]
     return {"seen": seen, "sent": sent}
 
+
+def get_daily_stats(today_prefix: str) -> dict:
+    """מחזיר סטטיסטיקות של היום בלבד.
+    today_prefix — מחרוזת בפורמט 'YYYY-MM-DD' לסינון לפי seen_at/sent_at.
+    """
+    conn = _get_conn()
+    seen = conn.execute(
+        "SELECT COUNT(*) FROM seen_posts WHERE seen_at LIKE ?",
+        (f"{today_prefix}%",),
+    ).fetchone()[0]
+    sent = conn.execute(
+        "SELECT COUNT(*) FROM sent_leads WHERE sent_at LIKE ?",
+        (f"{today_prefix}%",),
+    ).fetchone()[0]
+    return {"seen": seen, "sent": sent}
+
+
 # ── Groups CRUD ───────────────────────────────────────────────
 
 def _normalize_group_url(raw_url: str) -> str:

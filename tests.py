@@ -1155,8 +1155,9 @@ class TestBuildDailyReport:
         }
         text = _build_daily_report_text(shared)
         assert "דו\"ח יומי" in text
-        assert "סך פוסטים" in text
-        assert "סך לידים" in text
+        assert "פוסטים שנסרקו היום" in text
+        assert "לידים שנשלחו היום" in text
+        assert "סה\"כ כללי" in text
 
 
 class TestBuildGroupsText:
@@ -1175,17 +1176,17 @@ class TestBuildGroupsText:
 
 class TestBuildKeywordsText:
     def test_empty_keywords(self):
-        with patch("main.PRE_FILTER_KEYWORDS", []):
-            from main import _build_keywords_text
+        with patch("main.PRE_FILTER_KEYWORDS", []), patch("main.BLOCK_KEYWORDS", []):
             text = _build_keywords_text()
             assert "(ריק)" in text
 
     def test_with_keywords(self):
-        with patch("main.PRE_FILTER_KEYWORDS", ["בוט", "אוטומציה"]):
-            from main import _build_keywords_text
+        with patch("main.PRE_FILTER_KEYWORDS", ["בוט", "אוטומציה"]), patch("main.BLOCK_KEYWORDS", ["ספאם"]):
             text = _build_keywords_text()
             assert "בוט" in text
             assert "אוטומציה" in text
+            assert "ספאם" in text
+            assert "מילים חסומות" in text
 
 
 class TestBuildBlockedText:
@@ -1321,6 +1322,26 @@ class TestAnswerCallbackQuery:
 # ──────────────────────────────────────────────────────────────
 # 17. Panel — scan frequency removed
 # ──────────────────────────────────────────────────────────────
+
+
+class TestGetDailyStats:
+    def test_daily_stats_filters_by_date(self, tmp_db):
+        conn = database._get_conn()
+        conn.execute("INSERT INTO seen_posts (post_id, group_name, seen_at) VALUES (?, ?, ?)",
+                     ("p1", "g", "2026-02-26T10:00:00"))
+        conn.execute("INSERT INTO seen_posts (post_id, group_name, seen_at) VALUES (?, ?, ?)",
+                     ("p2", "g", "2026-02-25T10:00:00"))
+        conn.execute("INSERT INTO sent_leads (post_id, group_name, content, reason, sent_at) VALUES (?, ?, ?, ?, ?)",
+                     ("p1", "g", "c", "r", "2026-02-26T10:00:00"))
+        conn.commit()
+        stats = database.get_daily_stats("2026-02-26")
+        assert stats["seen"] == 1
+        assert stats["sent"] == 1
+
+    def test_daily_stats_empty_day(self, tmp_db):
+        stats = database.get_daily_stats("2026-02-26")
+        assert stats["seen"] == 0
+        assert stats["sent"] == 0
 
 
 class TestPanelIntervalRemoved:
