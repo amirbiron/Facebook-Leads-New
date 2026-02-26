@@ -469,7 +469,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
     # אסטרטגיה 6: טיפוס בעץ ה-DOM — כשהאלמנט קטן (למשל div[dir='auto'])
     # ולא מכיל לינקים, מחפשים באלמנטים הורים עד שמוצאים קישור לפוסט.
     try:
-        parent = await el.evaluate_handle("el => el.parentElement")
+        parent = (await el.evaluate_handle("el => el.parentElement")).as_element()
         for _level in range(5):
             if not parent:
                 break
@@ -510,7 +510,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
                         _extraction_stats["success"] += 1
                         return full
             # עולים רמה נוספת
-            parent = await parent.evaluate_handle("el => el.parentElement")
+            parent = (await parent.evaluate_handle("el => el.parentElement")).as_element()
     except Exception:
         pass
 
