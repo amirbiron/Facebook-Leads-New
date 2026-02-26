@@ -9,6 +9,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from logger import get_logger
+from notifier import send_document
 
 log = get_logger("Scraper")
 
@@ -346,6 +347,9 @@ def _extract_id_from_data_attrs(attrs_json: str) -> str | None:
 _DEBUG_DIR = Path("data/debug_html")
 # מונה פנימי לסטטיסטיקת חילוץ URL
 _extraction_stats: dict[str, int] = {"success": 0, "fallback": 0}
+# מגבלת dumps שנשלחים לטלגרם בסבב (כדי לא להציף)
+_MAX_TELEGRAM_DUMPS = 3
+_telegram_dumps_sent = 0
 
 
 def get_extraction_stats() -> dict[str, int]:
@@ -462,7 +466,8 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
     except Exception:
         pass
 
-    # כל האסטרטגיות נכשלו — שמירת HTML dump לניתוח
+    # כל האסטרטגיות נכשלו — שמירת HTML dump לניתוח + שליחה לטלגרם
+    global _telegram_dumps_sent
     _extraction_stats["fallback"] += 1
     if dump_on_fail:
         try:
@@ -471,9 +476,23 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
             # חותכים ל-5000 תווים כדי לא לזרוק דיסק
             snippet = snippet[:5000]
             ts = re.sub(r'[:\s]', '_', str(asyncio.get_event_loop().time())[:10])
-            dump_path = _DEBUG_DIR / f"failed_{ts}_{_extraction_stats['fallback']}.html"
+            filename = f"failed_{ts}_{_extraction_stats['fallback']}.html"
+            dump_path = _DEBUG_DIR / filename
             dump_path.write_text(snippet, encoding="utf-8")
             log.debug(f"חילוץ URL נכשל — HTML dump נשמר: {dump_path}")
+
+            # שליחת ה-dump לטלגרם (עד _MAX_TELEGRAM_DUMPS בסבב)
+            if _telegram_dumps_sent < _MAX_TELEGRAM_DUMPS:
+                group_name = fallback_url.rstrip("/").split("/")[-1]
+                caption = f"🔍 HTML dump — חילוץ URL נכשל\nקבוצה: {group_name}"
+                sent = await asyncio.to_thread(
+                    send_document,
+                    snippet.encode("utf-8"),
+                    filename,
+                    caption,
+                )
+                if sent:
+                    _telegram_dumps_sent += 1
         except Exception as e:
             log.debug(f"לא הצלחתי לשמור HTML dump: {e}")
 
@@ -710,6 +729,9 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
         else:
             await login(page, email, password)
             await save_session(context)
+
+        global _telegram_dumps_sent
+        _telegram_dumps_sent = 0
 
         for i, group in enumerate(GROUPS, 1):
             log.info(f"--- קבוצה {i}/{len(GROUPS)} ---")

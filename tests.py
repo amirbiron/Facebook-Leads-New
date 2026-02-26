@@ -215,7 +215,7 @@ class TestIsQuietNow:
 # 4. clean_post_content
 # ──────────────────────────────────────────────────────────────
 
-from notifier import clean_post_content, send_error_alert
+from notifier import clean_post_content, send_error_alert, send_document
 
 
 class TestCleanPostContent:
@@ -276,6 +276,61 @@ class TestSendErrorAlert:
         mock_send.return_value = False
         result = send_error_alert("error")
         assert result is False
+
+
+# ──────────────────────────────────────────────────────────────
+# 4c. send_document
+# ──────────────────────────────────────────────────────────────
+
+
+class TestSendDocument:
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.CHAT_ID", "123")
+    def test_sends_file_successfully(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200)
+        result = send_document(b"<html>test</html>", "dump.html", "caption")
+        assert result is True
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args
+        assert "sendDocument" in call_kwargs[0][0]
+        assert call_kwargs[1]["data"]["chat_id"] == "123"
+        assert call_kwargs[1]["data"]["caption"] == "caption"
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.CHAT_ID", "123")
+    def test_returns_false_on_failure(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=400, text="Bad request")
+        result = send_document(b"<html>test</html>", "dump.html")
+        assert result is False
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", None)
+    @patch("notifier.CHAT_ID", "123")
+    def test_returns_false_without_token(self, mock_post):
+        result = send_document(b"<html>test</html>", "dump.html")
+        assert result is False
+        mock_post.assert_not_called()
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.CHAT_ID", "123")
+    def test_truncates_caption_to_1024(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200)
+        long_caption = "x" * 2000
+        send_document(b"data", "file.html", long_caption)
+        call_kwargs = mock_post.call_args
+        assert len(call_kwargs[1]["data"]["caption"]) == 1024
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.CHAT_ID", "123")
+    def test_custom_chat_id(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200)
+        send_document(b"data", "file.html", chat_id="999")
+        call_kwargs = mock_post.call_args
+        assert call_kwargs[1]["data"]["chat_id"] == "999"
 
 
 # ──────────────────────────────────────────────────────────────
