@@ -1,6 +1,8 @@
 """פאנל הגדרות — שרת Flask לניהול הגדרות הבוט דרך ממשק ווב."""
 
 import os
+import secrets
+from functools import wraps
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file
@@ -26,28 +28,61 @@ PANEL_PORT = int(os.environ.get("PANEL_PORT", "8501"))
 def create_app() -> Flask:
     app = Flask(__name__)
 
-    # ── דף ראשי ──────────────────────────────────────────────
+    # ── אימות — PANEL_TOKEN ──────────────────────────────────
+    # אם PANEL_TOKEN מוגדר, כל בקשה ל-API חייבת לכלול את הטוקן
+    # ב-header: Authorization: Bearer <token>
+    # דף ה-HTML עצמו נגיש בלי טוקן — הוא שולח את הטוקן מ-localStorage
+    panel_token = os.environ.get("PANEL_TOKEN", "").strip()
+    if not panel_token:
+        log.warning("PANEL_TOKEN לא מוגדר — הפאנל פתוח ללא אימות!")
+
+    def require_auth(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            if not panel_token:
+                return f(*args, **kwargs)
+            auth = request.headers.get("Authorization", "")
+            if auth == f"Bearer {panel_token}":
+                return f(*args, **kwargs)
+            return jsonify({"ok": False, "message": "אימות נדרש"}), 401
+        return wrapper
+
+    # ── דף ראשי (ללא אימות — ה-HTML עצמו לא מכיל מידע רגיש) ──
     @app.route("/")
     def index():
         return send_file(Path(__file__).parent / "panel.html")
 
+    @app.route("/api/auth", methods=["POST"])
+    def check_auth():
+        """בדיקת תקינות טוקן. מחזיר ok=true אם הטוקן נכון או אם אין צורך באימות."""
+        if not panel_token:
+            return jsonify({"ok": True, "auth_required": False})
+        auth = request.headers.get("Authorization", "")
+        if auth == f"Bearer {panel_token}":
+            return jsonify({"ok": True, "auth_required": True})
+        return jsonify({"ok": False, "auth_required": True}), 401
+
     # ── הגדרות כלליות ─────────────────────────────────────────
 
     @app.route("/api/settings", methods=["GET"])
+    @require_auth
     def get_settings():
         from classifier import _CLASSIFICATION_CRITERIA_DEFAULT
 
         criteria_db = get_config("classification_criteria")
+        is_default = not bool(criteria_db.strip()) if criteria_db else True
         return jsonify({
             "fb_email": get_config("fb_email") or os.environ.get("FB_EMAIL", ""),
             "fb_password": get_config("fb_password") or os.environ.get("FB_PASSWORD", ""),
             "classification_criteria": criteria_db or _CLASSIFICATION_CRITERIA_DEFAULT,
-            "criteria_is_default": not bool(criteria_db.strip()) if criteria_db else True,
+            "classification_criteria_default": _CLASSIFICATION_CRITERIA_DEFAULT,
+            "criteria_is_default": is_default,
             "quiet_hours": get_config("quiet_hours") or os.environ.get("QUIET_HOURS", ""),
             "interval_minutes": get_config("interval_minutes") or os.environ.get("INTERVAL_MINUTES", "10"),
         })
 
     @app.route("/api/settings", methods=["PUT"])
+    @require_auth
     def update_settings():
         data = request.get_json(force=True)
         allowed = ("fb_email", "fb_password", "classification_criteria",
@@ -60,6 +95,7 @@ def create_app() -> Flask:
     # ── קבוצות ────────────────────────────────────────────────
 
     @app.route("/api/groups", methods=["GET"])
+    @require_auth
     def list_groups():
         groups = get_db_groups()
         if groups is None:
@@ -68,6 +104,7 @@ def create_app() -> Flask:
         return jsonify({"groups": groups, "source": "custom"})
 
     @app.route("/api/groups", methods=["POST"])
+    @require_auth
     def create_group():
         data = request.get_json(force=True)
         url = data.get("url", "").strip()
@@ -77,6 +114,7 @@ def create_app() -> Flask:
         return jsonify({"ok": ok, "message": msg})
 
     @app.route("/api/groups", methods=["DELETE"])
+    @require_auth
     def delete_group():
         data = request.get_json(force=True)
         url = data.get("url", "").strip()
@@ -88,6 +126,7 @@ def create_app() -> Flask:
     # ── מילות מפתח ────────────────────────────────────────────
 
     @app.route("/api/keywords/<kw_type>", methods=["GET"])
+    @require_auth
     def list_keywords(kw_type):
         if kw_type not in ("pre_filter", "block"):
             return jsonify({"ok": False, "message": "סוג לא תקין"}), 400
@@ -105,6 +144,7 @@ def create_app() -> Flask:
         return jsonify({"keywords": kws, "source": "custom"})
 
     @app.route("/api/keywords/<kw_type>", methods=["POST"])
+    @require_auth
     def create_keyword(kw_type):
         if kw_type not in ("pre_filter", "block"):
             return jsonify({"ok": False, "message": "סוג לא תקין"}), 400
@@ -116,6 +156,7 @@ def create_app() -> Flask:
         return jsonify({"ok": ok, "message": msg})
 
     @app.route("/api/keywords/<kw_type>", methods=["DELETE"])
+    @require_auth
     def delete_keyword(kw_type):
         if kw_type not in ("pre_filter", "block"):
             return jsonify({"ok": False, "message": "סוג לא תקין"}), 400

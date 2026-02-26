@@ -697,6 +697,19 @@
   <!-- Toast Container -->
   <div id="toast-container"></div>
 
+  <!-- Login Overlay -->
+  <div id="login-overlay" style="display:none; position:fixed; inset:0; z-index:9999;
+    background:var(--bg); align-items:center; justify-content:center;">
+    <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-lg);
+      padding:32px; width:100%; max-width:400px; text-align:center;">
+      <h2 style="font-size:20px; font-weight:600; margin-bottom:8px;">פאנל הגדרות</h2>
+      <p style="color:var(--text-secondary); font-size:13px; margin-bottom:24px;">הזן טוקן גישה (PANEL_TOKEN)</p>
+      <input type="password" id="login-token" placeholder="טוקן..." dir="ltr"
+        style="margin-bottom:16px;" onkeydown="if(event.key==='Enter')submitLogin()">
+      <button class="btn btn-primary" onclick="submitLogin()" style="width:100%;">כניסה</button>
+    </div>
+  </div>
+
   <!-- Mobile Menu Toggle -->
   <button class="menu-toggle" onclick="toggleSidebar()" aria-label="תפריט">
     <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -942,6 +955,10 @@
 
     const API = '';  // same origin
 
+    // ── Auth Token ───────────────────────────────────────
+    function getToken() { return localStorage.getItem('panel_token') || ''; }
+    function setToken(t) { localStorage.setItem('panel_token', t); }
+
     // ── Toast Notifications ──────────────────────────────
     function toast(message, type = 'success') {
       const el = document.createElement('div');
@@ -956,16 +973,64 @@
 
     // ── API Helper ───────────────────────────────────────
     async function api(path, opts = {}) {
+      const headers = { 'Content-Type': 'application/json' };
+      const token = getToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch(API + path, {
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         ...opts,
         body: opts.body ? JSON.stringify(opts.body) : undefined,
       });
+      if (res.status === 401) {
+        showLogin();
+        throw new Error('אימות נדרש');
+      }
       const data = await res.json();
       if (!res.ok && !data.ok) {
         throw new Error(data.message || `שגיאה ${res.status}`);
       }
       return data;
+    }
+
+    // ── Login Screen ─────────────────────────────────────
+    function showLogin() {
+      document.getElementById('login-overlay').style.display = 'flex';
+    }
+
+    function hideLogin() {
+      document.getElementById('login-overlay').style.display = 'none';
+    }
+
+    async function submitLogin() {
+      const input = document.getElementById('login-token');
+      const token = input.value.trim();
+      if (!token) return;
+      setToken(token);
+      try {
+        const res = await api('/api/auth', { method: 'POST' });
+        if (res.ok) {
+          hideLogin();
+          loadAll();
+        }
+      } catch (e) {
+        setToken('');
+        input.value = '';
+        toast('טוקן שגוי', 'error');
+      }
+    }
+
+    async function checkAuth() {
+      try {
+        const res = await api('/api/auth', { method: 'POST' });
+        if (res.auth_required && !getToken()) {
+          showLogin();
+          return false;
+        }
+        return true;
+      } catch (e) {
+        showLogin();
+        return false;
+      }
     }
 
     // ── Source Badge Helper ──────────────────────────────
@@ -999,10 +1064,8 @@
           document.getElementById('quiet-end').value = end.trim();
         }
 
-        // שמירת ברירת מחדל של קריטריונים
-        if (currentSettings.criteria_is_default) {
-          criteriaDefault = currentSettings.classification_criteria;
-        }
+        // שמירת ברירת מחדל של קריטריונים — תמיד זמין מה-API
+        criteriaDefault = currentSettings.classification_criteria_default || '';
 
         renderSourceBadge('criteria-source',
           currentSettings.criteria_is_default ? 'default' : 'custom');
@@ -1094,19 +1157,23 @@
           </div>`;
         return;
       }
-      list.innerHTML = groups.map(g => `
-        <div class="group-item">
-          <div class="group-info">
-            <div class="group-name">${escapeHtml(g.name)}</div>
-            <div class="group-url">${escapeHtml(g.url)}</div>
-          </div>
-          <button class="group-delete" onclick="removeGroup('${escapeAttr(g.url)}')" title="הסר קבוצה">
-            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-            </svg>
-          </button>
-        </div>
-      `).join('');
+      list.innerHTML = '';
+      groups.forEach(g => {
+        const item = document.createElement('div');
+        item.className = 'group-item';
+        const info = document.createElement('div');
+        info.className = 'group-info';
+        info.innerHTML = `<div class="group-name">${escapeHtml(g.name)}</div>
+          <div class="group-url">${escapeHtml(g.url)}</div>`;
+        const btn = document.createElement('button');
+        btn.className = 'group-delete';
+        btn.title = 'הסר קבוצה';
+        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+        btn.addEventListener('click', () => removeGroup(g.url));
+        item.appendChild(info);
+        item.appendChild(btn);
+        list.appendChild(item);
+      });
     }
 
     async function loadGroups() {
@@ -1166,12 +1233,19 @@
         return;
       }
       const chipClass = type === 'block' ? 'chip chip-block' : 'chip';
-      el.innerHTML = words.map(w => `
-        <span class="${chipClass}">
-          ${escapeHtml(w)}
-          <button class="chip-remove" onclick="removeKeyword('${escapeAttr(w)}', '${type}')" title="הסר">&times;</button>
-        </span>
-      `).join('');
+      el.innerHTML = '';
+      words.forEach(w => {
+        const span = document.createElement('span');
+        span.className = chipClass;
+        span.appendChild(document.createTextNode(w + ' '));
+        const btn = document.createElement('button');
+        btn.className = 'chip-remove';
+        btn.title = 'הסר';
+        btn.innerHTML = '&times;';
+        btn.addEventListener('click', () => removeKeyword(w, type));
+        span.appendChild(btn);
+        el.appendChild(span);
+      });
     }
 
     async function loadKeywords(type) {
@@ -1269,20 +1343,22 @@
       return div.innerHTML;
     }
 
-    function escapeAttr(str) {
-      return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-    }
 
     // ═══ Init ════════════════════════════════════════════
 
-    document.addEventListener('DOMContentLoaded', async () => {
-      initNavigation();
+    async function loadAll() {
       await Promise.all([
         loadSettings(),
         loadGroups(),
         loadKeywords('pre_filter'),
         loadKeywords('block'),
       ]);
+    }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      initNavigation();
+      const authed = await checkAuth();
+      if (authed) await loadAll();
     });
   </script>
 </body>

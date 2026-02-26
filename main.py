@@ -179,8 +179,7 @@ async def _telegram_control_loop(
     *,
     scan_now_event: asyncio.Event,
     scan_force_event: asyncio.Event,
-    quiet: tuple[time, time] | None,
-    state: dict,
+    shared_state: dict,
 ):
     """
     Telegram polling loop for basic control commands.
@@ -308,11 +307,13 @@ async def _telegram_control_loop(
                 if cmd in ("/status",):
                     stats = get_stats()
                     now = _now_local()
+                    quiet = shared_state.get("quiet")
                     quiet_now = bool(quiet and _is_quiet_now(now, quiet))
-                    quiet_desc = f"{QUIET_HOURS} ({TIMEZONE_NAME})" if QUIET_HOURS else "(disabled)"
-                    last_started = state.get("last_scan_started")
-                    last_finished = state.get("last_scan_finished")
-                    in_progress = bool(state.get("scan_in_progress"))
+                    quiet_spec = get_config("quiet_hours") or QUIET_HOURS
+                    quiet_desc = f"{quiet_spec} ({TIMEZONE_NAME})" if quiet_spec else "(disabled)"
+                    last_started = shared_state.get("last_scan_started")
+                    last_finished = shared_state.get("last_scan_finished")
+                    in_progress = bool(shared_state.get("scan_in_progress"))
                     block_desc = ", ".join(BLOCK_KEYWORDS) if BLOCK_KEYWORDS else "(ריק)"
                     from scraper import GROUPS
                     groups_count = len(GROUPS)
@@ -339,7 +340,7 @@ async def _telegram_control_loop(
 
                 if cmd in ("/scan",):
                     now = _now_local()
-                    if state.get("scan_in_progress"):
+                    if shared_state.get("scan_in_progress"):
                         await asyncio.to_thread(
                             send_message,
                             "כבר יש סריקה שרצה כרגע. אעדכן כשתסתיים.",
@@ -348,10 +349,12 @@ async def _telegram_control_loop(
                         )
                         continue
 
+                    quiet = shared_state.get("quiet")
+                    quiet_spec = get_config("quiet_hours") or QUIET_HOURS
                     if quiet and _is_quiet_now(now, quiet):
                         await asyncio.to_thread(
                             send_message,
-                            f"שעות שקטות פעילות עכשיו ({QUIET_HOURS}, {TIMEZONE_NAME}). אם בכל זאת צריך, השתמש /scan_force.",
+                            f"שעות שקטות פעילות עכשיו ({quiet_spec}, {TIMEZONE_NAME}). אם בכל זאת צריך, השתמש /scan_force.",
                             chat_id=chat_id_int,
                             disable_web_page_preview=True,
                         )
@@ -554,10 +557,20 @@ def _load_interval_from_db() -> int:
         return int(val)
     return INTERVAL_MINUTES
 
+_CONFIG_NOT_SET = object()
+
 def _load_quiet_hours_from_db() -> tuple[time, time] | None:
-    """טוען שעות שקטות מ-DB עם fallback למשתנה סביבה."""
-    spec = get_config("quiet_hours") or QUIET_HOURS
-    if not spec or not spec.strip():
+    """טוען שעות שקטות מ-DB עם fallback למשתנה סביבה.
+    ערך ריק ב-DB = המשתמש ביטל שעות שקטות דרך הפאנל — מחזיר None.
+    """
+    db_val = get_config("quiet_hours", _CONFIG_NOT_SET)
+    if db_val is not _CONFIG_NOT_SET:
+        # יש ערך ב-DB (גם אם ריק) — הפאנל קובע
+        spec = db_val.strip()
+    else:
+        # אין ערך ב-DB — fallback למשתנה סביבה
+        spec = QUIET_HOURS
+    if not spec:
         return None
     try:
         return _parse_quiet_hours(spec)
@@ -712,26 +725,28 @@ async def main():
         f"BLOCK_KEYWORDS={', '.join(BLOCK_KEYWORDS) if BLOCK_KEYWORDS else '(disabled)'}"
     )
 
-    quiet = _load_quiet_hours_from_db()
-
-    scan_now_event = asyncio.Event()
-    scan_force_event = asyncio.Event()
-    scan_lock = asyncio.Lock()
-    state: dict = {
+    # shared_state — מילון משותף בין הלולאה הראשית לטלגרם.
+    # כולל quiet hours עדכני, מצב סריקה, וכו'.
+    shared_state: dict = {
+        "quiet": _load_quiet_hours_from_db(),
         "scan_in_progress": False,
         "last_scan_started": None,
         "last_scan_finished": None,
     }
 
+    scan_now_event = asyncio.Event()
+    scan_force_event = asyncio.Event()
+    scan_lock = asyncio.Lock()
+
     async def run_scan_guarded():
         async with scan_lock:
-            state["scan_in_progress"] = True
-            state["last_scan_started"] = _now_local()
+            shared_state["scan_in_progress"] = True
+            shared_state["last_scan_started"] = _now_local()
             try:
                 await run_cycle()
             finally:
-                state["scan_in_progress"] = False
-                state["last_scan_finished"] = _now_local()
+                shared_state["scan_in_progress"] = False
+                shared_state["last_scan_finished"] = _now_local()
 
     # שמירת רפרנס ל-task כדי למנוע garbage collection
     _control_task = None
@@ -740,8 +755,7 @@ async def main():
             _telegram_control_loop(
                 scan_now_event=scan_now_event,
                 scan_force_event=scan_force_event,
-                quiet=quiet,
-                state=state,
+                shared_state=shared_state,
             )
         )
 
@@ -749,6 +763,7 @@ async def main():
         # טעינה מחדש של הגדרות מהפאנל (interval, quiet hours)
         interval = _load_interval_from_db()
         quiet = _load_quiet_hours_from_db()
+        shared_state["quiet"] = quiet  # עדכון כדי שגם לולאת טלגרם תראה את הערך החדש
 
         try:
             did_scan = False

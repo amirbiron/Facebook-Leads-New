@@ -840,6 +840,48 @@ class TestPanelAPI:
         resp = panel_client.post("/api/keywords/pre_filter", json={"word": ""})
         assert resp.status_code == 400
 
+    def test_settings_include_default_criteria(self, panel_client):
+        """API מחזיר גם את ברירת המחדל של קריטריוני הסיווג."""
+        resp = panel_client.get("/api/settings")
+        data = resp.get_json()
+        assert "classification_criteria_default" in data
+        assert len(data["classification_criteria_default"]) > 0
+
+    def test_auth_not_required_when_no_token(self, panel_client):
+        resp = panel_client.post("/api/auth")
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["auth_required"] is False
+
+
+class TestPanelAuth:
+    def test_auth_required_blocks_without_token(self, tmp_db, monkeypatch):
+        """כשיש PANEL_TOKEN, בקשות ללא טוקן נחסמות."""
+        monkeypatch.setenv("PANEL_TOKEN", "secret123")
+        app = create_app()
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            resp = client.get("/api/settings")
+            assert resp.status_code == 401
+
+    def test_auth_passes_with_correct_token(self, tmp_db, monkeypatch):
+        monkeypatch.setenv("PANEL_TOKEN", "secret123")
+        app = create_app()
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            resp = client.get("/api/settings",
+                              headers={"Authorization": "Bearer secret123"})
+            assert resp.status_code == 200
+
+    def test_html_page_accessible_without_token(self, tmp_db, monkeypatch):
+        """דף ה-HTML נגיש גם בלי טוקן."""
+        monkeypatch.setenv("PANEL_TOKEN", "secret123")
+        app = create_app()
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            resp = client.get("/")
+            assert resp.status_code == 200
+
 
 # ──────────────────────────────────────────────────────────────
 # 13. Classifier — dynamic criteria loading
@@ -908,5 +950,12 @@ class TestDynamicSettings:
 
     def test_quiet_hours_invalid_returns_none(self, tmp_db):
         database.set_config("quiet_hours", "invalid")
+        result = _load_quiet_hours_from_db()
+        assert result is None
+
+    def test_quiet_hours_empty_db_overrides_env(self, tmp_db, monkeypatch):
+        """ערך ריק ב-DB צריך לבטל שעות שקטות גם אם QUIET_HOURS מוגדר ב-env."""
+        monkeypatch.setattr("main.QUIET_HOURS", "02:00-07:00")
+        database.set_config("quiet_hours", "")
         result = _load_quiet_hours_from_db()
         assert result is None

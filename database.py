@@ -198,12 +198,16 @@ def get_db_keywords(kw_type: str) -> list[str] | None:
 
 # ── Config (key-value) ────────────────────────────────────────
 
-def get_config(key: str, default: str = "") -> str:
-    """מחזיר ערך מטבלת _config, או ברירת מחדל."""
+def get_config(key: str, default=None):
+    """מחזיר ערך מטבלת _config, או default אם המפתח לא קיים.
+    ברירת מחדל ל-default: None (אפשר להעביר כל ערך, כולל sentinel).
+    """
     row = _get_conn().execute(
         "SELECT value FROM _config WHERE key = ?", (key,)
     ).fetchone()
-    return row[0] if row else default
+    if row is not None:
+        return row[0]
+    return "" if default is None else default
 
 def set_config(key: str, value: str):
     """שומר ערך בטבלת _config (מחליף אם קיים)."""
