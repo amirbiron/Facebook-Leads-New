@@ -180,6 +180,14 @@ def _mark_feature_configured(key: str):
             "INSERT OR IGNORE INTO _config (key, value) VALUES (?, '1')", (key,)
         )
 
+def update_group_name(url: str, name: str) -> bool:
+    """מעדכן את שם הקבוצה ב-DB לפי URL. מחזיר True אם עודכן."""
+    with _get_conn() as conn:
+        updated = conn.execute(
+            "UPDATE groups SET name = ? WHERE url = ?", (name, url)
+        ).rowcount
+    return updated > 0
+
 def get_db_groups() -> list[dict] | None:
     """מחזיר קבוצות מה-DB, או None אם מעולם לא הוגדרה קבוצה."""
     if not _feature_was_configured("groups"):

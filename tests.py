@@ -1355,3 +1355,91 @@ class TestPanelIntervalRemoved:
         resp2 = panel_client.get("/api/settings")
         data = resp2.get_json()
         assert data["interval_minutes"] != "99"
+
+
+# ──────────────────────────────────────────────────────────────
+# 18. update_group_name — עדכון שם קבוצה ב-DB
+# ──────────────────────────────────────────────────────────────
+
+
+class TestUpdateGroupName:
+    def test_update_existing_group(self, tmp_db):
+        """עדכון שם קבוצה קיימת ב-DB."""
+        database.add_group("https://m.facebook.com/groups/12345")
+        groups = database.get_db_groups()
+        assert groups[0]["name"] == "12345"
+
+        updated = database.update_group_name("https://m.facebook.com/groups/12345", "שם אמיתי")
+        assert updated is True
+
+        groups = database.get_db_groups()
+        assert groups[0]["name"] == "שם אמיתי"
+
+    def test_update_nonexistent_group(self, tmp_db):
+        """עדכון קבוצה שלא קיימת מחזיר False."""
+        updated = database.update_group_name("https://m.facebook.com/groups/99999", "שם")
+        assert updated is False
+
+    def test_update_preserves_url(self, tmp_db):
+        """עדכון שם לא משנה את ה-URL."""
+        database.add_group("https://m.facebook.com/groups/55555")
+        database.update_group_name("https://m.facebook.com/groups/55555", "קבוצה חדשה")
+        groups = database.get_db_groups()
+        assert groups[0]["url"] == "https://m.facebook.com/groups/55555"
+        assert groups[0]["name"] == "קבוצה חדשה"
+
+
+# ──────────────────────────────────────────────────────────────
+# 19. _to_desktop_url — המרת URL מובייל לדסקטופ
+# ──────────────────────────────────────────────────────────────
+
+from notifier import _to_desktop_url
+
+
+class TestToDesktopUrl:
+    def test_mobile_to_desktop(self):
+        url = "https://m.facebook.com/groups/123/posts/456"
+        assert _to_desktop_url(url) == "https://www.facebook.com/groups/123/posts/456"
+
+    def test_already_desktop(self):
+        url = "https://www.facebook.com/groups/123/posts/456"
+        assert _to_desktop_url(url) == url
+
+    def test_no_facebook(self):
+        url = "https://example.com/test"
+        assert _to_desktop_url(url) == url
+
+    def test_group_url_converted(self):
+        url = "https://m.facebook.com/groups/1684554685829832"
+        assert _to_desktop_url(url) == "https://www.facebook.com/groups/1684554685829832"
+
+
+# ──────────────────────────────────────────────────────────────
+# 20. _is_post_url — זיהוי URL של פוסט ספציפי
+# ──────────────────────────────────────────────────────────────
+
+from scraper import _is_post_url
+
+
+class TestIsPostUrl:
+    def test_posts_pattern(self):
+        assert _is_post_url("https://m.facebook.com/groups/123/posts/456") is True
+
+    def test_permalink_pattern(self):
+        assert _is_post_url("https://m.facebook.com/groups/123/permalink/456") is True
+
+    def test_story_fbid_pattern(self):
+        assert _is_post_url("https://m.facebook.com/story.php?story_fbid=123") is True
+
+    def test_pfbid_pattern(self):
+        assert _is_post_url("https://m.facebook.com/groups/123/posts/pfbidABC") is True
+
+    def test_group_url_only(self):
+        """URL של קבוצה בלבד — לא פוסט ספציפי."""
+        assert _is_post_url("https://m.facebook.com/groups/123") is False
+
+    def test_p_pattern(self):
+        assert _is_post_url("https://m.facebook.com/p/something") is True
+
+    def test_multi_permalinks(self):
+        assert _is_post_url("https://m.facebook.com/groups/123/?multi_permalinks=456") is True
