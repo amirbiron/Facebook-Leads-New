@@ -34,74 +34,6 @@ def _extract_name_from_title(page_title: str) -> str | None:
     return None
 
 
-async def _async_fetch_group_name(url: str) -> str | None:
-    """מחלץ שם קבוצה אמיתי מפייסבוק באמצעות Playwright.
-    אמין יותר מ-HTTP GET כי פייסבוק מרנדר את התוכן ב-JavaScript.
-    """
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--disable-extensions",
-                    "--single-process",
-                    "--renderer-process-limit=1",
-                    "--js-flags=--max-old-space-size=64",
-                ],
-            )
-            try:
-                context = await browser.new_context(
-                    user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) "
-                               "AppleWebKit/537.36 (KHTML, like Gecko) "
-                               "Chrome/120.0.0.0 Mobile Safari/537.36",
-                    viewport={"width": 360, "height": 640},
-                    locale="he-IL",
-                )
-                page = await context.new_page()
-                await block_heavy_resources(page)
-
-                # טעינת סשן שמור
-                await load_session(context)
-
-                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-
-                if "login" in page.url:
-                    log.debug("דף לוגין — לא ניתן לחלץ שם קבוצה בלי סשן תקין")
-                    return None
-
-                # פייסבוק הוא SPA — הכותרת מתעדכנת ע"י JS אחרי domcontentloaded.
-                # ממתינים עד שהכותרת מכילה " | " (פורמט: "שם קבוצה | Facebook")
-                try:
-                    await page.wait_for_function(
-                        "() => document.title.includes(' | ')",
-                        timeout=10000,
-                    )
-                except PlaywrightTimeout:
-                    log.debug("timeout בהמתנה לכותרת דף — ממשיך עם מה שיש")
-
-                page_title = await page.title()
-                return _extract_name_from_title(page_title)
-            finally:
-                await browser.close()
-    except Exception as e:
-        log.debug(f"לא הצלחתי לחלץ שם קבוצה מ-{url}: {e}")
-        return None
-
-
-def fetch_group_name(url: str) -> str | None:
-    """מחלץ שם קבוצה אמיתי מפייסבוק — wrapper סינכרוני סביב Playwright.
-    בטוח לקרוא מ-Flask (סינכרוני) או דרך asyncio.to_thread().
-    """
-    try:
-        return asyncio.run(_async_fetch_group_name(url))
-    except Exception as e:
-        log.debug(f"fetch_group_name נכשל: {e}")
-        return None
-
-
 # שימוש ב-m.facebook.com — אתר מובייל קל בהרבה בזיכרון
 DEFAULT_GROUPS = [
     {"name": "הכול על אוטומציות בינה מלאכותית AI - IL ישראל", "url": "https://m.facebook.com/groups/640894321475593/"},
@@ -462,16 +394,18 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             extracted = _extract_name_from_title(page_title)
             if extracted:
                 group_name = extracted
-                log.debug(f"שם קבוצה מכותרת הדף: {group_name}")
                 # עדכון שם הקבוצה ב-DB כדי שישתמר לסבבים הבאים
                 if group_name != group["name"]:
                     try:
                         from database import update_group_name
                         update_group_name(group["url"], group_name)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                        log.info(f"שם קבוצה עודכן: {group['name']} → {group_name}")
+                    except Exception as e:
+                        log.warning(f"נכשל עדכון שם קבוצה ב-DB: {e}")
+            else:
+                log.warning(f"לא הצלחתי לחלץ שם קבוצה מכותרת הדף: '{page_title}'")
+        except Exception as e:
+            log.warning(f"שגיאה בחילוץ כותרת דף לקבוצה {group['url']}: {e}")
 
         await random_delay(2, 4)
 

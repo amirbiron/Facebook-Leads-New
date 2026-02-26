@@ -153,6 +153,9 @@ def add_group(raw_url: str) -> tuple[bool, str]:
                 (name, url, _now().isoformat()),
             )
         _mark_feature_configured("groups")
+        # אם השם הוא רק ספרות (מזהה URL) — מודיעים שיתעדכן בסריקה
+        if name.isdigit():
+            return True, f"קבוצה נוספה: {url}\nשם הקבוצה יעודכן אוטומטית בסריקה הבאה."
         return True, f"קבוצה נוספה: {name}\n{url}"
     except sqlite3.IntegrityError:
         return False, f"הקבוצה כבר קיימת: {url}"
