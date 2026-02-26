@@ -25,3 +25,7 @@ services:
         value: "1"
       - key: PANEL_TOKEN
         sync: false
+    disk:
+      name: fb-leads-data
+      mountPath: /app/data
+      sizeGB: 1

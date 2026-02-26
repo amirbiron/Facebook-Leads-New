@@ -756,7 +756,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
           </svg>
-          <span>קריטריוני סיווג</span>
+          <span>פרומפט AI</span>
         </a>
 
         <a href="#keywords" class="nav-item" data-section="keywords">
@@ -831,24 +831,24 @@
         <div id="groups-list" class="group-list"></div>
       </section>
 
-      <!-- ═══ קריטריוני סיווג ═══ -->
+      <!-- ═══ פרומפט AI ═══ -->
       <section id="criteria" class="card">
         <h3 class="card-title">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
           </svg>
-          קריטריוני סיווג
+          פרומפט AI
         </h3>
         <p class="card-desc">
-          תאר את העסק או השירות שלך — הבוט ישתמש בתיאור הזה כדי לזהות פוסטים רלוונטיים בקבוצות.
-          כתוב בשפה טבעית מה רלוונטי ומה לא.
+          כתוב הנחיות ל-AI — תאר מה העסק שלך עושה, אילו פוסטים נחשבים לידים רלוונטיים ואילו לא.
+          הבוט ישתמש בטקסט הזה כפרומפט לסיווג כל פוסט שנמצא בקבוצות.
         </p>
 
         <div id="criteria-source" class="source-badge"></div>
 
         <div class="form-group">
           <textarea id="criteria-text" rows="14"
-                    placeholder="תאר את העסק שלך, מה נחשב ליד רלוונטי ומה לא..."></textarea>
+                    placeholder="כתוב הנחיות לבוט — מה העסק שלך, אילו לידים רלוונטיים ואילו לא..."></textarea>
         </div>
         <div class="btn-row">
           <button class="btn btn-primary" onclick="saveCriteria()">שמור</button>
@@ -1090,7 +1090,7 @@
             classification_criteria: document.getElementById('criteria-text').value,
           },
         });
-        toast('קריטריוני סיווג נשמרו');
+        toast('פרומפט AI נשמר');
         renderSourceBadge('criteria-source', 'custom');
       } catch (e) {
         toast('שגיאה: ' + e.message, 'error');

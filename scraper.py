@@ -298,7 +298,7 @@ def extract_post_id(url: str) -> str:
 
 def _is_post_url(href: str) -> bool:
     """בודק אם URL הוא קישור לפוסט ספציפי (לא לקבוצה בלבד)."""
-    post_patterns = ["/posts/", "/permalink/", "story_fbid", "/story.php", "multi_permalinks", "/p/"]
+    post_patterns = ["/posts/", "/permalink/", "story_fbid", "/story.php", "multi_permalinks", "/p/", "pfbid"]
     return any(p in href for p in post_patterns)
 
 async def _extract_post_url(el, fallback_url: str) -> str:
@@ -310,6 +310,8 @@ async def _extract_post_url(el, fallback_url: str) -> str:
         "a[href*='permalink']",
         "a[href*='/story.php']",
         "a[href*='multi_permalinks']",
+        "a[href*='pfbid']",
+        "a[href*='/p/']",
     ]
     for sel in direct_selectors:
         link = await el.query_selector(sel)
@@ -325,14 +327,25 @@ async def _extract_post_url(el, fallback_url: str) -> str:
         if _is_post_url(href):
             return href if href.startswith("http") else f"https://m.facebook.com{href}"
 
-    # אסטרטגיה 3: לינק חותמת זמן — במובייל, הזמן ("12 שעות") הוא לינק לפוסט
+    # אסטרטגיה 3: לינק חותמת זמן — במובייל, הזמן ("12 שעות") הוא לינק לפוסט.
+    # קישור timestamp בתוך קבוצה הוא כמעט תמיד קישור לפוסט הספציפי,
+    # גם אם ה-URL לא מכיל מזהה פוסט מוכר (כמו pfbid, /posts/ וכו')
     for a in all_links:
         href = await a.get_attribute("href") or ""
         text = (await a.inner_text()).strip() if a else ""
-        # חותמת זמן: "12 שעות", "3 ימים", "דקה", "אתמול" וכו'
-        if re.search(r'\d+\s*(שע|דק|יו|שני|חוד)', text) or text in ("עכשיו", "אתמול"):
-            if "/groups/" in href:
-                return href if href.startswith("http") else f"https://m.facebook.com{href}"
+        # חותמת זמן בעברית: "12 שעות", "3 ימים", "דקה", "אתמול" וכו'
+        # חותמת זמן באנגלית: "12h", "3d", "1m", "Just now", "Yesterday"
+        is_timestamp = (
+            re.search(r'\d+\s*(שע|דק|יו|שני|חוד)', text)
+            or text in ("עכשיו", "אתמול")
+            or re.search(r'^\d+\s*[hdmwHDMW]$', text)
+            or text.lower() in ("just now", "yesterday")
+        )
+        if is_timestamp and "/groups/" in href and href != fallback_url:
+            full = href if href.startswith("http") else f"https://m.facebook.com{href}"
+            # ודא שהקישור ארוך יותר מ-URL הקבוצה (כלומר מכיל מזהה נוסף)
+            if len(full) > len(fallback_url) + 5:
+                return full
 
     return fallback_url
 
@@ -352,15 +365,28 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             return posts
 
         # חילוץ שם הקבוצה מכותרת הדף (אמין יותר מסלקטורים בתוך ה-DOM)
+        # רשימת כותרות גנריות/שגויות שלא מייצגות שם קבוצה אמיתי
+        _BAD_TITLES = {"facebook", "content not found", "page not found",
+                       "error", "log in", "התחברות", "תוכן לא נמצא", "שגיאה"}
         group_name = group["name"]
         try:
             page_title = await page.title()
             # כותרת דף בפייסבוק: "שם הקבוצה | Facebook" או "שם הקבוצה"
             if page_title and " | " in page_title:
                 extracted = page_title.split(" | ")[0].strip()
-                if extracted and "אינו נתמך" not in extracted and len(extracted) > 2:
+                if (extracted
+                        and len(extracted) > 2
+                        and extracted.lower() not in _BAD_TITLES
+                        and "אינו נתמך" not in extracted):
                     group_name = extracted
                     log.debug(f"שם קבוצה מכותרת הדף: {group_name}")
+                    # עדכון שם הקבוצה ב-DB כדי שישתמר לסבבים הבאים
+                    if group_name != group["name"]:
+                        try:
+                            from database import update_group_name
+                            update_group_name(group["url"], group_name)
+                        except Exception:
+                            pass
         except Exception:
             pass
 

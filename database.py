@@ -180,6 +180,35 @@ def _mark_feature_configured(key: str):
             "INSERT OR IGNORE INTO _config (key, value) VALUES (?, '1')", (key,)
         )
 
+def update_group_name(url: str, name: str) -> bool:
+    """מעדכן את שם הקבוצה ב-DB לפי URL. מחזיר True אם עודכן."""
+    url = _normalize_group_url(url)
+    with _get_conn() as conn:
+        updated = conn.execute(
+            "UPDATE groups SET name = ? WHERE url = ?", (name, url)
+        ).rowcount
+    return updated > 0
+
+def ensure_groups_migrated(defaults: list[dict]):
+    """אם קבוצות מעולם לא הוגדרו, מעביר את ברירות המחדל ל-DB.
+    חובה לקרוא לפני add_group הראשון — אחרת ברירות המחדל נעלמות.
+    """
+    if _feature_was_configured("groups"):
+        return  # כבר הוגדר — אין צורך במיגרציה
+    if not defaults:
+        return
+    now = _now().isoformat()
+    with _get_conn() as conn:
+        for g in defaults:
+            url = _normalize_group_url(g.get("url", ""))
+            name = g.get("name", "") or _extract_group_name(url)
+            if url:
+                conn.execute(
+                    "INSERT OR IGNORE INTO groups (name, url, created_at) VALUES (?, ?, ?)",
+                    (name, url, now),
+                )
+    _mark_feature_configured("groups")
+
 def get_db_groups() -> list[dict] | None:
     """מחזיר קבוצות מה-DB, או None אם מעולם לא הוגדרה קבוצה."""
     if not _feature_was_configured("groups"):
@@ -188,6 +217,25 @@ def get_db_groups() -> list[dict] | None:
     return [{"name": r[0], "url": r[1]} for r in rows]
 
 # ── Keywords CRUD ─────────────────────────────────────────────
+
+def ensure_keywords_migrated(kw_type: str, defaults: list[str]):
+    """אם סוג מילות מפתח מעולם לא הוגדר, מעביר את ברירות המחדל ל-DB.
+    חובה לקרוא לפני add_keyword הראשון — אחרת ברירות המחדל נעלמות.
+    """
+    if _feature_was_configured(f"keywords_{kw_type}"):
+        return  # כבר הוגדר — אין צורך במיגרציה
+    if not defaults:
+        return
+    now = _now().isoformat()
+    with _get_conn() as conn:
+        for word in defaults:
+            word = word.strip().lower()
+            if word:
+                conn.execute(
+                    "INSERT OR IGNORE INTO keywords (word, type, created_at) VALUES (?, ?, ?)",
+                    (word, kw_type, now),
+                )
+    _mark_feature_configured(f"keywords_{kw_type}")
 
 def add_keyword(word: str, kw_type: str) -> tuple[bool, str]:
     """מוסיף מילת מפתח ל-DB. kw_type: 'pre_filter' או 'block'."""

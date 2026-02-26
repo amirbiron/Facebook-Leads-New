@@ -179,6 +179,10 @@ def send_error_alert(error: str) -> bool:
     )
 
 
+def _to_desktop_url(url: str) -> str:
+    """ממיר URL מובייל ל-URL דסקטופ (m.facebook.com → www.facebook.com)."""
+    return url.replace("://m.facebook.com", "://www.facebook.com")
+
 def send_lead(group_name: str, content: str, post_url: str, reason: str):
     if not BOT_TOKEN or not CHAT_ID:
         log.error("חסרים משתני סביבה של טלגרם (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
@@ -187,12 +191,15 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str):
     content = clean_post_content(content)
     short_content = content[:350] + "..." if len(content) > 350 else content
 
+    # המרת URL מובייל לדסקטופ — נוח יותר למשתמשים
+    desktop_url = _to_desktop_url(post_url)
+
     text = (
         f"🎯 *ליד חדש*\n"
         f"📌 *קבוצה:* {group_name}\n\n"
         f"{short_content}\n\n"
         f"💡 *למה רלוונטי:* {reason}\n\n"
-        f"🔗 [פתח פוסט]({post_url})"
+        f"🔗 [פתח פוסט]({desktop_url})"
     )
     return send_message(
         text,
