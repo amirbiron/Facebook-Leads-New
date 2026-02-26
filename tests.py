@@ -1777,3 +1777,280 @@ class TestExtractNameFromTitle:
         assert _extract_name_from_title("\u200fשם קבוצה\u200f") == "שם קבוצה"
 
 
+# ──────────────────────────────────────────────────────────────
+# 25. _extract_id_from_data_attrs — חילוץ מזהה פוסט מ-data attributes
+# ──────────────────────────────────────────────────────────────
+
+from scraper import _extract_id_from_data_attrs
+
+
+class TestExtractIdFromDataAttrs:
+    def test_mf_story_key(self):
+        """מחלץ mf_story_key מ-JSON."""
+        data = '{"mf_story_key": "123456789"}'
+        assert _extract_id_from_data_attrs(data) == "123456789"
+
+    def test_top_level_post_id(self):
+        """מחלץ top_level_post_id כשאין mf_story_key."""
+        data = '{"top_level_post_id": "987654321"}'
+        assert _extract_id_from_data_attrs(data) == "987654321"
+
+    def test_tl_objid(self):
+        """מחלץ tl_objid כשאין מזהים אחרים."""
+        data = '{"tl_objid": "555666777"}'
+        assert _extract_id_from_data_attrs(data) == "555666777"
+
+    def test_priority_order(self):
+        """mf_story_key קודם ל-top_level_post_id."""
+        data = '{"top_level_post_id": "111", "mf_story_key": "222"}'
+        assert _extract_id_from_data_attrs(data) == "222"
+
+    def test_invalid_json(self):
+        """JSON לא תקין — מחזיר None."""
+        assert _extract_id_from_data_attrs("not-json") is None
+
+    def test_empty_json(self):
+        """JSON ריק — מחזיר None."""
+        assert _extract_id_from_data_attrs("{}") is None
+
+    def test_none_input(self):
+        """None — מחזיר None."""
+        assert _extract_id_from_data_attrs(None) is None
+
+    def test_empty_string_value(self):
+        """ערך ריק — מחזיר None."""
+        data = '{"mf_story_key": ""}'
+        assert _extract_id_from_data_attrs(data) is None
+
+    def test_numeric_value(self):
+        """ערך מספרי (לא מחרוזת) — מומר למחרוזת."""
+        data = '{"mf_story_key": 123456789}'
+        assert _extract_id_from_data_attrs(data) == "123456789"
+
+
+# ──────────────────────────────────────────────────────────────
+# 26. _extract_post_url — אסטרטגיות חילוץ URL (async, עם מוקים)
+# ──────────────────────────────────────────────────────────────
+
+from scraper import _extract_post_url, get_extraction_stats, reset_extraction_stats
+
+
+class _FakeLink:
+    """לינק מדומה עם href ו-text."""
+
+    def __init__(self, href, text=""):
+        self._href = href
+        self._text = text
+
+    async def get_attribute(self, name):
+        if name == "href":
+            return self._href
+        return None
+
+    async def inner_text(self):
+        return self._text
+
+
+class _FakeElementForStrategies:
+    """אלמנט מדומה גמיש יותר — תומך בכל האסטרטגיות."""
+
+    def __init__(self, *, selector_links=None, all_links=None, attrs=None,
+                 inner_els=None, el_id=None, html="<div></div>"):
+        # selector_links: dict of CSS selector -> href
+        self._selector_links = selector_links or {}
+        # all_links: list of (href, text) — לסריקה כללית
+        self._all_links = all_links or []
+        self._attrs = attrs or {}
+        self._inner_els = inner_els or {}
+        self._el_id = el_id
+        self._html = html
+
+    async def query_selector(self, selector):
+        if selector in self._inner_els:
+            return self._inner_els[selector]
+        if selector in self._selector_links:
+            return _FakeLink(self._selector_links[selector])
+        return None
+
+    async def query_selector_all(self, selector):
+        if "a[href]" in selector:
+            return [_FakeLink(href, text) for href, text in self._all_links]
+        return []
+
+    async def get_attribute(self, name):
+        if name == "id":
+            return self._el_id
+        return self._attrs.get(name)
+
+    async def inner_html(self):
+        return self._html
+
+
+class TestExtractPostUrl:
+    """טסטים ל-_extract_post_url — כל 5 האסטרטגיות."""
+
+    FALLBACK = "https://m.facebook.com/groups/123/"
+
+    @pytest.mark.asyncio
+    async def test_strategy1_direct_selector(self):
+        """אסטרטגיה 1 — סלקטור ישיר לקישור פוסט."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            selector_links={"a[href*='/posts/']": "/groups/123/posts/456"}
+        )
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://m.facebook.com/groups/123/posts/456"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy1_full_url(self):
+        """אסטרטגיה 1 — URL מלא (עם http) לא מקבל prefix."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            selector_links={"a[href*='/posts/']": "https://m.facebook.com/groups/123/posts/456"}
+        )
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://m.facebook.com/groups/123/posts/456"
+
+    @pytest.mark.asyncio
+    async def test_strategy2_link_scan(self):
+        """אסטרטגיה 2 — סריקת כל הלינקים."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            all_links=[
+                ("https://m.facebook.com/groups/123", ""),
+                ("/groups/123/permalink/789", ""),
+            ]
+        )
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://m.facebook.com/groups/123/permalink/789"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy3_timestamp_hebrew(self):
+        """אסטרטגיה 3 — לינק timestamp בעברית."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            all_links=[
+                ("/groups/123/permalink/999888", "3 שעות"),
+            ]
+        )
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert "999888" in result
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy3_timestamp_english(self):
+        """אסטרטגיה 3 — לינק timestamp באנגלית."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            all_links=[
+                ("/groups/123/permalink/111222", "5h"),
+            ]
+        )
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert "111222" in result
+
+    @pytest.mark.asyncio
+    async def test_strategy4_data_ft(self):
+        """אסטרטגיה 4 — חילוץ מזהה מ-data-ft."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            attrs={"data-ft": '{"mf_story_key": "555666"}'}
+        )
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://m.facebook.com/groups/123/permalink/555666/"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy4_data_store(self):
+        """אסטרטגיה 4 — חילוץ מזהה מ-data-store."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            attrs={"data-store": '{"top_level_post_id": "777888"}'}
+        )
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://m.facebook.com/groups/123/permalink/777888/"
+
+    @pytest.mark.asyncio
+    async def test_strategy4_inner_data_ft(self):
+        """אסטרטגיה 4 — data-ft באלמנט פנימי."""
+        reset_extraction_stats()
+        inner = _FakeElementForStrategies(
+            attrs={"data-ft": '{"mf_story_key": "999111"}'}
+        )
+        el = _FakeElementForStrategies(
+            inner_els={"[data-ft]": inner}
+        )
+        # צריך שהאלמנט החיצוני לא יחזיר data-ft בעצמו
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://m.facebook.com/groups/123/permalink/999111/"
+
+    @pytest.mark.asyncio
+    async def test_strategy5_element_id(self):
+        """אסטרטגיה 5 — מזהה מספרי ב-id של האלמנט."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(el_id="mall_post_1234567890")
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://m.facebook.com/groups/123/permalink/1234567890/"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_when_all_fail(self):
+        """כשכל האסטרטגיות נכשלות — מחזיר fallback URL."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(html="<div>no links</div>")
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == self.FALLBACK
+        assert get_extraction_stats()["fallback"] == 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_counter_increments(self):
+        """מונה fallback עולה בכל כישלון."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies()
+        await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert get_extraction_stats()["fallback"] == 2
+
+    @pytest.mark.asyncio
+    async def test_strategy4_no_group_id_in_fallback(self):
+        """אסטרטגיה 4 לא עובדת אם ה-fallback URL לא מכיל group ID."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            attrs={"data-ft": '{"mf_story_key": "555666"}'}
+        )
+        result = await _extract_post_url(el, "https://m.facebook.com/", dump_on_fail=False)
+        # אין group ID ב-fallback, אז אסטרטגיה 4 לא מופעלת — fallback
+        assert result == "https://m.facebook.com/"
+
+    @pytest.mark.asyncio
+    async def test_strategy5_short_id_ignored(self):
+        """אסטרטגיה 5 — מזהה קצר מ-10 ספרות לא נחשב."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(el_id="post_12345")
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == self.FALLBACK
+
+
+# ──────────────────────────────────────────────────────────────
+# 27. extraction stats — סטטיסטיקת חילוץ URL
+# ──────────────────────────────────────────────────────────────
+
+
+class TestExtractionStats:
+    def test_reset(self):
+        """reset_extraction_stats מאפס את המונים."""
+        reset_extraction_stats()
+        stats = get_extraction_stats()
+        assert stats["success"] == 0
+        assert stats["fallback"] == 0
+
+    def test_returns_copy(self):
+        """get_extraction_stats מחזיר עותק — שינוי לא משפיע על המקור."""
+        reset_extraction_stats()
+        stats = get_extraction_stats()
+        stats["success"] = 999
+        assert get_extraction_stats()["success"] == 0
+
+
