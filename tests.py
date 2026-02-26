@@ -1207,6 +1207,7 @@ from main import (
     _main_menu_buttons, _settings_menu_buttons, _back_to_menu_button,
     _build_status_text, _build_daily_report_text,
     _build_groups_text, _build_keywords_text, _build_blocked_text,
+    _build_force_send_text,
 )
 
 
@@ -1234,15 +1235,16 @@ class TestMenuButtons:
                 assert len(btn["text"]) > 0
 
     def test_settings_menu_structure(self):
-        """תפריט הגדרות — 2 שורות, 2 כפתורים בכל שורה."""
+        """תפריט הגדרות — 3 שורות: 2 כפתורים, 2 כפתורים, כפתור חזרה."""
         buttons = _settings_menu_buttons()
-        assert len(buttons) == 2
+        assert len(buttons) == 3
         assert len(buttons[0]) == 2
         assert len(buttons[1]) == 2
+        assert len(buttons[2]) == 1
 
     def test_settings_menu_callback_data(self):
         buttons = _settings_menu_buttons()
-        expected = {"groups", "keywords", "blocked", "menu"}
+        expected = {"groups", "keywords", "blocked", "force_send", "menu"}
         actual = {btn["callback_data"] for row in buttons for btn in row}
         assert actual == expected
 
@@ -1333,6 +1335,27 @@ class TestBuildBlockedText:
             from main import _build_blocked_text
             text = _build_blocked_text()
             assert "ספאם" in text
+
+
+class TestBuildForceSendText:
+    def test_empty_force_send(self):
+        with patch("main.FORCE_SEND_KEYWORDS", []):
+            text = _build_force_send_text()
+            assert "(ריק)" in text
+            assert "שלח תמיד" in text
+
+    def test_with_force_send(self):
+        with patch("main.FORCE_SEND_KEYWORDS", ["בוט", "אוטומציה"]):
+            text = _build_force_send_text()
+            assert "בוט" in text
+            assert "אוטומציה" in text
+            assert "(2)" in text
+
+    def test_shows_commands(self):
+        with patch("main.FORCE_SEND_KEYWORDS", []):
+            text = _build_force_send_text()
+            assert "/force_send" in text
+            assert "/unforce" in text
 
 
 # ──────────────────────────────────────────────────────────────

@@ -251,6 +251,9 @@ def _settings_menu_buttons() -> list[list[dict]]:
         ],
         [
             {"text": "\U0001f6ab מילים חסומות", "callback_data": "blocked"},
+            {"text": "\u26a1 שלח תמיד", "callback_data": "force_send"},
+        ],
+        [
             {"text": "\U0001f519 חזרה", "callback_data": "menu"},
         ],
     ]
@@ -339,6 +342,17 @@ def _build_blocked_text() -> str:
     return (
         f"מילים חסומות ({len(bl)}):\n{bl_text}\n\n"
         "פקודות: /block <מילה> | /unblock <מילה>"
+    )
+
+
+def _build_force_send_text() -> str:
+    """בונה טקסט מילות 'שלח תמיד' (עוקף AI)."""
+    fs = FORCE_SEND_KEYWORDS
+    fs_text = ", ".join(fs) if fs else "(ריק)"
+    return (
+        f"⚡ מילות 'שלח תמיד' ({len(fs)}):\n{fs_text}\n\n"
+        "פוסט שמכיל מילה מהרשימה יישלח ישירות לטלגרם ללא סיווג AI.\n\n"
+        "פקודות: /force_send <מילה> | /unforce <מילה>"
     )
 
 
@@ -487,6 +501,14 @@ async def _telegram_control_loop(
             await asyncio.to_thread(
                 edit_message_text, chat_id_int, message_id,
                 bl_text,
+                [[{"text": "\U0001f519 חזרה להגדרות", "callback_data": "settings"}]],
+            )
+
+        elif cb_data == "force_send":
+            fs_text = _build_force_send_text()
+            await asyncio.to_thread(
+                edit_message_text, chat_id_int, message_id,
+                fs_text,
                 [[{"text": "\U0001f519 חזרה להגדרות", "callback_data": "settings"}]],
             )
 
