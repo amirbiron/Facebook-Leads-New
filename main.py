@@ -794,8 +794,11 @@ def handle_signal(sig, frame):
     _shutting_down = True
     sys.exit(0)
 
-signal.signal(signal.SIGTERM, handle_signal)
-signal.signal(signal.SIGINT, handle_signal)
+# רישום signal handlers רק ב-main thread — כשהמודול מיובא מ-thread אחר
+# (למשל Flask panel) signal.signal() זורק ValueError
+if threading.current_thread() is threading.main_thread():
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
 
 async def run_cycle():
     import gc
