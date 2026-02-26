@@ -556,7 +556,7 @@ def _load_interval_from_db() -> int:
     """טוען תדירות סריקה מ-DB עם fallback למשתנה סביבה."""
     val = get_config("interval_minutes")
     if val and val.strip().isdigit():
-        return int(val)
+        return max(1, int(val))
     return INTERVAL_MINUTES
 
 _CONFIG_NOT_SET = object()

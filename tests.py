@@ -876,6 +876,20 @@ class TestPanelAPI:
         assert data["fb_email"] == "new@test.com"
         assert data["interval_minutes"] == "15"
 
+    def test_put_interval_zero_rejected(self, panel_client):
+        """interval_minutes=0 נדחה בצד שרת — מונע לולאת סריקה צמודה."""
+        resp = panel_client.put("/api/settings", json={"interval_minutes": "0"})
+        assert resp.status_code == 400
+        assert resp.get_json()["ok"] is False
+
+    def test_put_interval_negative_rejected(self, panel_client):
+        resp = panel_client.put("/api/settings", json={"interval_minutes": "-5"})
+        assert resp.status_code == 400
+
+    def test_put_interval_valid_accepted(self, panel_client):
+        resp = panel_client.put("/api/settings", json={"interval_minutes": "1"})
+        assert resp.status_code == 200
+
     def test_get_groups_default(self, panel_client):
         resp = panel_client.get("/api/groups")
         data = resp.get_json()
@@ -1026,6 +1040,11 @@ class TestDynamicSettings:
     def test_interval_from_db(self, tmp_db):
         database.set_config("interval_minutes", "25")
         assert _load_interval_from_db() == 25
+
+    def test_interval_zero_floored_to_one(self, tmp_db):
+        """ערך 0 ב-DB מוחזר כ-1 — defense-in-depth מול לולאה צמודה."""
+        database.set_config("interval_minutes", "0")
+        assert _load_interval_from_db() == 1
 
     def test_interval_fallback_to_env(self, tmp_db):
         # אין ערך ב-DB — fallback למשתנה סביבה (INTERVAL_MINUTES)
