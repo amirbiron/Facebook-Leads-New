@@ -1425,6 +1425,81 @@ class TestEnsureKeywordsMigrated:
 
 
 # ──────────────────────────────────────────────────────────────
+# 18.5. ensure_groups_migrated — מיגרציית ברירות מחדל לקבוצות
+# ──────────────────────────────────────────────────────────────
+
+
+class TestEnsureGroupsMigrated:
+    def test_migrates_defaults_on_first_add(self, tmp_db):
+        """הוספת קבוצה ראשונה צריכה להעביר ברירות מחדל ל-DB."""
+        defaults = [
+            {"name": "קבוצה1", "url": "https://m.facebook.com/groups/111"},
+            {"name": "קבוצה2", "url": "https://m.facebook.com/groups/222"},
+        ]
+        database.ensure_groups_migrated(defaults)
+        groups = database.get_db_groups()
+        assert len(groups) == 2
+        assert groups[0]["name"] == "קבוצה1"
+        assert groups[1]["name"] == "קבוצה2"
+
+    def test_no_duplicate_on_second_call(self, tmp_db):
+        """קריאה חוזרת לא מכפילה את הקבוצות."""
+        defaults = [{"name": "קבוצה1", "url": "https://m.facebook.com/groups/111"}]
+        database.ensure_groups_migrated(defaults)
+        database.ensure_groups_migrated(defaults)
+        groups = database.get_db_groups()
+        assert len(groups) == 1
+
+    def test_add_after_migration_appends(self, tmp_db):
+        """הוספת קבוצה חדשה אחרי מיגרציה — מצטרפת לברירות מחדל."""
+        defaults = [{"name": "קבוצה1", "url": "https://m.facebook.com/groups/111"}]
+        database.ensure_groups_migrated(defaults)
+        database.add_group("https://m.facebook.com/groups/999")
+        groups = database.get_db_groups()
+        urls = [g["url"] for g in groups]
+        assert "https://m.facebook.com/groups/111" in urls
+        assert "https://m.facebook.com/groups/999" in urls
+
+    def test_empty_defaults_no_mark(self, tmp_db):
+        """ברירות מחדל ריקות — לא מסמנות כמוגדר."""
+        database.ensure_groups_migrated([])
+        assert database.get_db_groups() is None
+
+    def test_does_not_overwrite_existing(self, tmp_db):
+        """אם קבוצות כבר הוגדרו — לא דורסים."""
+        database.add_group("https://m.facebook.com/groups/existing")
+        database.ensure_groups_migrated([
+            {"name": "חדשה", "url": "https://m.facebook.com/groups/new"},
+        ])
+        groups = database.get_db_groups()
+        urls = [g["url"] for g in groups]
+        assert "https://m.facebook.com/groups/existing" in urls
+        assert "https://m.facebook.com/groups/new" not in urls
+
+    def test_panel_add_preserves_defaults(self, panel_client):
+        """הוספת קבוצה בפאנל שומרת את ברירות המחדל."""
+        # שלב 1: לפני הוספה — ברירות מחדל
+        resp = panel_client.get("/api/groups")
+        data = resp.get_json()
+        assert data["source"] == "default"
+        default_count = len(data["groups"])
+        assert default_count > 0
+
+        # שלב 2: הוספת קבוצה חדשה דרך הפאנל
+        resp = panel_client.post("/api/groups", json={"url": "https://m.facebook.com/groups/test_new_group_99999"})
+        assert resp.get_json()["ok"] is True
+
+        # שלב 3: בדיקה שכל ברירות המחדל + החדשה קיימות
+        resp = panel_client.get("/api/groups")
+        data = resp.get_json()
+        assert data["source"] == "custom"
+        urls = [g["url"] for g in data["groups"]]
+        assert "https://m.facebook.com/groups/test_new_group_99999" in urls
+        # ברירות המחדל נשמרו + הקבוצה החדשה
+        assert len(data["groups"]) == default_count + 1
+
+
+# ──────────────────────────────────────────────────────────────
 # 19. update_group_name — עדכון שם קבוצה ב-DB
 # ──────────────────────────────────────────────────────────────
 

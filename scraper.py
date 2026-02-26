@@ -327,26 +327,14 @@ async def _extract_post_url(el, fallback_url: str) -> str:
         if _is_post_url(href):
             return href if href.startswith("http") else f"https://m.facebook.com{href}"
 
-    # אסטרטגיה 3: לינק חותמת זמן — במובייל, הזמן ("12 שעות") הוא לינק לפוסט
+    # אסטרטגיה 3: לינק חותמת זמן — במובייל, הזמן ("12 שעות") הוא לינק לפוסט.
+    # קישור timestamp בתוך קבוצה הוא כמעט תמיד קישור לפוסט הספציפי,
+    # גם אם ה-URL לא מכיל מזהה פוסט מוכר (כמו pfbid, /posts/ וכו')
     for a in all_links:
         href = await a.get_attribute("href") or ""
         text = (await a.inner_text()).strip() if a else ""
         # חותמת זמן בעברית: "12 שעות", "3 ימים", "דקה", "אתמול" וכו'
         # חותמת זמן באנגלית: "12h", "3d", "1m", "Just now", "Yesterday"
-        is_timestamp = (
-            re.search(r'\d+\s*(שע|דק|יו|שני|חוד)', text)
-            or text in ("עכשיו", "אתמול")
-            or re.search(r'^\d+\s*[hdmwHDMW]$', text)
-            or text.lower() in ("just now", "yesterday")
-        )
-        if is_timestamp and "/groups/" in href and _is_post_url(href):
-            return href if href.startswith("http") else f"https://m.facebook.com{href}"
-
-    # אסטרטגיה 3ב: לינק חותמת זמן — גם אם ה-URL לא מכיל מזהה פוסט מוכר,
-    # קישור timestamp בתוך קבוצה הוא כמעט תמיד קישור לפוסט הספציפי
-    for a in all_links:
-        href = await a.get_attribute("href") or ""
-        text = (await a.inner_text()).strip() if a else ""
         is_timestamp = (
             re.search(r'\d+\s*(שע|דק|יו|שני|חוד)', text)
             or text in ("עכשיו", "אתמול")

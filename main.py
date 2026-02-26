@@ -9,7 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from database import (
     init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats, get_daily_stats,
-    cleanup_old_posts, add_group, remove_group, get_db_groups,
+    cleanup_old_posts, add_group, remove_group, get_db_groups, ensure_groups_migrated,
     add_keyword, remove_keyword, get_db_keywords, ensure_keywords_migrated,
     get_config,
 )
@@ -575,6 +575,8 @@ async def _telegram_control_loop(
                             chat_id=chat_id_int, disable_web_page_preview=True,
                         )
                         continue
+                    from scraper import DEFAULT_GROUPS
+                    ensure_groups_migrated(DEFAULT_GROUPS)
                     ok, result_msg = add_group(parts[1].strip())
                     if ok:
                         from scraper import reload_groups
