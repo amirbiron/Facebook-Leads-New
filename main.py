@@ -5,7 +5,11 @@ import sys
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from database import init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats, cleanup_old_posts
+from database import (
+    init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats,
+    cleanup_old_posts, add_group, remove_group, get_db_groups,
+    add_keyword, remove_keyword, get_db_keywords,
+)
 from logger import get_logger
 
 log = get_logger("Main")
@@ -20,19 +24,59 @@ FB_PASSWORD = os.environ.get("FB_PASSWORD")
 
 # מילים חסומות — פוסט שמכיל מילה מהרשימה לא יישלח ל-AI
 # ניתן לערוך דרך משתנה סביבה BLOCK_KEYWORDS (מופרד בפסיקים)
+# או דינמית דרך פקודות טלגרם /block, /unblock
 _block_env = os.environ.get("BLOCK_KEYWORDS", "").strip()
-BLOCK_KEYWORDS = [w.strip().lower() for w in _block_env.split(",") if w.strip()] if _block_env else []
+_BLOCK_KEYWORDS_ENV = [w.strip().lower() for w in _block_env.split(",") if w.strip()] if _block_env else []
 
 # מילות מפתח לסינון מוקדם — רק פוסטים שמכילים לפחות מילה אחת יעברו ל-AI
-PRE_FILTER_KEYWORDS = [
+# ניתן לערוך דינמית דרך פקודת טלגרם /add_keyword, /remove_keyword
+_PRE_FILTER_KEYWORDS_DEFAULT = [
     "בוט", "אוטומציה", "סקריפט", "מתכנת", "פיתוח", "מחפש מפתח",
     "דרוש מפתח", "צריך עזרה", "מישהו יכול", "לבנות מערכת",
     "טלגרם", "אינטגרציה", "אוטומטי", "ווטסאפ", "בהתנדבות",
     "צ'אטבוט", "צאטבוט",
 ]
 
+def _load_block_keywords() -> list[str]:
+    """טוען מילים חסומות מ-DB עם fallback למשתנה סביבה.
+    None מ-DB = מעולם לא הוגדר → fallback.  [] = המשתמש רוקן הכל → רשימה ריקה.
+    """
+    try:
+        db_kw = get_db_keywords("block")
+        if db_kw is not None:
+            return db_kw
+    except Exception:
+        pass
+    return _BLOCK_KEYWORDS_ENV
+
+def _load_pre_filter_keywords() -> list[str]:
+    """טוען מילות מפתח לסינון מוקדם מ-DB עם fallback לרשימת ברירת מחדל.
+    None מ-DB = מעולם לא הוגדר → fallback.  [] = המשתמש רוקן הכל → רשימה ריקה.
+    """
+    try:
+        db_kw = get_db_keywords("pre_filter")
+        if db_kw is not None:
+            return db_kw
+    except Exception:
+        pass
+    return _PRE_FILTER_KEYWORDS_DEFAULT
+
+# טעינה ראשונית — יתעדכנו דינמית בכל סבב
+BLOCK_KEYWORDS = _load_block_keywords()
+PRE_FILTER_KEYWORDS = _load_pre_filter_keywords()
+
+def reload_keywords():
+    """טוען מחדש את מילות המפתח מ-DB (נקרא אחרי שינוי דרך טלגרם)."""
+    global BLOCK_KEYWORDS, PRE_FILTER_KEYWORDS
+    BLOCK_KEYWORDS = _load_block_keywords()
+    PRE_FILTER_KEYWORDS = _load_pre_filter_keywords()
+
 def passes_keyword_filter(text: str) -> bool:
-    """בודק אם הפוסט מכיל לפחות מילת מפתח אחת."""
+    """בודק אם הפוסט מכיל לפחות מילת מפתח אחת.
+    אם הרשימה ריקה — מעביר הכל (אין סינון מוקדם).
+    """
+    if not PRE_FILTER_KEYWORDS:
+        return True
     text_lower = text.lower()
     return any(kw in text_lower for kw in PRE_FILTER_KEYWORDS)
 
@@ -232,9 +276,25 @@ async def _telegram_control_loop(
                 cmd = first.split("@", 1)[0].lower()
 
                 if cmd in ("/help",):
+                    help_text = (
+                        "פקודות:\n"
+                        "/scan - סריקה עכשיו (מכבד שעות שקטות)\n"
+                        "/scan_force - סריקה עכשיו (מתעלם משעות שקטות)\n"
+                        "/status - סטטוס\n"
+                        "\nניהול קבוצות:\n"
+                        "/groups - הצג קבוצות פעילות\n"
+                        "/add_group <url> - הוסף קבוצה\n"
+                        "/remove_group <url> - הסר קבוצה\n"
+                        "\nניהול מילות מפתח:\n"
+                        "/keywords - הצג מילות מפתח\n"
+                        "/add_keyword <מילה> - הוסף מילת סינון\n"
+                        "/remove_keyword <מילה> - הסר מילת סינון\n"
+                        "/block <מילה> - חסום מילה\n"
+                        "/unblock <מילה> - בטל חסימת מילה"
+                    )
                     await asyncio.to_thread(
                         send_message,
-                        "פקודות:\n/scan - סריקה עכשיו (מכבד שעות שקטות)\n/scan_force - סריקה עכשיו (מתעלם משעות שקטות)\n/status - סטטוס",
+                        help_text,
                         chat_id=chat_id_int,
                         disable_web_page_preview=True,
                     )
@@ -249,16 +309,20 @@ async def _telegram_control_loop(
                     last_finished = state.get("last_scan_finished")
                     in_progress = bool(state.get("scan_in_progress"))
                     block_desc = ", ".join(BLOCK_KEYWORDS) if BLOCK_KEYWORDS else "(ריק)"
+                    from scraper import GROUPS
+                    groups_count = len(GROUPS)
+                    pf_count = len(PRE_FILTER_KEYWORDS)
                     msg_text = (
                         "סטטוס בוט:\n"
                         f"- שעה מקומית: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
                         f"- שעות שקטות: {quiet_desc} | עכשיו: {'פעיל' if quiet_now else 'לא'}\n"
-                        f"- מילים חסומות: {block_desc}\n"
+                        f"- קבוצות פעילות: {groups_count}\n"
+                        f"- מילות סינון: {pf_count} | מילים חסומות: {block_desc}\n"
                         f"- סריקה רצה: {'כן' if in_progress else 'לא'}\n"
                         f"- סריקה אחרונה התחילה: {last_started.strftime('%Y-%m-%d %H:%M:%S %Z') if last_started else '-'}\n"
                         f"- סריקה אחרונה הסתיימה: {last_finished.strftime('%Y-%m-%d %H:%M:%S %Z') if last_finished else '-'}\n"
                         f"- סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}\n"
-                        "\nפקודות: /scan /scan_force /status"
+                        "\n/help לרשימת פקודות מלאה"
                     )
                     await asyncio.to_thread(
                         send_message,
@@ -308,6 +372,140 @@ async def _telegram_control_loop(
                     )
                     continue
 
+                # ── ניהול קבוצות דינמי ──────────────────────────
+                if cmd in ("/groups",):
+                    from scraper import GROUPS
+                    if GROUPS:
+                        lines = [f"{i}. {g['name']}\n   {g['url']}" for i, g in enumerate(GROUPS, 1)]
+                        msg_text = f"קבוצות פעילות ({len(GROUPS)}):\n\n" + "\n\n".join(lines)
+                    else:
+                        msg_text = "אין קבוצות מוגדרות."
+                    await asyncio.to_thread(
+                        send_message, msg_text, chat_id=chat_id_int,
+                        disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/add_group",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /add_group <url>",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    ok, result_msg = add_group(parts[1].strip())
+                    if ok:
+                        from scraper import reload_groups
+                        reload_groups()
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/remove_group",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /remove_group <url>",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    ok, result_msg = remove_group(parts[1].strip())
+                    if ok:
+                        from scraper import reload_groups
+                        reload_groups()
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                # ── ניהול מילות מפתח דינמי ──────────────────────
+                if cmd in ("/keywords",):
+                    pf = PRE_FILTER_KEYWORDS
+                    bl = BLOCK_KEYWORDS
+                    pf_text = ", ".join(pf) if pf else "(ריק)"
+                    bl_text = ", ".join(bl) if bl else "(ריק)"
+                    msg_text = (
+                        f"מילות מפתח לסינון ({len(pf)}):\n{pf_text}\n\n"
+                        f"מילים חסומות ({len(bl)}):\n{bl_text}"
+                    )
+                    await asyncio.to_thread(
+                        send_message, msg_text, chat_id=chat_id_int,
+                        disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/add_keyword",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /add_keyword <מילה>",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    ok, result_msg = add_keyword(parts[1].strip(), "pre_filter")
+                    if ok:
+                        reload_keywords()
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/remove_keyword",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /remove_keyword <מילה>",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    ok, result_msg = remove_keyword(parts[1].strip(), "pre_filter")
+                    if ok:
+                        reload_keywords()
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/block",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /block <מילה>",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    ok, result_msg = add_keyword(parts[1].strip(), "block")
+                    if ok:
+                        reload_keywords()
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/unblock",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /unblock <מילה>",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    ok, result_msg = remove_keyword(parts[1].strip(), "block")
+                    if ok:
+                        reload_keywords()
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
         except requests.HTTPError as e:
             if e.response is not None and e.response.status_code == 409:
                 # 409 Conflict = אינסטנס אחר עושה polling — ממתין עם backoff
@@ -341,6 +539,14 @@ async def run_cycle():
     from notifier import send_lead
 
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
+
+    # טעינה מחדש של מילות מפתח וקבוצות מ-DB
+    reload_keywords()
+    try:
+        from scraper import reload_groups
+        reload_groups()
+    except Exception:
+        pass
 
     # ניקוי פוסטים ישנים (מעל 30 יום) מטבלת seen_posts
     try:

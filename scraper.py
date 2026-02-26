@@ -21,12 +21,21 @@ DEFAULT_GROUPS = [
 ]
 
 def load_groups() -> list[dict]:
-    """טוען קבוצות מ-FB_GROUPS או מהרשימה המובנית.
-    פורמט FB_GROUPS: לינקים מופרדים בפסיק, למשל:
-    https://www.facebook.com/groups/123,https://www.facebook.com/groups/456
-    השם נגזר אוטומטית מה-URL (מזהה הקבוצה).
-    www.facebook.com מומר אוטומטית ל-m.facebook.com.
+    """טוען קבוצות מ-DB, עם fallback ל-FB_GROUPS / ברירת מחדל.
+    סדר עדיפות: DB → FB_GROUPS → DEFAULT_GROUPS
     """
+    # ניסיון ראשון — טעינה מ-DB
+    # None = מעולם לא הוגדר → fallback.  [] = המשתמש רוקן הכל → רשימה ריקה.
+    try:
+        from database import get_db_groups
+        db_groups = get_db_groups()
+        if db_groups is not None:
+            log.info(f"נטענו {len(db_groups)} קבוצות מ-DB")
+            return db_groups
+    except Exception as e:
+        log.debug(f"לא ניתן לטעון קבוצות מ-DB: {e}")
+
+    # fallback — משתנה סביבה
     env_groups = os.environ.get("FB_GROUPS")
     if env_groups:
         groups = []
@@ -45,6 +54,11 @@ def load_groups() -> list[dict]:
             return groups
         log.warning("FB_GROUPS מוגדר אבל ריק — משתמש ברשימת ברירת מחדל")
     return DEFAULT_GROUPS
+
+def reload_groups():
+    """טוען מחדש את רשימת הקבוצות (נקרא אחרי שינוי דרך טלגרם)."""
+    global GROUPS
+    GROUPS = load_groups()
 
 GROUPS = load_groups()
 
