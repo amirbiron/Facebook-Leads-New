@@ -392,15 +392,16 @@ async def run_cycle():
     leads_found = 0
 
     for i, post in enumerate(filtered_posts, 1):
+        if is_lead_sent(post["id"]):
+            log.debug(f"ליד כבר נשלח בעבר — דילוג על סיווג: {post['id']}")
+            continue
+
         log.debug(f"מסווג פוסט {i}/{len(filtered_posts)} מקבוצה: {post['group']}")
 
         result = classify_post(post["content"], post["group"])
 
         if result.get("relevant"):
             reason = result.get("reason", "")
-            if is_lead_sent(post["id"]):
-                log.debug(f"ליד כבר נשלח בעבר — דילוג: {post['id']}")
-                continue
             send_lead(
                 group_name=post["group"],
                 content=post["content"],
