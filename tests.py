@@ -1358,7 +1358,74 @@ class TestPanelIntervalRemoved:
 
 
 # ──────────────────────────────────────────────────────────────
-# 18. update_group_name — עדכון שם קבוצה ב-DB
+# 18. ensure_keywords_migrated — מיגרציית ברירות מחדל
+# ──────────────────────────────────────────────────────────────
+
+
+class TestEnsureKeywordsMigrated:
+    def test_migrates_defaults_on_first_add(self, tmp_db):
+        """הוספת מילה ראשונה צריכה להעביר ברירות מחדל ל-DB."""
+        defaults = ["בוט", "אוטומציה", "סקריפט"]
+        database.ensure_keywords_migrated("pre_filter", defaults)
+        kws = database.get_db_keywords("pre_filter")
+        assert set(kws) == {"בוט", "אוטומציה", "סקריפט"}
+
+    def test_no_duplicate_on_second_call(self, tmp_db):
+        """קריאה חוזרת לא מכפילה את המילים."""
+        defaults = ["בוט", "אוטומציה"]
+        database.ensure_keywords_migrated("pre_filter", defaults)
+        database.ensure_keywords_migrated("pre_filter", defaults)
+        kws = database.get_db_keywords("pre_filter")
+        assert kws == ["בוט", "אוטומציה"]
+
+    def test_add_after_migration_appends(self, tmp_db):
+        """הוספת מילה חדשה אחרי מיגרציה — מצטרפת לברירות מחדל."""
+        defaults = ["בוט", "אוטומציה"]
+        database.ensure_keywords_migrated("pre_filter", defaults)
+        database.add_keyword("חדשה", "pre_filter")
+        kws = database.get_db_keywords("pre_filter")
+        assert "חדשה" in kws
+        assert "בוט" in kws
+        assert "אוטומציה" in kws
+
+    def test_empty_defaults_still_marks_configured(self, tmp_db):
+        """ברירות מחדל ריקות — לא מוסיפות כלום אבל לא שוברות."""
+        database.ensure_keywords_migrated("block", [])
+        # רשימה ריקה לא מסמנת כמוגדר — _feature_was_configured נשאר False
+        assert database.get_db_keywords("block") is None
+
+    def test_does_not_overwrite_existing(self, tmp_db):
+        """אם הסוג כבר הוגדר — לא דורסים."""
+        database.add_keyword("קיימת", "pre_filter")
+        database.ensure_keywords_migrated("pre_filter", ["חדשה1", "חדשה2"])
+        kws = database.get_db_keywords("pre_filter")
+        # רק המילה שהוספנו ידנית — ברירות מחדל לא נוספו
+        assert kws == ["קיימת"]
+
+    def test_panel_add_preserves_defaults(self, panel_client):
+        """הוספת מילה בפאנל שומרת את ברירות המחדל."""
+        # שלב 1: לפני הוספה — ברירות מחדל
+        resp = panel_client.get("/api/keywords/pre_filter")
+        data = resp.get_json()
+        assert data["source"] == "default"
+        default_count = len(data["keywords"])
+        assert default_count > 0
+
+        # שלב 2: הוספת מילה חדשה דרך הפאנל
+        resp = panel_client.post("/api/keywords/pre_filter", json={"word": "מילה_חדשה_מאוד"})
+        assert resp.get_json()["ok"] is True
+
+        # שלב 3: בדיקה שכל ברירות המחדל + החדשה קיימות
+        resp = panel_client.get("/api/keywords/pre_filter")
+        data = resp.get_json()
+        assert data["source"] == "custom"
+        assert "מילה_חדשה_מאוד" in data["keywords"]
+        # ברירות המחדל נשמרו + המילה החדשה
+        assert len(data["keywords"]) == default_count + 1
+
+
+# ──────────────────────────────────────────────────────────────
+# 19. update_group_name — עדכון שם קבוצה ב-DB
 # ──────────────────────────────────────────────────────────────
 
 
@@ -1390,7 +1457,7 @@ class TestUpdateGroupName:
 
 
 # ──────────────────────────────────────────────────────────────
-# 19. _to_desktop_url — המרת URL מובייל לדסקטופ
+# 20. _to_desktop_url — המרת URL מובייל לדסקטופ
 # ──────────────────────────────────────────────────────────────
 
 from notifier import _to_desktop_url
@@ -1415,7 +1482,7 @@ class TestToDesktopUrl:
 
 
 # ──────────────────────────────────────────────────────────────
-# 20. _is_post_url — זיהוי URL של פוסט ספציפי
+# 21. _is_post_url — זיהוי URL של פוסט ספציפי
 # ──────────────────────────────────────────────────────────────
 
 from scraper import _is_post_url

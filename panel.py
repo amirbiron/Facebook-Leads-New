@@ -16,6 +16,7 @@ from database import (
     add_keyword,
     remove_keyword,
     get_db_keywords,
+    ensure_keywords_migrated,
 )
 from logger import get_logger
 
@@ -162,6 +163,14 @@ def create_app() -> Flask:
         word = data.get("word", "").strip()
         if not word:
             return jsonify({"ok": False, "message": "מילה ריקה"}), 400
+        # מיגרציית ברירות מחדל — אם זו ההוספה הראשונה, מעביר defaults ל-DB
+        if kw_type == "pre_filter":
+            from main import _PRE_FILTER_KEYWORDS_DEFAULT
+            ensure_keywords_migrated(kw_type, _PRE_FILTER_KEYWORDS_DEFAULT)
+        elif kw_type == "block":
+            block_env = os.environ.get("BLOCK_KEYWORDS", "").strip()
+            block_defaults = [w.strip().lower() for w in block_env.split(",") if w.strip()] if block_env else []
+            ensure_keywords_migrated(kw_type, block_defaults)
         ok, msg = add_keyword(word, kw_type)
         return jsonify({"ok": ok, "message": msg})
 

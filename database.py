@@ -197,6 +197,25 @@ def get_db_groups() -> list[dict] | None:
 
 # ── Keywords CRUD ─────────────────────────────────────────────
 
+def ensure_keywords_migrated(kw_type: str, defaults: list[str]):
+    """אם סוג מילות מפתח מעולם לא הוגדר, מעביר את ברירות המחדל ל-DB.
+    חובה לקרוא לפני add_keyword הראשון — אחרת ברירות המחדל נעלמות.
+    """
+    if _feature_was_configured(f"keywords_{kw_type}"):
+        return  # כבר הוגדר — אין צורך במיגרציה
+    if not defaults:
+        return
+    now = _now().isoformat()
+    with _get_conn() as conn:
+        for word in defaults:
+            word = word.strip().lower()
+            if word:
+                conn.execute(
+                    "INSERT OR IGNORE INTO keywords (word, type, created_at) VALUES (?, ?, ?)",
+                    (word, kw_type, now),
+                )
+    _mark_feature_configured(f"keywords_{kw_type}")
+
 def add_keyword(word: str, kw_type: str) -> tuple[bool, str]:
     """מוסיף מילת מפתח ל-DB. kw_type: 'pre_filter' או 'block'."""
     word = word.strip().lower()

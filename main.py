@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from database import (
     init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats, get_daily_stats,
     cleanup_old_posts, add_group, remove_group, get_db_groups,
-    add_keyword, remove_keyword, get_db_keywords,
+    add_keyword, remove_keyword, get_db_keywords, ensure_keywords_migrated,
     get_config,
 )
 from logger import get_logger
@@ -620,6 +620,7 @@ async def _telegram_control_loop(
                             chat_id=chat_id_int, disable_web_page_preview=True,
                         )
                         continue
+                    ensure_keywords_migrated("pre_filter", _PRE_FILTER_KEYWORDS_DEFAULT)
                     ok, result_msg = add_keyword(parts[1].strip(), "pre_filter")
                     if ok:
                         reload_keywords()
@@ -654,6 +655,7 @@ async def _telegram_control_loop(
                             chat_id=chat_id_int, disable_web_page_preview=True,
                         )
                         continue
+                    ensure_keywords_migrated("block", _BLOCK_KEYWORDS_ENV)
                     ok, result_msg = add_keyword(parts[1].strip(), "block")
                     if ok:
                         reload_keywords()
