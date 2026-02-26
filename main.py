@@ -169,7 +169,8 @@ async def _telegram_control_loop(
 
     # ניקוי webhook קודם וביטול polling תקוע מאינסטנס ישן
     try:
-        requests.post(
+        await asyncio.to_thread(
+            requests.post,
             f"https://api.telegram.org/bot{bot_token}/deleteWebhook",
             json={"drop_pending_updates": False},
             timeout=10,
