@@ -743,22 +743,47 @@ def _load_quiet_hours_from_db() -> tuple[time, time] | None:
         log.error(f"QUIET_HOURS לא תקין ({spec}) — מתעלם. שגיאה: {e}")
         return None
 
-def _start_panel():
-    """מפעיל פאנל הגדרות כ-daemon thread (אם Flask מותקן)."""
-    panel_port = int(os.environ.get("PANEL_PORT", os.environ.get("PORT", "8501")))
+def _get_panel_port() -> int:
+    """מחזיר את הפורט שהפאנל ישתמש בו."""
+    return int(os.environ.get("PANEL_PORT", os.environ.get("PORT", "8501")))
+
+
+def _start_panel() -> bool:
+    """מפעיל פאנל הגדרות כ-daemon thread (אם Flask מותקן).
+    מחזיר True רק אם Flask הצליח לעשות bind לפורט.
+    """
+    panel_port = _get_panel_port()
     try:
         from panel import create_app
         app = create_app()
-        t = threading.Thread(
-            target=lambda: app.run(host="0.0.0.0", port=panel_port, debug=False, use_reloader=False),
-            daemon=True,
-        )
+        # app.run() חוסם כשהשרת רץ. אם הוא נופל (port conflict וכו'),
+        # ה-thread יוצא ו-bind_failed מסומן. ממתינים עד שנייה לוודא bind הצליח.
+        bind_failed = threading.Event()
+        bind_error: list = [None]
+
+        def run():
+            try:
+                app.run(host="0.0.0.0", port=panel_port, debug=False, use_reloader=False)
+            except Exception as e:
+                bind_error[0] = e
+            finally:
+                bind_failed.set()
+
+        t = threading.Thread(target=run, daemon=True)
         t.start()
+        # אם app.run() הצליח, הוא חוסם לנצח ו-bind_failed לעולם לא מסומן.
+        # אם נכשל, ה-thread יוצא מהר ו-bind_failed מסומן.
+        if bind_failed.wait(timeout=1.0):
+            log.warning(f"פאנל הגדרות נכשל בהפעלה: {bind_error[0]}")
+            return False
         log.info(f"פאנל הגדרות רץ על פורט {panel_port}")
+        return True
     except ImportError:
         log.debug("Flask לא מותקן — פאנל הגדרות לא יופעל")
+        return False
     except Exception as e:
         log.warning(f"לא ניתן להפעיל פאנל הגדרות: {e}")
+        return False
 
 
 _shutting_down = False
@@ -881,8 +906,13 @@ async def run_cycle():
 async def main():
     log.info("מאתחל מסד נתונים...")
     init_db()
-    start_health_server()
-    _start_panel()
+    # פאנל מופעל ראשון — אם הוא תופס את אותו פורט כמו health, לא צריך שרת health נפרד
+    panel_started = _start_panel()
+    panel_port = _get_panel_port()
+    if panel_started and HEALTH_PORT == panel_port:
+        log.info(f"הפאנל רץ על פורט {HEALTH_PORT} — שרת health נפרד לא נדרש")
+    else:
+        start_health_server()
     log.info(
         f"מתחיל. סבב כל {INTERVAL_MINUTES} דקות. "
         f"LOG_LEVEL={os.environ.get('LOG_LEVEL', 'DEBUG')} "
