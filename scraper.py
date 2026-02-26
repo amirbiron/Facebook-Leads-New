@@ -229,6 +229,46 @@ def extract_post_id(url: str) -> str:
             return match.group(1)
     return url[-20:]
 
+def _is_post_url(href: str) -> bool:
+    """בודק אם URL הוא קישור לפוסט ספציפי (לא לקבוצה בלבד)."""
+    post_patterns = ["/posts/", "/permalink/", "story_fbid", "/story.php", "multi_permalinks", "/p/"]
+    return any(p in href for p in post_patterns)
+
+async def _extract_post_url(el, fallback_url: str) -> str:
+    """מחלץ URL לפוסט מתוך אלמנט — מנסה מספר אסטרטגיות."""
+    # אסטרטגיה 1: סלקטורים ישירים לקישורי פוסטים
+    direct_selectors = [
+        "a[href*='/posts/']",
+        "a[href*='story_fbid']",
+        "a[href*='permalink']",
+        "a[href*='/story.php']",
+        "a[href*='multi_permalinks']",
+    ]
+    for sel in direct_selectors:
+        link = await el.query_selector(sel)
+        if link:
+            href = await link.get_attribute("href")
+            if href:
+                return href if href.startswith("http") else f"https://m.facebook.com{href}"
+
+    # אסטרטגיה 2: סריקת כל הלינקים — מחפש כל URL שמכיל מזהה פוסט
+    all_links = await el.query_selector_all("a[href]")
+    for a in all_links:
+        href = await a.get_attribute("href") or ""
+        if _is_post_url(href):
+            return href if href.startswith("http") else f"https://m.facebook.com{href}"
+
+    # אסטרטגיה 3: לינק חותמת זמן — במובייל, הזמן ("12 שעות") הוא לינק לפוסט
+    for a in all_links:
+        href = await a.get_attribute("href") or ""
+        text = (await a.inner_text()).strip() if a else ""
+        # חותמת זמן: "12 שעות", "3 ימים", "דקה", "אתמול" וכו'
+        if re.search(r'\d+\s*(שע|דק|יו|שני|חוד)', text) or text in ("עכשיו", "אתמול"):
+            if "/groups/" in href:
+                return href if href.startswith("http") else f"https://m.facebook.com{href}"
+
+    return fallback_url
+
 async def scrape_group(page, group: dict) -> list[dict]:
     posts = []
     log.info(f">>> סורק קבוצה: {group['name']}")
@@ -244,14 +284,16 @@ async def scrape_group(page, group: dict) -> list[dict]:
             log.warning("הועברנו לדף לוגין — ייתכן שהסשן פג!")
             return posts
 
-        # ניסיון לחלץ את שם הקבוצה האמיתי מהדף
+        # חילוץ שם הקבוצה מכותרת הדף (אמין יותר מסלקטורים בתוך ה-DOM)
+        group_name = group["name"]
         try:
-            title_el = await page.query_selector("h1, h3, [data-nt='FB:TEXT4']")
-            if title_el:
-                real_name = (await title_el.inner_text()).strip()
-                if real_name and real_name != group["name"]:
-                    log.debug(f"שם קבוצה עודכן: {group['name']} → {real_name}")
-                    group["name"] = real_name
+            page_title = await page.title()
+            # כותרת דף בפייסבוק: "שם הקבוצה | Facebook" או "שם הקבוצה"
+            if page_title and " | " in page_title:
+                extracted = page_title.split(" | ")[0].strip()
+                if extracted and "אינו נתמך" not in extracted and len(extracted) > 2:
+                    group_name = extracted
+                    log.debug(f"שם קבוצה מכותרת הדף: {group_name}")
         except Exception:
             pass
 
@@ -270,9 +312,9 @@ async def scrape_group(page, group: dict) -> list[dict]:
             log.debug(f"fallback מצא {len(post_elements)} אלמנטים (dir=auto)")
 
         if not post_elements:
-            log.warning(f"לא נמצאו אלמנטים בכלל בקבוצה: {group['name']}")
+            log.warning(f"לא נמצאו אלמנטים בכלל בקבוצה: {group_name}")
             try:
-                await page.screenshot(path=f"data/debug_{group['name'][:20]}.png")
+                await page.screenshot(path=f"data/debug_{group_name[:20]}.png")
             except Exception:
                 pass
 
@@ -296,37 +338,7 @@ async def scrape_group(page, group: dict) -> list[dict]:
 
                 post_url = group["url"]
                 try:
-                    # סלקטורים מרובים — כולל מבנה מובייל
-                    link_selectors = [
-                        "a[href*='/posts/']",
-                        "a[href*='story_fbid']",
-                        "a[href*='permalink']",
-                        "a[href*='/story.php']",
-                        "a[href*='multi_permalinks']",
-                        "a[href*='/p/']",
-                    ]
-                    found_link = None
-                    for sel in link_selectors:
-                        found_link = await el.query_selector(sel)
-                        if found_link:
-                            break
-
-                    # fallback — קישור עם חותמת זמן (בד\"כ לינק לפוסט במובייל)
-                    if not found_link:
-                        all_links = await el.query_selector_all("a[href]")
-                        for a in all_links:
-                            href = await a.get_attribute("href") or ""
-                            if "/groups/" in href and ("/posts/" in href or "/permalink/" in href or "story_fbid" in href):
-                                found_link = a
-                                break
-
-                    if found_link:
-                        href = await found_link.get_attribute("href")
-                        if href:
-                            if href.startswith("http"):
-                                post_url = href
-                            elif href.startswith("/"):
-                                post_url = f"https://m.facebook.com{href}"
+                    post_url = await _extract_post_url(el, group["url"])
                 except Exception:
                     pass
 
@@ -336,7 +348,7 @@ async def scrape_group(page, group: dict) -> list[dict]:
                     "id": post_id,
                     "content": text,
                     "url": post_url,
-                    "group": group["name"]
+                    "group": group_name
                 })
 
             except Exception as e:
@@ -350,7 +362,7 @@ async def scrape_group(page, group: dict) -> list[dict]:
     except Exception as e:
         log.error(f"שגיאה בקבוצה {group['name']}: {e}", exc_info=True)
 
-    log.info(f"<<< נמצאו {len(posts)} פוסטים ב-{group['name']}")
+    log.info(f"<<< נמצאו {len(posts)} פוסטים ב-{group_name}")
     return posts
 
 async def scrape_all(email: str, password: str) -> list[dict]:
