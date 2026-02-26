@@ -393,16 +393,18 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             extracted = _extract_name_from_title(page_title)
             if extracted:
                 group_name = extracted
-                log.debug(f"שם קבוצה מכותרת הדף: {group_name}")
                 # עדכון שם הקבוצה ב-DB כדי שישתמר לסבבים הבאים
                 if group_name != group["name"]:
                     try:
                         from database import update_group_name
                         update_group_name(group["url"], group_name)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                        log.info(f"שם קבוצה עודכן: {group['name']} → {group_name}")
+                    except Exception as e:
+                        log.warning(f"נכשל עדכון שם קבוצה ב-DB: {e}")
+            else:
+                log.warning(f"לא הצלחתי לחלץ שם קבוצה מכותרת הדף: '{page_title}'")
+        except Exception as e:
+            log.warning(f"שגיאה בחילוץ כותרת דף לקבוצה {group['url']}: {e}")
 
         await random_delay(2, 4)
 

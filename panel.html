@@ -1155,7 +1155,11 @@
         item.className = 'group-item';
         const info = document.createElement('div');
         info.className = 'group-info';
-        info.innerHTML = `<div class="group-name">${escapeHtml(g.name)}</div>
+        const isPending = /^\d+$/.test(g.name);
+        const displayName = isPending
+          ? `${escapeHtml(g.name)} <span style="opacity:.55;font-size:.85em">(יעודכן בסריקה הבאה)</span>`
+          : escapeHtml(g.name);
+        info.innerHTML = `<div class="group-name">${displayName}</div>
           <div class="group-url">${escapeHtml(g.url)}</div>`;
         const btn = document.createElement('button');
         btn.className = 'group-delete';
