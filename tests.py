@@ -356,6 +356,18 @@ class TestGroupsCRUD:
         groups = database.get_db_groups()
         assert groups[0]["url"] == "https://m.facebook.com/groups/12345"
 
+    def test_url_normalization_bare_domain_with_scheme(self, tmp_db):
+        """facebook.com (ללא www) עם סכמה צריך להיות m.facebook.com."""
+        database.add_group("https://facebook.com/groups/88888")
+        groups = database.get_db_groups()
+        assert groups[0]["url"] == "https://m.facebook.com/groups/88888"
+
+    def test_url_normalization_bare_domain_without_scheme(self, tmp_db):
+        """facebook.com (ללא www) בלי סכמה צריך להיות m.facebook.com."""
+        database.add_group("facebook.com/groups/99999")
+        groups = database.get_db_groups()
+        assert groups[0]["url"] == "https://m.facebook.com/groups/99999"
+
     def test_never_configured_returns_none(self, tmp_db):
         assert database.get_db_groups() is None
 

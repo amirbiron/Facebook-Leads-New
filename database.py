@@ -103,6 +103,8 @@ def _normalize_group_url(raw_url: str) -> str:
         else:
             url = "https://m.facebook.com/groups/" + url
     url = url.replace("www.facebook.com", "m.facebook.com")
+    # טיפול בדומיין חשוף (facebook.com ללא subdomain)
+    url = url.replace("://facebook.com", "://m.facebook.com")
     return url
 
 def _extract_group_name(url: str) -> str:
