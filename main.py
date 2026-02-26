@@ -750,17 +750,32 @@ def _get_panel_port() -> int:
 
 def _start_panel() -> bool:
     """מפעיל פאנל הגדרות כ-daemon thread (אם Flask מותקן).
-    מחזיר True אם הפאנל הופעל בהצלחה.
+    מחזיר True רק אם Flask הצליח לעשות bind לפורט.
     """
     panel_port = _get_panel_port()
     try:
         from panel import create_app
         app = create_app()
-        t = threading.Thread(
-            target=lambda: app.run(host="0.0.0.0", port=panel_port, debug=False, use_reloader=False),
-            daemon=True,
-        )
+        # app.run() חוסם כשהשרת רץ. אם הוא נופל (port conflict וכו'),
+        # ה-thread יוצא ו-bind_failed מסומן. ממתינים עד שנייה לוודא bind הצליח.
+        bind_failed = threading.Event()
+        bind_error: list = [None]
+
+        def run():
+            try:
+                app.run(host="0.0.0.0", port=panel_port, debug=False, use_reloader=False)
+            except Exception as e:
+                bind_error[0] = e
+            finally:
+                bind_failed.set()
+
+        t = threading.Thread(target=run, daemon=True)
         t.start()
+        # אם app.run() הצליח, הוא חוסם לנצח ו-bind_failed לעולם לא מסומן.
+        # אם נכשל, ה-thread יוצא מהר ו-bind_failed מסומן.
+        if bind_failed.wait(timeout=1.0):
+            log.warning(f"פאנל הגדרות נכשל בהפעלה: {bind_error[0]}")
+            return False
         log.info(f"פאנל הגדרות רץ על פורט {panel_port}")
         return True
     except ImportError:
