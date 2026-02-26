@@ -7,8 +7,8 @@ log = get_logger("Classifier")
 
 client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY"))
 
-# קריטריוני סיווג משותפים — מקום אחד לעדכון
-_CLASSIFICATION_CRITERIA = """אתה מסנן לידים לפרילנסר מפתח ישראלי.
+# קריטריוני סיווג — ברירת מחדל (ניתן לעדכן דרך הפאנל)
+_CLASSIFICATION_CRITERIA_DEFAULT = """אתה מסנן לידים לפרילנסר מפתח ישראלי.
 תפקידך: לזהות פוסטים בקבוצות פייסבוק שבהם עסק קטן או בעל עסק קטן מחפש מפתח שיבנה לו משהו.
 
 רלוונטי = כן אם:
@@ -24,12 +24,28 @@ _CLASSIFICATION_CRITERIA = """אתה מסנן לידים לפרילנסר מפת
 - שיתוף מאמר / כלי / תוכן
 - דיון כללי על AI או פיתוח"""
 
-SYSTEM_PROMPT = _CLASSIFICATION_CRITERIA + """
+
+def _get_classification_criteria() -> str:
+    """טוען קריטריוני סיווג מ-DB עם fallback לברירת מחדל."""
+    try:
+        from database import get_config
+        custom = get_config("classification_criteria")
+        if custom.strip():
+            return custom
+    except Exception:
+        pass
+    return _CLASSIFICATION_CRITERIA_DEFAULT
+
+
+def _build_system_prompt() -> str:
+    return _get_classification_criteria() + """
 
 החזר JSON בלבד, ללא טקסט נוסף:
 {"relevant": true/false, "reason": "משפט קצר בעברית"}"""
 
-BATCH_SYSTEM_PROMPT = _CLASSIFICATION_CRITERIA + """
+
+def _build_batch_system_prompt() -> str:
+    return _get_classification_criteria() + """
 
 תקבל מספר פוסטים ממוספרים. החזר מערך JSON בלבד, ללא טקסט נוסף.
 כל איבר במערך מתאים לפוסט לפי הסדר:
@@ -42,7 +58,7 @@ def classify_post(content: str, group_name: str) -> dict:
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=100,
-            system=SYSTEM_PROMPT,
+            system=_build_system_prompt(),
             messages=[
                 {
                     "role": "user",
@@ -111,7 +127,7 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
             message = client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=150 * len(batch),
-                system=BATCH_SYSTEM_PROMPT,
+                system=_build_batch_system_prompt(),
                 messages=[{"role": "user", "content": user_message}],
             )
 

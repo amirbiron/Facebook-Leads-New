@@ -23,3 +23,5 @@ services:
         value: "DEBUG"
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: PANEL_PORT
+        value: "8501"

@@ -11,6 +11,7 @@ from database import (
     init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats,
     cleanup_old_posts, add_group, remove_group, get_db_groups,
     add_keyword, remove_keyword, get_db_keywords,
+    get_config,
 )
 from logger import get_logger
 
@@ -546,6 +547,42 @@ def start_health_server(port: int = HEALTH_PORT):
     return server
 
 
+def _load_interval_from_db() -> int:
+    """טוען תדירות סריקה מ-DB עם fallback למשתנה סביבה."""
+    val = get_config("interval_minutes")
+    if val and val.strip().isdigit():
+        return int(val)
+    return INTERVAL_MINUTES
+
+def _load_quiet_hours_from_db() -> tuple[time, time] | None:
+    """טוען שעות שקטות מ-DB עם fallback למשתנה סביבה."""
+    spec = get_config("quiet_hours") or QUIET_HOURS
+    if not spec or not spec.strip():
+        return None
+    try:
+        return _parse_quiet_hours(spec)
+    except Exception as e:
+        log.error(f"QUIET_HOURS לא תקין ({spec}) — מתעלם. שגיאה: {e}")
+        return None
+
+def _start_panel():
+    """מפעיל פאנל הגדרות כ-daemon thread (אם Flask מותקן)."""
+    panel_port = int(os.environ.get("PANEL_PORT", "8501"))
+    try:
+        from panel import create_app
+        app = create_app()
+        t = threading.Thread(
+            target=lambda: app.run(host="0.0.0.0", port=panel_port, debug=False, use_reloader=False),
+            daemon=True,
+        )
+        t.start()
+        log.info(f"פאנל הגדרות רץ על פורט {panel_port}")
+    except ImportError:
+        log.debug("Flask לא מותקן — פאנל הגדרות לא יופעל")
+    except Exception as e:
+        log.warning(f"לא ניתן להפעיל פאנל הגדרות: {e}")
+
+
 _shutting_down = False
 
 def handle_signal(sig, frame):
@@ -583,13 +620,17 @@ async def run_cycle():
     except Exception as e:
         log.warning(f"ניקוי פוסטים ישנים נכשל (ממשיכים בסריקה): {e}")
 
-    if not FB_EMAIL or not FB_PASSWORD:
+    # טעינת credentials מ-DB עם fallback למשתני סביבה
+    fb_email = get_config("fb_email") or FB_EMAIL
+    fb_password = get_config("fb_password") or FB_PASSWORD
+
+    if not fb_email or not fb_password:
         log.error("חסרים FB_EMAIL או FB_PASSWORD — לא ניתן לסרוק")
         return
 
     # שלב 1 — גרידה (דפדפן פתוח)
     try:
-        posts = await scrape_all(FB_EMAIL, FB_PASSWORD, seen_checker=is_seen)
+        posts = await scrape_all(fb_email, fb_password, seen_checker=is_seen)
         log.info(f"סך הכל פוסטים שנמצאו: {len(posts)}")
     except Exception as e:
         log.error(f"שגיאה בגרידה: {e}", exc_info=True)
@@ -663,6 +704,7 @@ async def main():
     log.info("מאתחל מסד נתונים...")
     init_db()
     start_health_server()
+    _start_panel()
     log.info(
         f"מתחיל. סבב כל {INTERVAL_MINUTES} דקות. "
         f"LOG_LEVEL={os.environ.get('LOG_LEVEL', 'DEBUG')} "
@@ -670,13 +712,7 @@ async def main():
         f"BLOCK_KEYWORDS={', '.join(BLOCK_KEYWORDS) if BLOCK_KEYWORDS else '(disabled)'}"
     )
 
-    quiet = None
-    if QUIET_HOURS:
-        try:
-            quiet = _parse_quiet_hours(QUIET_HOURS)
-        except Exception as e:
-            log.error(f"QUIET_HOURS לא תקין ({QUIET_HOURS}) — מתעלם. שגיאה: {e}")
-            quiet = None
+    quiet = _load_quiet_hours_from_db()
 
     scan_now_event = asyncio.Event()
     scan_force_event = asyncio.Event()
@@ -710,6 +746,10 @@ async def main():
         )
 
     while True:
+        # טעינה מחדש של הגדרות מהפאנל (interval, quiet hours)
+        interval = _load_interval_from_db()
+        quiet = _load_quiet_hours_from_db()
+
         try:
             did_scan = False
             if scan_now_event.is_set():
@@ -728,11 +768,12 @@ async def main():
 
             if not did_scan:
                 now = _now_local()
+                quiet_spec = get_config("quiet_hours") or QUIET_HOURS
                 if quiet and _is_quiet_now(now, quiet):
                     secs = _seconds_until_quiet_end(now, quiet)
                     sleep_for = max(60, min(int(secs) + 1, 12 * 60 * 60))
                     log.info(
-                        f"שעות שקטות פעילות ({QUIET_HOURS}, {TIMEZONE_NAME}) — "
+                        f"שעות שקטות פעילות ({quiet_spec}, {TIMEZONE_NAME}) — "
                         f"מדלג על סריקה. ישן {sleep_for//60} דקות (או /scan_force)."
                     )
                     try:
@@ -750,9 +791,9 @@ async def main():
             except Exception:
                 pass
 
-        log.info(f"ממתין {INTERVAL_MINUTES} דקות לסבב הבא... (או /scan)")
+        log.info(f"ממתין {interval} דקות לסבב הבא... (או /scan)")
         try:
-            await asyncio.wait_for(scan_now_event.wait(), timeout=INTERVAL_MINUTES * 60)
+            await asyncio.wait_for(scan_now_event.wait(), timeout=interval * 60)
         except asyncio.TimeoutError:
             pass
 

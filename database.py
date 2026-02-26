@@ -196,6 +196,23 @@ def get_db_keywords(kw_type: str) -> list[str] | None:
     ).fetchall()
     return [r[0] for r in rows]
 
+# ── Config (key-value) ────────────────────────────────────────
+
+def get_config(key: str, default: str = "") -> str:
+    """מחזיר ערך מטבלת _config, או ברירת מחדל."""
+    row = _get_conn().execute(
+        "SELECT value FROM _config WHERE key = ?", (key,)
+    ).fetchone()
+    return row[0] if row else default
+
+def set_config(key: str, value: str):
+    """שומר ערך בטבלת _config (מחליף אם קיים)."""
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO _config (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+
 # ── Cleanup ───────────────────────────────────────────────────
 def cleanup_old_posts(days: int = 30) -> int:
     """מוחק רשומות ישנות מטבלת seen_posts (ברירת מחדל: מעל 30 יום)."""

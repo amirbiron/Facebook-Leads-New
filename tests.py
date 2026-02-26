@@ -721,3 +721,192 @@ class TestHealthServer:
             assert resp.status == 200
         finally:
             server.shutdown()
+
+
+# ──────────────────────────────────────────────────────────────
+# 11. Database — get_config / set_config
+# ──────────────────────────────────────────────────────────────
+
+
+class TestConfigCRUD:
+    def test_get_config_default(self, tmp_db):
+        assert database.get_config("nonexistent") == ""
+
+    def test_get_config_custom_default(self, tmp_db):
+        assert database.get_config("nonexistent", "fallback") == "fallback"
+
+    def test_set_and_get_config(self, tmp_db):
+        database.set_config("fb_email", "test@example.com")
+        assert database.get_config("fb_email") == "test@example.com"
+
+    def test_set_config_overwrites(self, tmp_db):
+        database.set_config("interval", "10")
+        database.set_config("interval", "20")
+        assert database.get_config("interval") == "20"
+
+    def test_set_config_does_not_break_feature_flags(self, tmp_db):
+        """set_config לא צריך לשבור את _feature_was_configured."""
+        database.set_config("custom_key", "value")
+        database.add_group("https://m.facebook.com/groups/123")
+        assert database._feature_was_configured("groups") is True
+        assert database.get_config("custom_key") == "value"
+
+
+# ──────────────────────────────────────────────────────────────
+# 12. Panel API
+# ──────────────────────────────────────────────────────────────
+
+from panel import create_app
+
+
+@pytest.fixture
+def panel_client(tmp_db):
+    """Flask test client עם DB זמני."""
+    app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as client:
+        yield client
+
+
+class TestPanelAPI:
+    def test_get_settings(self, panel_client):
+        resp = panel_client.get("/api/settings")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "fb_email" in data
+        assert "classification_criteria" in data
+        assert "interval_minutes" in data
+
+    def test_put_settings(self, panel_client):
+        resp = panel_client.put("/api/settings", json={
+            "fb_email": "new@test.com",
+            "interval_minutes": "15",
+        })
+        assert resp.status_code == 200
+        assert resp.get_json()["ok"] is True
+        # ערכים נשמרו
+        resp2 = panel_client.get("/api/settings")
+        data = resp2.get_json()
+        assert data["fb_email"] == "new@test.com"
+        assert data["interval_minutes"] == "15"
+
+    def test_get_groups_default(self, panel_client):
+        resp = panel_client.get("/api/groups")
+        data = resp.get_json()
+        assert data["source"] == "default"
+        assert len(data["groups"]) > 0
+
+    def test_add_and_list_groups(self, panel_client):
+        resp = panel_client.post("/api/groups", json={"url": "https://facebook.com/groups/111"})
+        assert resp.get_json()["ok"] is True
+        resp2 = panel_client.get("/api/groups")
+        data = resp2.get_json()
+        assert data["source"] == "custom"
+        assert any("111" in g["url"] for g in data["groups"])
+
+    def test_delete_group(self, panel_client):
+        panel_client.post("/api/groups", json={"url": "https://m.facebook.com/groups/222"})
+        resp = panel_client.delete("/api/groups", json={"url": "https://m.facebook.com/groups/222"})
+        assert resp.get_json()["ok"] is True
+
+    def test_add_empty_group_rejected(self, panel_client):
+        resp = panel_client.post("/api/groups", json={"url": ""})
+        assert resp.status_code == 400
+
+    def test_get_keywords_default(self, panel_client):
+        resp = panel_client.get("/api/keywords/pre_filter")
+        data = resp.get_json()
+        assert data["source"] == "default"
+        assert len(data["keywords"]) > 0
+
+    def test_add_and_list_keywords(self, panel_client):
+        resp = panel_client.post("/api/keywords/pre_filter", json={"word": "טסט"})
+        assert resp.get_json()["ok"] is True
+        resp2 = panel_client.get("/api/keywords/pre_filter")
+        data = resp2.get_json()
+        assert data["source"] == "custom"
+        assert "טסט" in data["keywords"]
+
+    def test_delete_keyword(self, panel_client):
+        panel_client.post("/api/keywords/block", json={"word": "ספאם"})
+        resp = panel_client.delete("/api/keywords/block", json={"word": "ספאם"})
+        assert resp.get_json()["ok"] is True
+
+    def test_invalid_keyword_type(self, panel_client):
+        resp = panel_client.get("/api/keywords/invalid")
+        assert resp.status_code == 400
+
+    def test_add_empty_keyword_rejected(self, panel_client):
+        resp = panel_client.post("/api/keywords/pre_filter", json={"word": ""})
+        assert resp.status_code == 400
+
+
+# ──────────────────────────────────────────────────────────────
+# 13. Classifier — dynamic criteria loading
+# ──────────────────────────────────────────────────────────────
+
+
+class TestClassifierDynamicCriteria:
+    def test_default_criteria(self, tmp_db):
+        from classifier import _get_classification_criteria, _CLASSIFICATION_CRITERIA_DEFAULT
+        result = _get_classification_criteria()
+        assert result == _CLASSIFICATION_CRITERIA_DEFAULT
+
+    def test_custom_criteria_from_db(self, tmp_db):
+        from classifier import _get_classification_criteria
+        database.set_config("classification_criteria", "קריטריונים מותאמים אישית")
+        result = _get_classification_criteria()
+        assert result == "קריטריונים מותאמים אישית"
+
+    def test_empty_criteria_falls_back_to_default(self, tmp_db):
+        from classifier import _get_classification_criteria, _CLASSIFICATION_CRITERIA_DEFAULT
+        database.set_config("classification_criteria", "  ")
+        result = _get_classification_criteria()
+        assert result == _CLASSIFICATION_CRITERIA_DEFAULT
+
+    def test_build_system_prompt_includes_json_instruction(self, tmp_db):
+        from classifier import _build_system_prompt
+        prompt = _build_system_prompt()
+        assert "JSON" in prompt
+        assert "relevant" in prompt
+
+    def test_build_batch_prompt_includes_array_instruction(self, tmp_db):
+        from classifier import _build_batch_system_prompt
+        prompt = _build_batch_system_prompt()
+        assert "מערך JSON" in prompt
+
+
+# ──────────────────────────────────────────────────────────────
+# 14. Main — dynamic settings loading
+# ──────────────────────────────────────────────────────────────
+
+from main import _load_interval_from_db, _load_quiet_hours_from_db
+
+
+class TestDynamicSettings:
+    def test_interval_from_db(self, tmp_db):
+        database.set_config("interval_minutes", "25")
+        assert _load_interval_from_db() == 25
+
+    def test_interval_fallback_to_env(self, tmp_db):
+        # אין ערך ב-DB — fallback למשתנה סביבה (INTERVAL_MINUTES)
+        result = _load_interval_from_db()
+        assert isinstance(result, int)
+        assert result > 0
+
+    def test_quiet_hours_from_db(self, tmp_db):
+        database.set_config("quiet_hours", "22:00-06:00")
+        result = _load_quiet_hours_from_db()
+        assert result is not None
+        assert result[0].hour == 22
+        assert result[1].hour == 6
+
+    def test_quiet_hours_empty_returns_none(self, tmp_db):
+        database.set_config("quiet_hours", "")
+        result = _load_quiet_hours_from_db()
+        assert result is None
+
+    def test_quiet_hours_invalid_returns_none(self, tmp_db):
+        database.set_config("quiet_hours", "invalid")
+        result = _load_quiet_hours_from_db()
+        assert result is None
