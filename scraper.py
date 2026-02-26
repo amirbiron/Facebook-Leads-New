@@ -71,6 +71,16 @@ async def _async_fetch_group_name(url: str) -> str | None:
                     log.debug("דף לוגין — לא ניתן לחלץ שם קבוצה בלי סשן תקין")
                     return None
 
+                # פייסבוק הוא SPA — הכותרת מתעדכנת ע"י JS אחרי domcontentloaded.
+                # ממתינים עד שהכותרת מכילה " | " (פורמט: "שם קבוצה | Facebook")
+                try:
+                    await page.wait_for_function(
+                        "() => document.title.includes(' | ')",
+                        timeout=10000,
+                    )
+                except PlaywrightTimeout:
+                    log.debug("timeout בהמתנה לכותרת דף — ממשיך עם מה שיש")
+
                 page_title = await page.title()
                 return _extract_name_from_title(page_title)
             finally:
