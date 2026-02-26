@@ -275,3 +275,147 @@ class TestClassifyPost:
         result = classify_post("פוסט", "קבוצה")
         assert result["relevant"] is False
         assert "API" in result["reason"]
+
+
+# ──────────────────────────────────────────────────────────────
+# 7. Database — Groups CRUD
+# ──────────────────────────────────────────────────────────────
+
+import sqlite3
+import tempfile
+from pathlib import Path
+
+import database
+
+
+@pytest.fixture
+def tmp_db(monkeypatch, tmp_path):
+    """יוצר DB זמני לבדיקות."""
+    db_path = tmp_path / "test.db"
+    monkeypatch.setattr(database, "DB_PATH", db_path)
+    # ניקוי חיבור thread-local קיים כדי שייפתח מחדש עם הנתיב החדש
+    if hasattr(database._local, "conn"):
+        del database._local.conn
+    database.init_db()
+    yield db_path
+    if hasattr(database._local, "conn"):
+        del database._local.conn
+
+
+class TestGroupsCRUD:
+    def test_add_group(self, tmp_db):
+        ok, msg = database.add_group("https://www.facebook.com/groups/12345")
+        assert ok is True
+        assert "נוספה" in msg
+
+    def test_add_group_duplicate(self, tmp_db):
+        database.add_group("https://m.facebook.com/groups/12345")
+        ok, msg = database.add_group("https://m.facebook.com/groups/12345")
+        assert ok is False
+        assert "כבר קיימת" in msg
+
+    def test_remove_group(self, tmp_db):
+        database.add_group("https://m.facebook.com/groups/99999")
+        ok, msg = database.remove_group("https://m.facebook.com/groups/99999")
+        assert ok is True
+        assert "הוסרה" in msg
+
+    def test_remove_group_not_found(self, tmp_db):
+        ok, msg = database.remove_group("https://m.facebook.com/groups/nonexistent")
+        assert ok is False
+        assert "לא נמצאה" in msg
+
+    def test_get_db_groups(self, tmp_db):
+        database.add_group("https://m.facebook.com/groups/111")
+        database.add_group("https://m.facebook.com/groups/222")
+        groups = database.get_db_groups()
+        assert len(groups) == 2
+        assert groups[0]["name"] == "111"
+        assert "m.facebook.com" in groups[0]["url"]
+
+    def test_url_normalization(self, tmp_db):
+        database.add_group("https://www.facebook.com/groups/55555/")
+        groups = database.get_db_groups()
+        assert "m.facebook.com" in groups[0]["url"]
+        assert not groups[0]["url"].endswith("/")
+
+
+# ──────────────────────────────────────────────────────────────
+# 8. Database — Keywords CRUD
+# ──────────────────────────────────────────────────────────────
+
+
+class TestKeywordsCRUD:
+    def test_add_pre_filter_keyword(self, tmp_db):
+        ok, msg = database.add_keyword("חדש", "pre_filter")
+        assert ok is True
+        assert "מילת מפתח" in msg
+
+    def test_add_block_keyword(self, tmp_db):
+        ok, msg = database.add_keyword("ספאם", "block")
+        assert ok is True
+        assert "מילה חסומה" in msg
+
+    def test_add_duplicate_keyword(self, tmp_db):
+        database.add_keyword("בוט", "pre_filter")
+        ok, msg = database.add_keyword("בוט", "pre_filter")
+        assert ok is False
+        assert "כבר קיימת" in msg
+
+    def test_same_word_different_types(self, tmp_db):
+        ok1, _ = database.add_keyword("מילה", "pre_filter")
+        ok2, _ = database.add_keyword("מילה", "block")
+        assert ok1 is True
+        assert ok2 is True
+
+    def test_remove_keyword(self, tmp_db):
+        database.add_keyword("למחוק", "block")
+        ok, msg = database.remove_keyword("למחוק", "block")
+        assert ok is True
+        assert "הוסרה" in msg
+
+    def test_remove_keyword_not_found(self, tmp_db):
+        ok, msg = database.remove_keyword("אין", "block")
+        assert ok is False
+        assert "לא נמצאה" in msg
+
+    def test_get_db_keywords(self, tmp_db):
+        database.add_keyword("בוט", "pre_filter")
+        database.add_keyword("סקריפט", "pre_filter")
+        database.add_keyword("ספאם", "block")
+        pf = database.get_db_keywords("pre_filter")
+        bl = database.get_db_keywords("block")
+        assert pf == ["בוט", "סקריפט"]
+        assert bl == ["ספאם"]
+
+    def test_empty_word_rejected(self, tmp_db):
+        ok, msg = database.add_keyword("", "pre_filter")
+        assert ok is False
+        assert "ריקה" in msg
+
+    def test_keyword_lowercased(self, tmp_db):
+        database.add_keyword("SPAM", "block")
+        kws = database.get_db_keywords("block")
+        assert kws == ["spam"]
+
+
+# ──────────────────────────────────────────────────────────────
+# 9. reload_keywords
+# ──────────────────────────────────────────────────────────────
+
+
+class TestReloadKeywords:
+    def test_reload_from_db(self, tmp_db):
+        from main import reload_keywords
+        database.add_keyword("חדשה", "pre_filter")
+        database.add_keyword("חסימה", "block")
+        reload_keywords()
+        from main import PRE_FILTER_KEYWORDS, BLOCK_KEYWORDS
+        assert "חדשה" in PRE_FILTER_KEYWORDS
+        assert "חסימה" in BLOCK_KEYWORDS
+
+    def test_fallback_to_defaults_when_db_empty(self, tmp_db):
+        from main import reload_keywords, _PRE_FILTER_KEYWORDS_DEFAULT
+        reload_keywords()
+        from main import PRE_FILTER_KEYWORDS
+        assert PRE_FILTER_KEYWORDS == _PRE_FILTER_KEYWORDS_DEFAULT
