@@ -354,9 +354,12 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         pass
 
                     post_id = extract_post_id(post_url)
+                    has_real_url = post_url != group["url"]
 
-                    # בדיקה אם הגענו לפוסט מסריקה קודמת — אם כן, עוצרים
-                    if seen_checker and seen_checker(post_id):
+                    # בדיקה אם הגענו לפוסט מסריקה קודמת — אם כן, עוצרים.
+                    # רק אם יש URL אמיתי לפוסט — fallback ל-URL הקבוצה מייצר
+                    # ID זהה לכל הפוסטים שנכשלים בחילוץ, ויגרום לעצירה מוקדמת שגויה.
+                    if has_real_url and seen_checker and seen_checker(post_id):
                         reached_known = True
                         log.info(f"הגענו לפוסט שכבר נראה — עוצרים גלילה (אחרי {scroll_i} גלילות)")
                         break
