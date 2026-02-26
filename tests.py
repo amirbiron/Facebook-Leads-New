@@ -1768,6 +1768,15 @@ class TestFetchGroupName:
 
         assert fetch_group_name("https://m.facebook.com/groups/123") == "קבוצה ציבורית"
 
+    def test_og_title_with_apostrophe(self, monkeypatch):
+        """שם קבוצה עם גרש (אפוסטרוף) לא נחתך."""
+        import scraper
+        fake_html = '<meta property="og:title" content="Women\'s Tech Group" />'
+        fake_resp = SimpleNamespace(text=fake_html)
+        monkeypatch.setattr(scraper._requests, "get", lambda *a, **kw: fake_resp)
+
+        assert fetch_group_name("https://m.facebook.com/groups/123") == "Women's Tech Group"
+
     def test_og_title_html_entities(self, monkeypatch):
         """HTML entities ב-og:title מפוענחים."""
         import scraper

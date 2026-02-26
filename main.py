@@ -450,6 +450,36 @@ async def _telegram_control_loop(
     except Exception:
         pass
 
+    # רישום פקודות בוט בטלגרם — כפתור "/" יציג את הפקודות הזמינות
+    try:
+        await asyncio.to_thread(
+            requests.post,
+            f"https://api.telegram.org/bot{bot_token}/setMyCommands",
+            json={"commands": [
+                {"command": "menu", "description": "תפריט ראשי עם כפתורים"},
+                {"command": "scan", "description": "סריקה עכשיו"},
+                {"command": "status", "description": "סטטוס הבוט"},
+                {"command": "groups", "description": "רשימת קבוצות"},
+                {"command": "keywords", "description": "מילות מפתח"},
+            ]},
+            timeout=10,
+        )
+        log.debug("פקודות בוט נרשמו בטלגרם")
+    except Exception:
+        pass
+
+    # שליחת תפריט ראשי בהפעלה — כדי שהכפתורים יופיעו מיד
+    for cid in allowed_chat_ids:
+        try:
+            await asyncio.to_thread(
+                send_message_with_buttons,
+                "הבוט פעיל — בחר פעולה:",
+                _main_menu_buttons(),
+                chat_id=cid,
+            )
+        except Exception:
+            pass
+
     offset = load_offset()
     log.info("בקרת טלגרם הופעלה. פקודות: /menu /scan /status")
     conflict_backoff = 5
@@ -508,10 +538,10 @@ async def _telegram_control_loop(
                 if cmd in ("/status",):
                     status_text = _build_status_text(shared_state)
                     await asyncio.to_thread(
-                        send_message,
+                        send_message_with_buttons,
                         status_text,
+                        _back_to_menu_button(),
                         chat_id=chat_id_int,
-                        disable_web_page_preview=True,
                     )
                     continue
 
@@ -562,8 +592,9 @@ async def _telegram_control_loop(
                 if cmd in ("/groups",):
                     msg_text = _build_groups_text()
                     await asyncio.to_thread(
-                        send_message, msg_text, chat_id=chat_id_int,
-                        disable_web_page_preview=True,
+                        send_message_with_buttons, msg_text,
+                        _back_to_menu_button(),
+                        chat_id=chat_id_int,
                     )
                     continue
 
@@ -619,8 +650,9 @@ async def _telegram_control_loop(
                 if cmd in ("/keywords",):
                     msg_text = _build_keywords_text()
                     await asyncio.to_thread(
-                        send_message, msg_text, chat_id=chat_id_int,
-                        disable_web_page_preview=True,
+                        send_message_with_buttons, msg_text,
+                        _back_to_menu_button(),
+                        chat_id=chat_id_int,
                     )
                     continue
 

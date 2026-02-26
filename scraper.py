@@ -68,10 +68,17 @@ def fetch_group_name(url: str) -> str | None:
         body = resp.text
 
         # אסטרטגיה 1: og:title — פייסבוק מכניס אותו ב-HTML הגולמי לצורכי SEO
+        # מחפשים תחילה עם מרכאות כפולות (הנפוץ ב-HTML), כדי לא לחתוך
+        # שמות קבוצות שמכילים גרש (אפוסטרוף), למשל: Women's Tech Group
         og_match = re.search(
-            r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']',
+            r'<meta\s+property=["\']og:title["\']\s+content="([^"]+)"',
             body, re.IGNORECASE,
         )
+        if not og_match:
+            og_match = re.search(
+                r"<meta\s+property=[\"']og:title[\"']\s+content='([^']+)'",
+                body, re.IGNORECASE,
+            )
         if og_match:
             name = html_mod.unescape(og_match.group(1).strip())
             if name and len(name) > 2 and name.lower() not in _BAD_TITLES:

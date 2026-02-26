@@ -215,7 +215,7 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
             raw_text = _chat_completion(
                 system=_build_batch_system_prompt(),
                 user=user_message,
-                max_tokens=max(1024, 300 * len(batch)),
+                max_tokens=max(1024, 500 * len(batch)),
             )
 
             log.debug(f"תשובה באצ': {raw_text[:300]}")
