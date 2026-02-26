@@ -581,6 +581,8 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             for el in post_elements:
                 try:
                     text = await asyncio.wait_for(el.inner_text(), timeout=5)
+                    # הסרת תגיות HTML שדלפו (כולל <img> עם base64)
+                    text = re.sub(r'<[^>]+>', '', text)
                     text = text.strip()
 
                     if text in seen_texts:

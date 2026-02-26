@@ -48,6 +48,9 @@ def send_message(
 
 def clean_post_content(text: str) -> str:
     """מנקה תוכן פוסט מ-Unicode פרטי של פייסבוק ורעשי UI."""
+    # הסרת תגיות HTML שדלפו (כולל <img src="data:..."> עם base64)
+    text = re.sub(r'<[^>]+>', '', text)
+
     # הסרת תווים מ-Private Use Areas (U+E000–U+F8FF, U+F0000–U+10FFFF)
     text = re.sub(r'[\uE000-\uF8FF]', '', text)
     text = re.sub(r'[\U000F0000-\U0010FFFF]', '', text)
