@@ -153,18 +153,77 @@ async def login(page, email: str, password: str):
     await email_field.fill(email)
     await random_delay(0.5, 1)
 
+    # --- ניסיון ראשון: שדה סיסמה באותו דף ---
     pass_field = None
     for selector in pass_selectors:
         try:
-            pass_field = await page.wait_for_selector(selector, timeout=10000)
+            pass_field = await page.wait_for_selector(selector, timeout=5000)
             if pass_field:
                 log.debug(f"שדה סיסמה נמצא עם: {selector}")
                 break
         except Exception:
             continue
 
+    # --- לוגין דו-שלבי: אם אין שדה סיסמה, מחפשים כפתור Next ---
     if not pass_field:
-        log.error("לא נמצא שדה סיסמה")
+        log.info("שדה סיסמה לא נמצא — מנסה לוגין דו-שלבי (Next)")
+        next_btn_selectors = [
+            "button[name='login']",
+            "input[name='login']",
+            "button[data-sigil='m_login_button']",
+            "button[type='submit']",
+            "input[type='submit']",
+            "[data-sigil='touchable m_login_button']",
+        ]
+        next_btn = None
+        for selector in next_btn_selectors:
+            try:
+                next_btn = await page.query_selector(selector)
+                if next_btn:
+                    log.debug(f"כפתור Next/Login נמצא עם: {selector}")
+                    break
+            except Exception:
+                continue
+
+        if next_btn:
+            try:
+                async with page.expect_navigation(timeout=15000):
+                    await next_btn.click()
+                log.debug("ניווט לשלב סיסמה התבצע בהצלחה")
+            except Exception:
+                log.debug("לא זוהה ניווט אחרי Next — ממתין...")
+                await asyncio.sleep(3)
+        else:
+            # אין כפתור Next — ננסה Enter על שדה האימייל
+            log.debug("לא נמצא כפתור Next — שולח Enter על שדה האימייל")
+            try:
+                async with page.expect_navigation(timeout=15000):
+                    await email_field.press("Enter")
+                log.debug("ניווט לשלב סיסמה התבצע בהצלחה (Enter)")
+            except Exception:
+                log.debug("לא זוהה ניווט אחרי Enter — ממתין...")
+                await asyncio.sleep(3)
+
+        await random_delay(1, 3)
+        await dismiss_cookie_dialog(page)
+
+        # חיפוש שדה סיסמה בדף החדש
+        for selector in pass_selectors:
+            try:
+                pass_field = await page.wait_for_selector(selector, timeout=10000)
+                if pass_field:
+                    log.debug(f"שדה סיסמה נמצא בשלב 2 עם: {selector}")
+                    break
+            except Exception:
+                continue
+
+    if not pass_field:
+        try:
+            await page.screenshot(path="data/debug_no_password_field.png")
+        except Exception:
+            pass
+        page_title = await page.title()
+        log.error(f"לא נמצא שדה סיסמה. כותרת: {page_title}, URL: {page.url}")
         raise Exception("לא נמצא שדה סיסמה בדף הלוגין")
 
     await pass_field.fill(password)
