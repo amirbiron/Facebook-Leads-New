@@ -343,9 +343,12 @@ async def run_cycle():
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
 
     # ניקוי פוסטים ישנים (מעל 30 יום) מטבלת seen_posts
-    deleted = cleanup_old_posts()
-    if deleted:
-        log.info(f"נמחקו {deleted} פוסטים ישנים מטבלת seen_posts")
+    try:
+        deleted = cleanup_old_posts()
+        if deleted:
+            log.info(f"נמחקו {deleted} פוסטים ישנים מטבלת seen_posts")
+    except Exception as e:
+        log.warning(f"ניקוי פוסטים ישנים נכשל (ממשיכים בסריקה): {e}")
 
     if not FB_EMAIL or not FB_PASSWORD:
         log.error("חסרים FB_EMAIL או FB_PASSWORD — לא ניתן לסרוק")
