@@ -182,6 +182,7 @@ def _mark_feature_configured(key: str):
 
 def update_group_name(url: str, name: str) -> bool:
     """מעדכן את שם הקבוצה ב-DB לפי URL. מחזיר True אם עודכן."""
+    url = _normalize_group_url(url)
     with _get_conn() as conn:
         updated = conn.execute(
             "UPDATE groups SET name = ? WHERE url = ?", (name, url)
