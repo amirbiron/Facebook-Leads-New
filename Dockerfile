@@ -22,7 +22,7 @@ RUN mkdir -p data
 
 ENV PYTHONUNBUFFERED=1
 
-# פאנל הגדרות — פורט 8501 (ברירת מחדל)
-EXPOSE 8501
+# פאנל הגדרות + health check — פורט 8080 (ברירת מחדל, נדרס ע"י PORT)
+EXPOSE 8080
 
 CMD ["python", "main.py"]
