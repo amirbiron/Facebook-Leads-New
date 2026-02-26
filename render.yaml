@@ -14,7 +14,7 @@ services:
       - key: TELEGRAM_CHAT_ID
         sync: false
       - key: INTERVAL_MINUTES
-        value: "10"
+        sync: false
       - key: TIMEZONE
         value: "Asia/Jerusalem"
       - key: QUIET_HOURS
