@@ -1646,4 +1646,16 @@ class TestExtractNameFromTitle:
         """כותרת עם כמה מפרידים — רק החלק הראשון."""
         assert _extract_name_from_title("שם קבוצה | תת-כותרת | Facebook") == "שם קבוצה"
 
+    def test_no_separator_valid_name(self):
+        """כותרת ללא ' | ' אבל עם שם תקין — מחזיר את השם."""
+        assert _extract_name_from_title("בניית אתרים, בוני אתרים בישראל.") == "בניית אתרים, בוני אתרים בישראל."
+
+    def test_lrm_marks_stripped(self):
+        """תווי כיווניות (LRM) מנוקים מהכותרת."""
+        assert _extract_name_from_title("\u200eשם קבוצה\u200e") == "שם קבוצה"
+
+    def test_rlm_marks_stripped(self):
+        """תווי כיווניות (RLM) מנוקים מהכותרת."""
+        assert _extract_name_from_title("\u200fשם קבוצה\u200f") == "שם קבוצה"
+
 
