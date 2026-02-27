@@ -2026,7 +2026,7 @@ class _FakeElementForStrategies:
 
     def __init__(self, *, selector_links=None, all_links=None, attrs=None,
                  inner_els=None, el_id=None, html="<div></div>",
-                 climb_result=None):
+                 climb_result=None, text=""):
         # selector_links: dict of CSS selector -> href
         self._selector_links = selector_links or {}
         # all_links: list of (href, text) — לסריקה כללית
@@ -2037,6 +2037,7 @@ class _FakeElementForStrategies:
         self._html = html
         # climb_result: תוצאת JS climbing (אסטרטגיה 6) — JSON string או None
         self._climb_result = climb_result
+        self._text = text
 
     async def query_selector(self, selector):
         if selector in self._inner_els:
@@ -2062,9 +2063,12 @@ class _FakeElementForStrategies:
     async def inner_html(self):
         return self._html
 
+    async def inner_text(self):
+        return self._text
+
 
 class TestExtractPostUrl:
-    """טסטים ל-_extract_post_url — כל 6 האסטרטגיות."""
+    """טסטים ל-_extract_post_url — כל 7 האסטרטגיות."""
 
     FALLBACK = "https://m.facebook.com/groups/123/"
 
@@ -2275,6 +2279,65 @@ class TestExtractPostUrl:
         result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
         assert result == self.FALLBACK
         assert get_extraction_stats()["fallback"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy7_page_level_match(self):
+        """אסטרטגיה 7 — התאמה לקישור מסריקת דף לפי תוכן טקסט."""
+        reset_extraction_stats()
+        post_text = "אני מחפש מפתח Fullstack עם ניסיון בפרויקטים גדולים ומורכבים"
+        page_urls = [
+            {"url": "https://m.facebook.com/share/p/ABC123/",
+             "text": f"דוד כהן\n3 שעות\n{post_text}\n5 תגובות"},
+        ]
+        el = _FakeElementForStrategies(climb_result=None, text=post_text)
+        result = await _extract_post_url(
+            el, self.FALLBACK, dump_on_fail=False, page_urls=page_urls
+        )
+        assert result == "https://m.facebook.com/share/p/ABC123/"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy7_no_match_falls_to_fallback(self):
+        """אסטרטגיה 7 — אם טקסט האלמנט לא נמצא בסריקת הדף, fallback."""
+        reset_extraction_stats()
+        page_urls = [
+            {"url": "https://m.facebook.com/share/p/ABC123/",
+             "text": "טקסט שונה לגמרי מהאלמנט"},
+        ]
+        el = _FakeElementForStrategies(
+            climb_result=None, text="תוכן ייחודי שלא מופיע בשום מקום אחר בדף"
+        )
+        result = await _extract_post_url(
+            el, self.FALLBACK, dump_on_fail=False, page_urls=page_urls
+        )
+        assert result == self.FALLBACK
+        assert get_extraction_stats()["fallback"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy7_short_text_skipped(self):
+        """אסטרטגיה 7 — טקסט קצר מ-30 תווים לא מנסה התאמה (למנוע false positive)."""
+        reset_extraction_stats()
+        page_urls = [
+            {"url": "https://m.facebook.com/share/p/ABC123/",
+             "text": "כותרת קצרה"},
+        ]
+        el = _FakeElementForStrategies(
+            climb_result=None, text="כותרת קצרה"
+        )
+        result = await _extract_post_url(
+            el, self.FALLBACK, dump_on_fail=False, page_urls=page_urls
+        )
+        assert result == self.FALLBACK
+
+    @pytest.mark.asyncio
+    async def test_strategy7_empty_page_urls(self):
+        """אסטרטגיה 7 — רשימה ריקה לא משנה התנהגות."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(climb_result=None, text="טקסט ארוך מספיק לבדיקה")
+        result = await _extract_post_url(
+            el, self.FALLBACK, dump_on_fail=False, page_urls=[]
+        )
+        assert result == self.FALLBACK
 
 
 # ──────────────────────────────────────────────────────────────
