@@ -19,6 +19,35 @@ SESSION_FILE = Path("data/fb_session.json")
 _BAD_TITLES = {"facebook", "content not found", "page not found",
                "error", "log in", "התחברות", "תוכן לא נמצא", "שגיאה"}
 
+# ביטויים דינאמיים שמשתנים בין סריקות — מוסרים לפני חישוב hash
+_TIMESTAMP_RE = re.compile(
+    r'(לפני\s+)?\d+\s*(שע|דק|יו|שני|חוד|שבוע|min|hr|hour|day|wk|month)\w*'
+    r'|^\d+\s*[hdmwHDMW]$'
+    r'|עכשיו|אתמול|Just now|Yesterday',
+    re.MULTILINE | re.IGNORECASE
+)
+
+
+def _stable_text_for_hash(text: str) -> str:
+    """מנרמל טקסט לחישוב hash יציב — מסיר timestamps, מספרים בודדים, ורעשי UI."""
+    lines = text.split('\n')
+    stable = []
+    for line in lines:
+        s = line.strip()
+        # דילוג על שורות שהן רק מספרים (לייקים, תגובות, שיתופים)
+        if re.match(r'^\d[\d,. ]*$', s):
+            continue
+        # דילוג על שורות UI קצרות (Like, Comment, Share, הגב, שתף)
+        if s in ('Like', 'Comment', 'Share', 'הגב', 'שתף', 'אהבתי'):
+            continue
+        stable.append(s)
+    joined = '\n'.join(stable)
+    # הסרת timestamps דינאמיים
+    joined = _TIMESTAMP_RE.sub('', joined)
+    # כיווץ רווחים מיותרים
+    joined = re.sub(r'\s+', ' ', joined).strip()
+    return joined
+
 
 def _extract_name_from_title(page_title: str) -> str | None:
     """מחלץ שם קבוצה מכותרת דף פייסבוק. מחזיר None אם הכותרת לא תקינה."""
@@ -696,16 +725,17 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         post_id = extract_post_id(post_url)
                     else:
                         # fallback URL = URL הקבוצה → ID זהה לכל הפוסטים בקבוצה.
-                        # משתמשים ב-hash של התוכן כ-ID ייחודי לכל פוסט,
-                        # כדי למנוע סימון שגוי כ"נראה" לכל הפוסטים בקבוצה.
-                        post_id = "c_" + hashlib.md5(text.encode()).hexdigest()[:16]
+                        # משתמשים ב-hash של תוכן מנורמל כ-ID ייחודי לכל פוסט.
+                        # חשוב: הטקסט מנורמל (ללא timestamps, לייקים וכו')
+                        # כדי שה-hash יהיה יציב בין סריקות.
+                        stable = _stable_text_for_hash(text)
+                        post_id = "c_" + hashlib.md5(stable.encode()).hexdigest()[:16]
 
                     # בדיקה אם הגענו לפוסט מסריקה קודמת.
-                    # רק אם יש URL אמיתי לפוסט — hash תוכן עלול להשתנות
-                    # בגלל שינויי timestamp, ולא מתאים לזיהוי עצירת גלילה.
+                    # ה-hash מבוסס תוכן מנורמל (ללא timestamps) ולכן יציב בין סריקות.
                     # דורשים רצף של KNOWN_THRESHOLD פוסטים מוכרים לפני עצירה,
                     # כדי למנוע עצירה מוקדמת בגלל פוסט מוצמד (pinned) בראש הפיד.
-                    if has_real_url and seen_checker and seen_checker(post_id):
+                    if seen_checker and seen_checker(post_id):
                         consecutive_known += 1
                         if consecutive_known >= KNOWN_THRESHOLD:
                             reached_known = True
