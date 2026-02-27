@@ -424,6 +424,90 @@ class TestContentBasedPostId:
 
 
 # ──────────────────────────────────────────────────────────────
+# 5b. _stable_text_for_hash — נרמול טקסט ליצירת hash יציב
+# ──────────────────────────────────────────────────────────────
+
+from scraper import _stable_text_for_hash
+
+
+class TestStableTextForHash:
+    """ה-hash לפוסטים ללא URL אמיתי חייב להיות יציב בין סריקות —
+    timestamps, לייקים ורעשי UI לא משפיעים."""
+
+    def test_timestamp_hebrew_removed(self):
+        """timestamps בעברית מוסרים."""
+        t1 = "מחפש דירה בתל אביב\nלפני 2 שעות"
+        t2 = "מחפש דירה בתל אביב\nלפני 5 שעות"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_timestamp_hebrew_yamim_removed(self):
+        """'לפני 3 ימים' (plural days) מוסר — ימים מתחיל ב-ימ, לא יו."""
+        t1 = "מחפש דירה בתל אביב\nלפני 3 ימים"
+        t2 = "מחפש דירה בתל אביב\nלפני 7 ימים"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_timestamp_english_removed(self):
+        """timestamps באנגלית מוסרים."""
+        t1 = "Looking for apartment\n3h"
+        t2 = "Looking for apartment\n12h"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_like_count_lines_removed(self):
+        """שורות שהן רק מספרים (ספירת לייקים) מוסרות."""
+        t1 = "פוסט על עבודה\n5\n3"
+        t2 = "פוסט על עבודה\n12\n8"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_ui_strings_removed(self):
+        """מחרוזות UI (Like, Comment, Share) מוסרות."""
+        t1 = "תוכן הפוסט\nLike\nComment\nShare"
+        t2 = "תוכן הפוסט"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_hebrew_ui_strings_removed(self):
+        """מחרוזות UI בעברית מוסרות."""
+        t1 = "תוכן הפוסט\nהגב\nשתף\nאהבתי"
+        t2 = "תוכן הפוסט"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_actual_content_preserved(self):
+        """תוכן אמיתי נשמר — פוסטים שונים מייצרים hash שונה."""
+        t1 = "מחפש דירה בתל אביב 3 חדרים"
+        t2 = "מחפש דירה בירושלים 4 חדרים"
+        assert _stable_text_for_hash(t1) != _stable_text_for_hash(t2)
+
+    def test_same_post_different_timestamps_same_hash(self):
+        """אותו פוסט עם timestamps שונים מייצר אותו hash."""
+        base = "מישהו מכיר חשמלאי טוב באזור השרון? צריך לטפל בתקלה בלוח חשמל"
+        t1 = f"{base}\nלפני 2 שעות\n5\nLike\nComment"
+        t2 = f"{base}\nלפני 6 שעות\n12\nLike\nComment"
+        h1 = hashlib.md5(_stable_text_for_hash(t1).encode()).hexdigest()[:16]
+        h2 = hashlib.md5(_stable_text_for_hash(t2).encode()).hexdigest()[:16]
+        assert h1 == h2
+
+    def test_yesterday_removed(self):
+        """'אתמול' ו-'Yesterday' מוסרים."""
+        t1 = "פוסט כלשהו\nאתמול"
+        t2 = "פוסט כלשהו\nYesterday"
+        t3 = "פוסט כלשהו"
+        s1 = _stable_text_for_hash(t1)
+        s2 = _stable_text_for_hash(t2)
+        s3 = _stable_text_for_hash(t3)
+        assert s1 == s2 == s3
+
+    def test_time_unit_mid_sentence_preserved(self):
+        """מספר + יחידת זמן באמצע משפט לא נמחק — תוכן אמיתי."""
+        t1 = "מחפש עבודה של 5 שעות ביום"
+        t2 = "מחפש עבודה של 3 שעות ביום"
+        assert _stable_text_for_hash(t1) != _stable_text_for_hash(t2)
+
+    def test_standalone_words_mid_sentence_preserved(self):
+        """'אתמול' באמצע משפט לא נמחק — תוכן אמיתי."""
+        t1 = "אתמול הלכתי לקניון"
+        assert "אתמול" in _stable_text_for_hash(t1)
+
+
+# ──────────────────────────────────────────────────────────────
 # 6. classify_post (mocked API)
 # ──────────────────────────────────────────────────────────────
 

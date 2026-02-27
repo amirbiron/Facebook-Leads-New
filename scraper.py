@@ -19,6 +19,57 @@ SESSION_FILE = Path("data/fb_session.json")
 _BAD_TITLES = {"facebook", "content not found", "page not found",
                "error", "log in", "התחברות", "תוכן לא נמצא", "שגיאה"}
 
+# טקסטים של overlay לוגין במובייל — הצירוף הזה ייחודי לאוברליי ולא מופיע בפוסטים
+_LOGIN_OVERLAY_MARKERS = ("פתיחת האפליקציה", "התחברות")
+
+
+async def _has_login_overlay(page) -> bool:
+    """מזהה overlay לוגין לפי טקסט — כשפייסבוק מציג 'פתיחת האפליקציה / התחברות'
+    בלי redirect, כך שבדיקת URL לא מספיקה."""
+    try:
+        top_text = await page.evaluate(
+            "document.body?.innerText?.substring(0, 500) || ''"
+        )
+        return all(m in top_text for m in _LOGIN_OVERLAY_MARKERS)
+    except Exception:
+        return False
+
+# ביטויים דינאמיים שמשתנים בין סריקות — מוסרים לפני חישוב hash.
+# חשוב: הביטויים מעוגנים כדי לא למחוק תוכן מתוך משפטים.
+# "5 שעות" לא-מעוגן ימחק מ-"עבודה של 5 שעות ביום" → שני פוסטים שונים יקבלו hash זהה.
+_TIMESTAMP_RE = re.compile(
+    # "לפני 3 שעות" — prefix ייחודי ל-timestamps
+    r'לפני\s+\d+\s*(שע|דק|יו|ימ|שני|חוד|שבוע)\w*'
+    # שורה עצמאית עם מספר + יחידת זמן: "3 שעות", "5 minutes"
+    r'|^\d+\s*(שע|דק|יו|ימ|שני|חוד|שבוע|min|hr|hour|day|wk|month)\w*$'
+    # פורמט קצר בשורה עצמאית: "3h", "2d"
+    r'|^\d+\s*[hdmwHDMW]$'
+    # מילים עצמאיות בלבד (שורה שלמה)
+    r'|^עכשיו$|^אתמול$|^Just now$|^Yesterday$',
+    re.MULTILINE | re.IGNORECASE
+)
+
+
+def _stable_text_for_hash(text: str) -> str:
+    """מנרמל טקסט לחישוב hash יציב — מסיר timestamps, מספרים בודדים, ורעשי UI."""
+    lines = text.split('\n')
+    stable = []
+    for line in lines:
+        s = line.strip()
+        # דילוג על שורות שהן רק מספרים (לייקים, תגובות, שיתופים)
+        if re.match(r'^\d[\d,. ]*$', s):
+            continue
+        # דילוג על שורות UI קצרות (Like, Comment, Share, הגב, שתף)
+        if s in ('Like', 'Comment', 'Share', 'הגב', 'שתף', 'אהבתי'):
+            continue
+        stable.append(s)
+    joined = '\n'.join(stable)
+    # הסרת timestamps דינאמיים
+    joined = _TIMESTAMP_RE.sub('', joined)
+    # כיווץ רווחים מיותרים
+    joined = re.sub(r'\s+', ' ', joined).strip()
+    return joined
+
 
 def _extract_name_from_title(page_title: str) -> str | None:
     """מחלץ שם קבוצה מכותרת דף פייסבוק. מחזיר None אם הכותרת לא תקינה."""
@@ -405,7 +456,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
         # חותמת זמן בעברית: "12 שעות", "3 ימים", "דקה", "אתמול" וכו'
         # חותמת זמן באנגלית: "12h", "3d", "1m", "Just now", "Yesterday"
         is_timestamp = (
-            re.search(r'\d+\s*(שע|דק|יו|שני|חוד)', text)
+            re.search(r'\d+\s*(שע|דק|יו|ימ|שני|חוד)', text)
             or text in ("עכשיו", "אתמול")
             or re.search(r'^\d+\s*[hdmwHDMW]$', text)
             or text.lower() in ("just now", "yesterday")
@@ -498,7 +549,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
                 except Exception:
                     continue
                 is_timestamp = (
-                    re.search(r'\d+\s*(שע|דק|יו|שני|חוד)', text)
+                    re.search(r'\d+\s*(שע|דק|יו|ימ|שני|חוד)', text)
                     or text in ("עכשיו", "אתמול")
                     or re.search(r'^\d+\s*[hdmwHDMW]$', text)
                     or text.lower() in ("just now", "yesterday")
@@ -520,17 +571,32 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
     if dump_on_fail:
         try:
             _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-            # שומרים HTML של האלמנט + הורה קרוב שמכיל לינקים
-            # מטפסים עד 5 רמות ומחפשים הורה עם <a> — אם לא מוצאים, לוקחים הכי גבוה
+            # שומרים HTML של האלמנט + הורה קרוב שמכיל לינקים לפוסטים.
+            # חשוב: מחפשים הורה עם <a> שמכיל קישור לפוסט (posts, permalink, story)
+            # ולא סתם כל <a> — כי overlay לוגין מכיל <a> של "פתיחת האפליקציה"/"התחברות"
+            # שגורם ל-dump חסר ערך.
             try:
                 snippet = await el.evaluate("""el => {
+                    const POST_PATTERNS = ['/posts/', '/permalink/', 'story_fbid',
+                                           '/story.php', 'multi_permalinks', 'pfbid', '/p/'];
                     let node = el;
+                    let highest = el;
                     for (let i = 0; i < 5; i++) {
                         if (!node.parentElement) break;
                         node = node.parentElement;
-                        if (node.querySelector('a[href]')) return node.outerHTML;
+                        highest = node;
+                        const links = node.querySelectorAll('a[href]');
+                        for (const a of links) {
+                            const href = a.getAttribute('href') || '';
+                            if (POST_PATTERNS.some(p => href.includes(p))) {
+                                return node.outerHTML;
+                            }
+                        }
                     }
-                    return node.outerHTML;
+                    // לא מצאנו הורה עם לינק לפוסט — מחזירים את ההורה הכי גבוה + האלמנט עצמו
+                    return '<!-- no post links found in parents -->\n'
+                         + '<!-- element: -->\n' + el.outerHTML
+                         + '\n<!-- highest parent: -->\n' + highest.outerHTML;
                 }""")
             except Exception:
                 snippet = await el.inner_html()
@@ -581,6 +647,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         # בלי redirect, ה-URL נשאר של הקבוצה אבל התוכן חסום.
         # סלקטורים ספציפיים ל-overlay בלבד — לא כוללים a[href*='/login'] כי זה
         # מופיע גם בניווט של דפים רגילים ויגרום לזיהוי שווא.
+        overlay_dismissed = False
         try:
             login_overlay = await page.query_selector(
                 "[data-sigil='login_interstitial'], "
@@ -599,11 +666,19 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                     await close_btn.click()
                     log.info("סגרנו overlay לוגין — ממשיכים סריקה")
                     await random_delay(1, 2)
+                    overlay_dismissed = True
                 else:
                     log.warning("זוהה overlay לוגין שלא ניתן לסגירה — ייתכן שהסשן פג!")
                     return posts
         except Exception:
             pass
+
+        # Fallback: זיהוי overlay לוגין לפי טקסט ("פתיחת האפליקציה / התחברות")
+        # כשהסלקטורים למעלה לא תופסים — ייתכן שפייסבוק שינה HTML.
+        # לא רץ אם כבר סגרנו overlay בהצלחה — הטקסט עלול להישאר ב-DOM לרגע.
+        if not overlay_dismissed and await _has_login_overlay(page):
+            log.warning("זוהה overlay לוגין (לפי טקסט) — ייתכן שהסשן פג!")
+            return posts
 
         # חילוץ שם הקבוצה מכותרת הדף (אמין יותר מסלקטורים בתוך ה-DOM)
         group_name = group["name"]
@@ -696,16 +771,21 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         post_id = extract_post_id(post_url)
                     else:
                         # fallback URL = URL הקבוצה → ID זהה לכל הפוסטים בקבוצה.
-                        # משתמשים ב-hash של התוכן כ-ID ייחודי לכל פוסט,
-                        # כדי למנוע סימון שגוי כ"נראה" לכל הפוסטים בקבוצה.
-                        post_id = "c_" + hashlib.md5(text.encode()).hexdigest()[:16]
+                        # משתמשים ב-hash של תוכן מנורמל כ-ID ייחודי לכל פוסט.
+                        # חשוב: הטקסט מנורמל (ללא timestamps, לייקים וכו')
+                        # כדי שה-hash יהיה יציב בין סריקות.
+                        stable = _stable_text_for_hash(text)
+                        if not stable:
+                            # הטקסט כולו timestamps/UI → לא תוכן אמיתי, מדלגים
+                            skipped_short += 1
+                            continue
+                        post_id = "c_" + hashlib.md5(stable.encode()).hexdigest()[:16]
 
                     # בדיקה אם הגענו לפוסט מסריקה קודמת.
-                    # רק אם יש URL אמיתי לפוסט — hash תוכן עלול להשתנות
-                    # בגלל שינויי timestamp, ולא מתאים לזיהוי עצירת גלילה.
+                    # ה-hash מבוסס תוכן מנורמל (ללא timestamps) ולכן יציב בין סריקות.
                     # דורשים רצף של KNOWN_THRESHOLD פוסטים מוכרים לפני עצירה,
                     # כדי למנוע עצירה מוקדמת בגלל פוסט מוצמד (pinned) בראש הפיד.
-                    if has_real_url and seen_checker and seen_checker(post_id):
+                    if seen_checker and seen_checker(post_id):
                         consecutive_known += 1
                         if consecutive_known >= KNOWN_THRESHOLD:
                             reached_known = True
@@ -813,7 +893,7 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
             await page.goto("https://m.facebook.com", wait_until="domcontentloaded")
             await random_delay(1, 3)
             await dismiss_cookie_dialog(page)
-            if "login" in page.url:
+            if "login" in page.url or await _has_login_overlay(page):
                 log.warning("סשן פג — מתחבר מחדש")
                 await login(page, email, password)
                 await save_session(context)
