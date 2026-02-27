@@ -520,11 +520,18 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
     if dump_on_fail:
         try:
             _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-            # שומרים HTML של ההורה (רמה 3) כדי לכלול גם לינקים סביב האלמנט
+            # שומרים HTML של האלמנט + הורה קרוב שמכיל לינקים
+            # מטפסים עד 5 רמות ומחפשים הורה עם <a> — אם לא מוצאים, לוקחים הכי גבוה
             try:
-                snippet = await el.evaluate(
-                    "el => (el.parentElement?.parentElement?.parentElement || el).outerHTML"
-                )
+                snippet = await el.evaluate("""el => {
+                    let node = el;
+                    for (let i = 0; i < 5; i++) {
+                        if (!node.parentElement) break;
+                        node = node.parentElement;
+                        if (node.querySelector('a[href]')) return node.outerHTML;
+                    }
+                    return node.outerHTML;
+                }""")
             except Exception:
                 snippet = await el.inner_html()
             # חותכים ל-5000 תווים כדי לא לזרוק דיסק
@@ -569,6 +576,34 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         if "login" in current_url:
             log.warning("הועברנו לדף לוגין — ייתכן שהסשן פג!")
             return posts
+
+        # זיהוי overlay לוגין — פייסבוק מציג "פתיחת האפליקציה / התחברות"
+        # בלי redirect, ה-URL נשאר של הקבוצה אבל התוכן חסום.
+        # סלקטורים ספציפיים ל-overlay בלבד — לא כוללים a[href*='/login'] כי זה
+        # מופיע גם בניווט של דפים רגילים ויגרום לזיהוי שווא.
+        try:
+            login_overlay = await page.query_selector(
+                "[data-sigil='login_interstitial'], "
+                "[data-sigil='m_login_upsell'], "
+                "#login_popup_cta_form, "
+                "div[id*='login_upsell']"
+            )
+            if login_overlay:
+                # ננסה לסגור את ה-overlay
+                close_btn = await page.query_selector(
+                    "[data-sigil='login_interstitial_dismiss'], "
+                    "button[aria-label='Close'], "
+                    "button[aria-label='סגור']"
+                )
+                if close_btn:
+                    await close_btn.click()
+                    log.info("סגרנו overlay לוגין — ממשיכים סריקה")
+                    await random_delay(1, 2)
+                else:
+                    log.warning("זוהה overlay לוגין שלא ניתן לסגירה — ייתכן שהסשן פג!")
+                    return posts
+        except Exception:
+            pass
 
         # חילוץ שם הקבוצה מכותרת הדף (אמין יותר מסלקטורים בתוך ה-DOM)
         group_name = group["name"]
@@ -618,6 +653,8 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             post_elements = await page.query_selector_all(SELECTORS)
             if not post_elements:
                 post_elements = await page.query_selector_all(FALLBACK_SELECTORS)
+                if post_elements and scroll_i == 0:
+                    log.warning(f"סלקטור ראשי לא מצא פוסטים — נפלנו ל-fallback ({len(post_elements)} אלמנטים)")
 
             if not post_elements and scroll_i == 0:
                 log.warning(f"לא נמצאו אלמנטים בכלל בקבוצה: {group_name}")
