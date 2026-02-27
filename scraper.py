@@ -108,17 +108,57 @@ _ENGAGEMENT_LINE_RE = re.compile(
 )
 
 
+# מילות רעש UI של פייסבוק — מופיעות/נעלמות בין סריקות.
+# lower-case כי הטקסט מנורמל ל-lowercase לפני הבדיקה.
+_NOISE_WORDS = frozenset({
+    'like', 'comment', 'share', 'send message', 'see more', 'see less',
+    'see translation', 'write a comment...', 'write a comment…',
+    'suggested for you', 'sponsored', 'all comments',
+    'הגב', 'שתף', 'שתפ', 'אהבתי', 'קרא עוד', 'ראה עוד', 'הצג עוד',
+    'ראה תרגום', 'כתוב תגובה...', 'כתוב תגובה…', 'כתוב תגובה',
+    'שלח הודעה', 'מומלץ', 'מומלצת', 'מומלצים', 'ממומן',
+    'כל התגובות', 'הגב/י', 'שתף/י',
+})
+
+# רגקס להסרת URLs (עם פרמטרי מעקב דינמיים כמו fbclid שמשתנים בין טעינות)
+_URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+
+# תווי Unicode בלתי-נראים שפייסבוק מוסיף — כיווניות, zero-width, soft-hyphen
+_INVISIBLE_CHARS_RE = re.compile(
+    r'[\u200e\u200f\u200b\u200c\u200d\u2060\u2066\u2067\u2068\u2069\ufeff\xad]'
+)
+
+# Private Use Area — אייקונים מותאמים של פייסבוק שמשתנים בין רינדורים
+_PUA_RE = re.compile(r'[\uE000-\uF8FF]')
+
+
 def _stable_text_for_hash(text: str) -> str:
-    """מנרמל טקסט לחישוב hash יציב — מסיר timestamps, מספרים בודדים, ורעשי UI."""
+    """מנרמל טקסט לחישוב hash יציב — מסיר timestamps, מספרים בודדים, ורעשי UI.
+
+    נרמול עמוק: lowercase, הסרת URLs, תווים בלתי-נראים, מילות רעש UI,
+    engagement ו-timestamps. המטרה: אותו פוסט ← אותו hash בין סריקות שונות.
+    """
+    # 1. lowercase — מונע הבדלי case בין רינדורים
+    text = text.lower()
+
+    # 2. הסרת URLs — פרמטרי מעקב (fbclid, tracking) משתנים בין טעינות
+    text = _URL_RE.sub('', text)
+
+    # 3. הסרת תווים בלתי-נראים (כיווניות, zero-width) ו-PUA
+    text = _INVISIBLE_CHARS_RE.sub('', text)
+    text = _PUA_RE.sub('', text)
+
     lines = text.split('\n')
     stable = []
     for line in lines:
         s = line.strip()
-        # דילוג על שורות שהן רק מספרים (לייקים, תגובות, שיתופים)
-        if re.match(r'^\d[\d,. ]*$', s):
+        if not s:
             continue
-        # דילוג על שורות UI קצרות (Like, Comment, Share, הגב, שתף)
-        if s in ('Like', 'Comment', 'Share', 'הגב', 'שתף', 'אהבתי'):
+        # דילוג על שורות שהן רק מספרים וסימני פיסוק (לייקים, תגובות)
+        if re.match(r'^[\d,.\-+ ]+$', s):
+            continue
+        # דילוג על מילות רעש UI
+        if s in _NOISE_WORDS:
             continue
         # דילוג על שורות engagement שמשתנות בין סריקות ("5 תגובות", "3 שיתופים")
         if _ENGAGEMENT_LINE_RE.match(s):

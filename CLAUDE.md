@@ -76,6 +76,8 @@
   - `_stable_text_for_hash` חייב לסנן **גם** שורות engagement (תגובות, שיתופים, לייקים, צפיות) — דרך `_ENGAGEMENT_LINE_RE`. **זהירות עם אותיות סופיות**: ף ≠ פ (שיתוף vs שיתופים), לכן הרגקס משתמש ב-`[פף]`.
   - `sent_leads` כולל עמודת `content_hash` — hash מנורמל של תוכן הפוסט. לפני שליחת ליד, בודקים `is_content_hash_sent()` **בנוסף** ל-`is_lead_sent()`.
   - `save_lead()` שומר את ה-content_hash לצד ה-post_id.
+  - **נרמול עמוק** ב-`_stable_text_for_hash` — lowercase, הסרת URLs (פרמטרי מעקב), הסרת תווי כיווניות/zero-width/PUA, הסרת מילות רעש UI (`_NOISE_WORDS`: "קרא עוד", "See more", "כתוב תגובה...", "ממומן" ועוד).
+  - **דיאגנוסטיקה**: `[DEDUP-SEND]` מתעד כל ליד שנשלח (snippet + hash + post_id), `[DEDUP-CATCH]` מתעד כל כפילות שנתפסה לפי content_hash.
 
 ## כללי עבודה על session/auth detection
 - **false positive שובר הכל**: זיהוי שגוי של "סשן פג" → re-login → נכשל → 0 פוסטים. לכן **סף גבוה + בדיקה כפולה**.
@@ -109,7 +111,7 @@
 ```bash
 python -m pytest tests.py -v
 ```
-277 טסטים ב-`tests.py` מכסים:
+306 טסטים ב-`tests.py` מכסים:
 - `passes_keyword_filter()` — סינון לפי מילות מפתח (כולל רשימה ריקה)
 - `is_blocked()` — חסימת מילים אסורות
 - `extract_post_id()` — חילוץ ID מ-URLs בפורמטים שונים
