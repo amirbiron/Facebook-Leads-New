@@ -366,7 +366,7 @@ async def _telegram_control_loop(
     import requests
     import json
 
-    offset_file = Path("data/telegram_offset.txt")
+    offset_file = Path(__file__).resolve().parent / "data" / "telegram_offset.txt"
 
     def load_offset() -> int:
         try:
