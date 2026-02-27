@@ -578,22 +578,22 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             return posts
 
         # זיהוי overlay לוגין — פייסבוק מציג "פתיחת האפליקציה / התחברות"
-        # בלי redirect, ה-URL נשאר של הקבוצה אבל התוכן חסום
+        # בלי redirect, ה-URL נשאר של הקבוצה אבל התוכן חסום.
+        # סלקטורים ספציפיים ל-overlay בלבד — לא כוללים a[href*='/login'] כי זה
+        # מופיע גם בניווט של דפים רגילים ויגרום לזיהוי שווא.
         try:
             login_overlay = await page.query_selector(
                 "[data-sigil='login_interstitial'], "
                 "[data-sigil='m_login_upsell'], "
                 "#login_popup_cta_form, "
-                "div[id*='login_upsell'], "
-                "a[href*='/login']"
+                "div[id*='login_upsell']"
             )
             if login_overlay:
                 # ננסה לסגור את ה-overlay
                 close_btn = await page.query_selector(
                     "[data-sigil='login_interstitial_dismiss'], "
                     "button[aria-label='Close'], "
-                    "button[aria-label='סגור'], "
-                    "a[href='#'][role='button']"
+                    "button[aria-label='סגור']"
                 )
                 if close_btn:
                     await close_btn.click()
@@ -601,6 +601,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                     await random_delay(1, 2)
                 else:
                     log.warning("זוהה overlay לוגין שלא ניתן לסגירה — ייתכן שהסשן פג!")
+                    return posts
         except Exception:
             pass
 
