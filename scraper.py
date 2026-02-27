@@ -299,6 +299,7 @@ async def login(page, email: str, password: str):
 
         # ניסיון 1: Enter על שדה האימייל — הכי אמין, לא תלוי בכפתור ספציפי
         log.debug("שולח Enter על שדה האימייל")
+        url_before_enter = page.url
         try:
             async with page.expect_navigation(timeout=15000):
                 await email_field.press("Enter")
@@ -309,6 +310,7 @@ async def login(page, email: str, password: str):
                 await page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
                 await asyncio.sleep(3)
+        enter_navigated = page.url != url_before_enter
 
         await random_delay(1, 3)
         await dismiss_cookie_dialog(page)
@@ -323,8 +325,10 @@ async def login(page, email: str, password: str):
             except Exception:
                 continue
 
-        # ניסיון 2: אם Enter לא עזר, מנסים כפתור submit (fallback)
-        if not pass_field:
+        # ניסיון 2: אם Enter לא עזר, מנסים כפתור submit (fallback).
+        # חשוב: רק אם ה-Enter לא שינה את הדף! אם כבר ניווטנו לדף סיסמה,
+        # לחיצה על submit תשלח טופס עם סיסמה ריקה → סיכון לנעילת חשבון.
+        if not pass_field and not enter_navigated:
             log.debug("שדה סיסמה לא נמצא אחרי Enter — מנסה כפתור submit")
             next_btn = None
             for selector in _LOGIN_BTN_SELECTORS:
