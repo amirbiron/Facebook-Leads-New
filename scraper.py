@@ -775,6 +775,10 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         # חשוב: הטקסט מנורמל (ללא timestamps, לייקים וכו')
                         # כדי שה-hash יהיה יציב בין סריקות.
                         stable = _stable_text_for_hash(text)
+                        if not stable:
+                            # הטקסט כולו timestamps/UI → לא תוכן אמיתי, מדלגים
+                            skipped_short += 1
+                            continue
                         post_id = "c_" + hashlib.md5(stable.encode()).hexdigest()[:16]
 
                     # בדיקה אם הגענו לפוסט מסריקה קודמת.
