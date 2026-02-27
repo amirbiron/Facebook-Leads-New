@@ -2467,6 +2467,11 @@ class TestExtractPostAgeDays:
     """בדיקות לחילוץ גיל פוסט מתוך הטקסט."""
 
     # ── עברית — "לפני X [יחידה]" ──
+    def test_hebrew_seconds(self):
+        age = extract_post_age_days("לפני 10 שניות\nטקסט של פוסט")
+        assert age is not None
+        assert age < 0.001  # 10 שניות = כמעט 0 ימים
+
     def test_hebrew_minutes(self):
         age = extract_post_age_days("לפני 5 דקות\nטקסט של פוסט")
         assert age is not None
@@ -2615,6 +2620,11 @@ class TestExtractPostAgeDays:
         age = extract_post_age_days(text)
         assert age is not None
         assert 0.2 < age < 0.22  # 5/24 ≈ 0.208
+
+    def test_no_false_positive_hebrew_seconds_in_sentence(self):
+        """ביטוי זמן בתוך משפט בעברית — לא timestamp."""
+        age = extract_post_age_days("דוגמה: לפני 10 שניות קיבלתי הודעה וזה לא timestamp")
+        assert age is None
 
 
 class TestIsPostTooOld:
