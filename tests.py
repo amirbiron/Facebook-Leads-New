@@ -514,6 +514,101 @@ class TestStableTextForHash:
         t1 = "אתמול הלכתי לקניון"
         assert "אתמול" in _stable_text_for_hash(t1)
 
+    # ── בדיקות engagement metrics ──────────────────────────────
+
+    def test_engagement_comments_hebrew_removed(self):
+        """שורת engagement '5 תגובות' מוסרת."""
+        t1 = "מחפש עבודה\n5 תגובות"
+        t2 = "מחפש עבודה\n12 תגובות"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash("מחפש עבודה")
+
+    def test_engagement_single_comment_removed(self):
+        """שורת engagement '1 תגובה' (יחיד) מוסרת."""
+        t1 = "מחפש עבודה\n1 תגובה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash("מחפש עבודה")
+
+    def test_engagement_shares_hebrew_removed(self):
+        """שורת engagement '3 שיתופים' מוסרת."""
+        t1 = "מחפש עבודה\n3 שיתופים"
+        t2 = "מחפש עבודה\n10 שיתופים"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_engagement_likes_hebrew_removed(self):
+        """שורת engagement '7 לייקים' מוסרת."""
+        t1 = "מחפש עבודה\n7 לייקים"
+        t2 = "מחפש עבודה\n20 לייקים"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_engagement_english_removed(self):
+        """שורות engagement באנגלית מוסרות."""
+        base = "Looking for a developer"
+        t1 = f"{base}\n5 comments"
+        t2 = f"{base}\n12 shares"
+        t3 = f"{base}\n3 likes"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(base)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(base)
+        assert _stable_text_for_hash(t3) == _stable_text_for_hash(base)
+
+    def test_engagement_combined_line_removed(self):
+        """שורת engagement משולבת '5 תגובות · 3 שיתופים' מוסרת."""
+        base = "מחפש עבודה"
+        t1 = f"{base}\n5 תגובות · 3 שיתופים"
+        t2 = f"{base}\n12 תגובות · 7 שיתופים"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(base)
+
+    def test_engagement_mid_sentence_preserved(self):
+        """'5 תגובות' באמצע משפט לא נמחק — תוכן אמיתי."""
+        t1 = "קיבלתי 5 תגובות על הפוסט"
+        assert "5 תגובות" in _stable_text_for_hash(t1)
+
+    def test_engagement_views_removed(self):
+        """שורת engagement '100 צפיות' מוסרת."""
+        t1 = "מחפש עבודה\n100 צפיות"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash("מחפש עבודה")
+
+    def test_full_post_with_engagement_stable(self):
+        """פוסט מלא עם engagement שונה מייצר אותו hash."""
+        base = "מישהו מכיר חשמלאי טוב באזור השרון? צריך לטפל בתקלה בלוח חשמל"
+        t1 = f"ישראל ישראלי\n{base}\nלפני 2 שעות\n5 תגובות · 3 שיתופים\n5\nLike\nComment"
+        t2 = f"ישראל ישראלי\n{base}\nלפני 8 שעות\n12 תגובות · 7 שיתופים\n20\nLike\nComment"
+        h1 = hashlib.md5(_stable_text_for_hash(t1).encode()).hexdigest()[:16]
+        h2 = hashlib.md5(_stable_text_for_hash(t2).encode()).hexdigest()[:16]
+        assert h1 == h2
+
+
+class TestContentHashDedup:
+    """בדיקות ל-content_hash dedup — מניעת כפילויות כשה-post_id משתנה בין סשנים."""
+
+    def test_is_content_hash_sent_empty(self, tmp_db):
+        """hash ריק לא מסומן כנשלח."""
+        assert database.is_content_hash_sent("") is False
+
+    def test_is_content_hash_sent_not_found(self, tmp_db):
+        """hash שלא קיים ב-DB מחזיר False."""
+        assert database.is_content_hash_sent("abc123") is False
+
+    def test_save_and_check_content_hash(self, tmp_db):
+        """שמירת ליד עם content_hash — ואז בדיקה שהוא נמצא."""
+        database.save_lead("post1", "group1", "content", "reason",
+                           content_hash="hash_abc")
+        assert database.is_content_hash_sent("hash_abc") is True
+
+    def test_content_hash_catches_duplicate_with_different_id(self, tmp_db):
+        """אותו content_hash עם post_id שונה — נתפס כנשלח."""
+        database.save_lead("post1", "group1", "content", "reason",
+                           content_hash="hash_abc")
+        # post_id שונה (כמו שקורה כשה-hash משתנה בין סשנים)
+        assert database.is_lead_sent("post2") is False  # ID שונה — לא נמצא
+        assert database.is_content_hash_sent("hash_abc") is True  # תוכן זהה — נתפס
+
+    def test_save_lead_without_content_hash(self, tmp_db):
+        """save_lead ללא content_hash — backward compatible."""
+        database.save_lead("post1", "group1", "content", "reason")
+        assert database.is_lead_sent("post1") is True
+        assert database.is_content_hash_sent("") is False
+
 
 # ──────────────────────────────────────────────────────────────
 # 6. classify_post (mocked API)

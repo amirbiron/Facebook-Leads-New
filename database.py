@@ -44,9 +44,15 @@ def init_db():
                 group_name TEXT,
                 content TEXT,
                 reason TEXT,
-                sent_at TEXT
+                sent_at TEXT,
+                content_hash TEXT DEFAULT ''
             )
         """)
+        # מיגרציה — הוספת עמודת content_hash ל-DB קיים
+        try:
+            conn.execute("ALTER TABLE sent_leads ADD COLUMN content_hash TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # העמודה כבר קיימת
         conn.execute("""
             CREATE TABLE IF NOT EXISTS groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,16 +91,26 @@ def mark_seen(post_id: str, group_name: str):
             (post_id, group_name, _now().isoformat())
         )
 
-def save_lead(post_id: str, group_name: str, content: str, reason: str):
+def save_lead(post_id: str, group_name: str, content: str, reason: str,
+              content_hash: str = ""):
     with _get_conn() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO sent_leads (post_id, group_name, content, reason, sent_at) VALUES (?, ?, ?, ?, ?)",
-            (post_id, group_name, content, reason, _now().isoformat())
+            "INSERT OR IGNORE INTO sent_leads (post_id, group_name, content, reason, sent_at, content_hash) VALUES (?, ?, ?, ?, ?, ?)",
+            (post_id, group_name, content, reason, _now().isoformat(), content_hash)
         )
 
 def is_lead_sent(post_id: str) -> bool:
     row = _get_conn().execute(
         "SELECT 1 FROM sent_leads WHERE post_id = ?", (post_id,)
+    ).fetchone()
+    return row is not None
+
+def is_content_hash_sent(content_hash: str) -> bool:
+    """בודק אם ליד עם אותו content_hash כבר נשלח — מונע כפילויות כשה-post_id משתנה בין סשנים."""
+    if not content_hash:
+        return False
+    row = _get_conn().execute(
+        "SELECT 1 FROM sent_leads WHERE content_hash = ?", (content_hash,)
     ).fetchone()
     return row is not None
 

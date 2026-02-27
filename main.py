@@ -8,7 +8,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from database import (
-    init_db, is_seen, is_lead_sent, mark_seen, save_lead, get_stats, get_daily_stats,
+    init_db, is_seen, is_lead_sent, is_content_hash_sent, mark_seen, save_lead,
+    get_stats, get_daily_stats,
     cleanup_old_posts, add_group, remove_group, get_db_groups, ensure_groups_migrated,
     add_keyword, remove_keyword, get_db_keywords, ensure_keywords_migrated,
     get_config,
@@ -931,6 +932,15 @@ if threading.current_thread() is threading.main_thread():
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
+def _content_dedup_hash(text: str) -> str:
+    """מחשב hash תוכן לזיהוי כפילויות — משתמש בנרמול מ-scraper."""
+    import hashlib
+    from scraper import _stable_text_for_hash
+    stable = _stable_text_for_hash(text)
+    if not stable:
+        return ""
+    return hashlib.md5(stable.encode()).hexdigest()
+
 async def run_cycle():
     import gc
     # Lazy imports to keep startup light and allow running parts of the codebase
@@ -1000,6 +1010,11 @@ async def run_cycle():
     for post in new_posts:
         matched_kw = matches_force_send(post["content"])
         if matched_kw and not is_lead_sent(post["id"]):
+            c_hash = _content_dedup_hash(post["content"])
+            if is_content_hash_sent(c_hash):
+                log.debug(f"דילוג על force_send — תוכן זהה כבר נשלח (content_hash)")
+                rest_posts.append(post)
+                continue
             reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
             send_lead(
                 group_name=post["group"],
@@ -1008,7 +1023,8 @@ async def run_cycle():
                 reason=reason,
                 has_real_url=post.get("has_real_url", True),
             )
-            save_lead(post["id"], post["group"], post["content"], reason)
+            save_lead(post["id"], post["group"], post["content"], reason,
+                      content_hash=c_hash)
             leads_found += 1
             log.info(f"ליד (force_send): {matched_kw}")
             force_send_posts.append(post)
@@ -1036,9 +1052,20 @@ async def run_cycle():
     if not filtered_posts:
         log.info("אין פוסטים רלוונטיים — מדלג על סיווג")
 
-    # סינון פוסטים שכבר נשלחו כלידים
-    not_yet_sent = [p for p in filtered_posts if not is_lead_sent(p["id"])]
-    skipped_already_sent = len(filtered_posts) - len(not_yet_sent)
+    # סינון פוסטים שכבר נשלחו כלידים — בדיקה לפי post_id + content_hash
+    not_yet_sent = []
+    skipped_already_sent = 0
+    for p in filtered_posts:
+        if is_lead_sent(p["id"]):
+            skipped_already_sent += 1
+            continue
+        c_hash = _content_dedup_hash(p["content"])
+        if is_content_hash_sent(c_hash):
+            skipped_already_sent += 1
+            log.debug(f"דילוג על פוסט — תוכן זהה כבר נשלח (content_hash)")
+            continue
+        p["_content_hash"] = c_hash
+        not_yet_sent.append(p)
     if skipped_already_sent:
         log.debug(f"דילוג על {skipped_already_sent} פוסטים שכבר נשלחו כלידים")
 
@@ -1058,7 +1085,8 @@ async def run_cycle():
                     reason=reason,
                     has_real_url=post.get("has_real_url", True),
                 )
-                save_lead(post["id"], post["group"], post["content"], reason)
+                save_lead(post["id"], post["group"], post["content"], reason,
+                          content_hash=post.get("_content_hash", ""))
                 leads_found += 1
                 log.info(f"ליד נשלח: {reason}")
             else:
