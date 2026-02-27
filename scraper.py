@@ -22,6 +22,17 @@ _BAD_TITLES = {"facebook", "content not found", "page not found",
 # טקסטים של overlay לוגין במובייל — הצירוף הזה ייחודי לאוברליי ולא מופיע בפוסטים
 _LOGIN_OVERLAY_MARKERS = ("פתיחת האפליקציה", "התחברות")
 
+# סלקטורים לכפתור login/submit במובייל — משותף ללוגין רגיל ולוגין דו-שלבי.
+# ~= (contains-word) במקום = כי data-sigil משתמש ב-tokens מופרדי רווחים.
+_LOGIN_BTN_SELECTORS = [
+    "button[name='login']",
+    "input[name='login']",
+    "button[data-sigil~='m_login_button']",
+    "[data-sigil~='m_login_button']",
+    "button[type='submit']",
+    "input[type='submit']",
+]
+
 
 async def _has_login_overlay(page) -> bool:
     """מזהה overlay לוגין לפי טקסט — כשפייסבוק מציג 'פתיחת האפליקציה / התחברות'
@@ -277,16 +288,8 @@ async def login(page, email: str, password: str):
     # --- לוגין דו-שלבי: אם אין שדה סיסמה, מחפשים כפתור Next ---
     if not pass_field:
         log.info("שדה סיסמה לא נמצא — מנסה לוגין דו-שלבי (Next)")
-        next_btn_selectors = [
-            "button[name='login']",
-            "input[name='login']",
-            "button[data-sigil='m_login_button']",
-            "button[type='submit']",
-            "input[type='submit']",
-            "[data-sigil='touchable m_login_button']",
-        ]
         next_btn = None
-        for selector in next_btn_selectors:
+        for selector in _LOGIN_BTN_SELECTORS:
             try:
                 next_btn = await page.query_selector(selector)
                 if next_btn:
@@ -339,15 +342,25 @@ async def login(page, email: str, password: str):
     await pass_field.fill(password)
     await random_delay(0.5, 1)
 
-    # שולח טופס — מנסה כפתור login, אחרת Enter
+    # שולח טופס — מנסה סלקטורים מרובים לכפתור login, אחרת Enter
     log.debug("שולח טופס לוגין...")
+    login_btn = None
+    for sel in _LOGIN_BTN_SELECTORS:
+        try:
+            login_btn = await page.query_selector(sel)
+            if login_btn:
+                log.debug(f"כפתור login נמצא עם: {sel}")
+                break
+        except Exception:
+            continue
+
     try:
-        login_btn = await page.query_selector("button[name='login'], input[name='login']")
         if login_btn:
             async with page.expect_navigation(timeout=15000):
                 await login_btn.click()
             log.debug("ניווט התבצע בהצלחה (כפתור)")
         else:
+            log.debug("לא נמצא כפתור login — שולח Enter")
             async with page.expect_navigation(timeout=15000):
                 await pass_field.press("Enter")
             log.debug("ניווט התבצע בהצלחה (Enter)")
