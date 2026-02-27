@@ -351,10 +351,13 @@ async def login(page, email: str, password: str):
         "input[type='submit']",
     ]
     for sel in login_btn_selectors:
-        login_btn = await page.query_selector(sel)
-        if login_btn:
-            log.debug(f"כפתור login נמצא עם: {sel}")
-            break
+        try:
+            login_btn = await page.query_selector(sel)
+            if login_btn:
+                log.debug(f"כפתור login נמצא עם: {sel}")
+                break
+        except Exception:
+            continue
 
     try:
         if login_btn:
