@@ -370,6 +370,14 @@ class TestExtractPostId:
         result = extract_post_id(url)
         assert result == "ABCdef123"
 
+    def test_share_p_pattern(self):
+        """פורמט share link חדש של פייסבוק — /share/p/ID."""
+        assert extract_post_id("https://www.facebook.com/share/p/1AkvNbuYNi/") == "1AkvNbuYNi"
+
+    def test_share_p_mobile(self):
+        """share link מאתר מובייל."""
+        assert extract_post_id("https://m.facebook.com/share/p/Xb2cD3fG/") == "Xb2cD3fG"
+
     def test_fallback_last_20_chars(self):
         url = "https://facebook.com/some/unknown/format"
         result = extract_post_id(url)
@@ -1870,6 +1878,14 @@ class TestIsPostUrl:
     def test_multi_permalinks(self):
         assert _is_post_url("https://m.facebook.com/groups/123/?multi_permalinks=456") is True
 
+    def test_share_p_pattern(self):
+        """פורמט share link חדש של פייסבוק."""
+        assert _is_post_url("https://www.facebook.com/share/p/1AkvNbuYNi/") is True
+
+    def test_share_p_mobile(self):
+        """share link מאתר מובייל."""
+        assert _is_post_url("https://m.facebook.com/share/p/Xb2cD3fG/") is True
+
 
 # ──────────────────────────────────────────────────────────────
 # 24. _extract_name_from_title — חילוץ שם קבוצה מכותרת דף
@@ -2064,6 +2080,17 @@ class TestExtractPostUrl:
         assert get_extraction_stats()["success"] == 1
 
     @pytest.mark.asyncio
+    async def test_strategy1_share_link(self):
+        """אסטרטגיה 1 — סלקטור ישיר ל-share link חדש."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            selector_links={"a[href*='/share/p/']": "https://www.facebook.com/share/p/1AkvNbuYNi/"}
+        )
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://www.facebook.com/share/p/1AkvNbuYNi/"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
     async def test_strategy1_full_url(self):
         """אסטרטגיה 1 — URL מלא (עם http) לא מקבל prefix."""
         reset_extraction_stats()
@@ -2085,6 +2112,20 @@ class TestExtractPostUrl:
         )
         result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
         assert result == "https://m.facebook.com/groups/123/permalink/789"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy2_share_link_scan(self):
+        """אסטרטגיה 2 — סריקת לינקים מוצאת share link."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            all_links=[
+                ("https://m.facebook.com/groups/123", ""),
+                ("https://www.facebook.com/share/p/1AkvNbuYNi/", ""),
+            ]
+        )
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://www.facebook.com/share/p/1AkvNbuYNi/"
         assert get_extraction_stats()["success"] == 1
 
     @pytest.mark.asyncio

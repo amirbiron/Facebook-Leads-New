@@ -379,6 +379,7 @@ def extract_post_id(url: str) -> str:
         r"story_fbid=(\d+)",
         r"/permalink/(\d+)",
         r"pfbid(\w+)",
+        r"/share/p/(\w+)",
     ]
     for pattern in patterns:
         match = re.search(pattern, url)
@@ -388,7 +389,7 @@ def extract_post_id(url: str) -> str:
 
 def _is_post_url(href: str) -> bool:
     """בודק אם URL הוא קישור לפוסט ספציפי (לא לקבוצה בלבד)."""
-    post_patterns = ["/posts/", "/permalink/", "story_fbid", "/story.php", "multi_permalinks", "/p/", "pfbid"]
+    post_patterns = ["/posts/", "/permalink/", "story_fbid", "/story.php", "multi_permalinks", "/p/", "pfbid", "/share/p/"]
     return any(p in href for p in post_patterns)
 
 def _extract_id_from_data_attrs(attrs_json: str) -> str | None:
@@ -417,7 +418,7 @@ _telegram_dumps_sent = 0
 # מחפש: קישורי פוסט, לינקי timestamp (עברית + אנגלית), ajaxify, data-ft/data-store.
 _CLIMB_DOM_JS = """(el, fallbackUrl) => {
     const PP = ['/posts/', '/permalink/', 'story_fbid',
-                '/story.php', 'multi_permalinks', 'pfbid', '/p/'];
+                '/story.php', 'multi_permalinks', 'pfbid', '/p/', '/share/p/'];
     const tsHe = /\\d+\\s*(שע|דק|יו|ימ|שני|חוד)/;
     const tsEn = /^\\d+\\s*[hdmwHDMW]$/;
     const tsExact = new Set(['עכשיו', 'אתמול', 'just now', 'yesterday']);
@@ -505,6 +506,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
         "a[href*='multi_permalinks']",
         "a[href*='pfbid']",
         "a[href*='/p/']",
+        "a[href*='/share/p/']",
     ]
     for sel in direct_selectors:
         link = await el.query_selector(sel)
@@ -621,7 +623,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
             try:
                 snippet = await el.evaluate("""el => {
                     const POST_PATTERNS = ['/posts/', '/permalink/', 'story_fbid',
-                                           '/story.php', 'multi_permalinks', 'pfbid', '/p/'];
+                                           '/story.php', 'multi_permalinks', 'pfbid', '/p/', '/share/p/'];
                     let node = el;
                     let highest = el;
                     for (let i = 0; i < 15; i++) {
