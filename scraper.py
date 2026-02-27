@@ -34,11 +34,18 @@ async def _has_login_overlay(page) -> bool:
     except Exception:
         return False
 
-# ביטויים דינאמיים שמשתנים בין סריקות — מוסרים לפני חישוב hash
+# ביטויים דינאמיים שמשתנים בין סריקות — מוסרים לפני חישוב hash.
+# חשוב: הביטויים מעוגנים כדי לא למחוק תוכן מתוך משפטים.
+# "5 שעות" לא-מעוגן ימחק מ-"עבודה של 5 שעות ביום" → שני פוסטים שונים יקבלו hash זהה.
 _TIMESTAMP_RE = re.compile(
-    r'(לפני\s+)?\d+\s*(שע|דק|יו|שני|חוד|שבוע|min|hr|hour|day|wk|month)\w*'
+    # "לפני 3 שעות" — prefix ייחודי ל-timestamps
+    r'לפני\s+\d+\s*(שע|דק|יו|שני|חוד|שבוע)\w*'
+    # שורה עצמאית עם מספר + יחידת זמן: "3 שעות", "5 minutes"
+    r'|^\d+\s*(שע|דק|יו|שני|חוד|שבוע|min|hr|hour|day|wk|month)\w*$'
+    # פורמט קצר בשורה עצמאית: "3h", "2d"
     r'|^\d+\s*[hdmwHDMW]$'
-    r'|עכשיו|אתמול|Just now|Yesterday',
+    # מילים עצמאיות בלבד (שורה שלמה)
+    r'|^עכשיו$|^אתמול$|^Just now$|^Yesterday$',
     re.MULTILINE | re.IGNORECASE
 )
 

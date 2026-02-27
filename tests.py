@@ -489,6 +489,17 @@ class TestStableTextForHash:
         s3 = _stable_text_for_hash(t3)
         assert s1 == s2 == s3
 
+    def test_time_unit_mid_sentence_preserved(self):
+        """מספר + יחידת זמן באמצע משפט לא נמחק — תוכן אמיתי."""
+        t1 = "מחפש עבודה של 5 שעות ביום"
+        t2 = "מחפש עבודה של 3 שעות ביום"
+        assert _stable_text_for_hash(t1) != _stable_text_for_hash(t2)
+
+    def test_standalone_words_mid_sentence_preserved(self):
+        """'אתמול' באמצע משפט לא נמחק — תוכן אמיתי."""
+        t1 = "אתמול הלכתי לקניון"
+        assert "אתמול" in _stable_text_for_hash(t1)
+
 
 # ──────────────────────────────────────────────────────────────
 # 6. classify_post (mocked API)
