@@ -9,7 +9,6 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from logger import get_logger
-from notifier import send_document
 
 log = get_logger("Scraper")
 
@@ -62,14 +61,18 @@ async def _is_wui_page(page) -> bool:
 
     פייסבוק מובייל לפעמים לא עושה redirect ללוגין כשהסשן פג,
     אלא מציג את התוכן עם לינקי wui בלבד (הורד אפליקציה / פתח בכרום וכו').
-    במצב הזה אין אף <a href> עם קישור לפוסט."""
+    במצב הזה אין אף <a href> עם קישור לפוסט.
+
+    סף מחמיר: לפחות 3 לינקי wui שמהווים לפחות 75% מכלל הלינקים.
+    סף נמוך יותר גורם ל-false positive כי פייסבוק מוסיף כמה לינקי wui
+    גם בדפים תקינים (עטיפת מובייל, באנר 'הורד אפליקציה')."""
     try:
         result = await page.evaluate("""() => {
             const links = [...document.querySelectorAll('a[href]')];
-            if (links.length === 0) return false;
+            if (links.length < 3) return false;
             const wui = links.filter(a =>
                 (a.getAttribute('href') || '').includes('/wui/'));
-            return wui.length > 0 && wui.length >= links.length / 2;
+            return wui.length >= 3 && wui.length >= links.length * 0.75;
         }""")
         return result
     except Exception:
@@ -250,7 +253,11 @@ async def login(page, email: str, password: str):
 
     # שדות לוגין — זהים באתר מובייל
     email_selectors = ["#email", "input[name='email']", "input[type='email']"]
-    pass_selectors = ["#pass", "input[name='pass']", "input[type='password']"]
+    pass_selectors = [
+        "#pass", "input[name='pass']", "input[type='password']",
+        "input[autocomplete='current-password']",
+        "input[data-sigil~='password-input']",
+    ]
 
     email_field = None
     for selector in email_selectors:
@@ -285,37 +292,24 @@ async def login(page, email: str, password: str):
         except Exception:
             continue
 
-    # --- לוגין דו-שלבי: אם אין שדה סיסמה, מחפשים כפתור Next ---
+    # --- לוגין דו-שלבי: אם אין שדה סיסמה, שולחים טופס ומחכים ---
     if not pass_field:
-        log.info("שדה סיסמה לא נמצא — מנסה לוגין דו-שלבי (Next)")
-        next_btn = None
-        for selector in _LOGIN_BTN_SELECTORS:
-            try:
-                next_btn = await page.query_selector(selector)
-                if next_btn:
-                    log.debug(f"כפתור Next/Login נמצא עם: {selector}")
-                    break
-            except Exception:
-                continue
+        log.info("שדה סיסמה לא נמצא — שולח טופס כדי לקבל שדה סיסמה")
 
-        if next_btn:
+        # ניסיון 1: Enter על שדה האימייל — הכי אמין, לא תלוי בכפתור ספציפי
+        log.debug("שולח Enter על שדה האימייל")
+        url_before_enter = page.url
+        try:
+            async with page.expect_navigation(timeout=15000):
+                await email_field.press("Enter")
+            log.debug("ניווט לשלב סיסמה התבצע בהצלחה (Enter)")
+        except Exception:
+            log.debug("לא זוהה ניווט אחרי Enter — ממתין לשינוי DOM...")
             try:
-                async with page.expect_navigation(timeout=15000):
-                    await next_btn.click()
-                log.debug("ניווט לשלב סיסמה התבצע בהצלחה")
+                await page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
-                log.debug("לא זוהה ניווט אחרי Next — ממתין...")
                 await asyncio.sleep(3)
-        else:
-            # אין כפתור Next — ננסה Enter על שדה האימייל
-            log.debug("לא נמצא כפתור Next — שולח Enter על שדה האימייל")
-            try:
-                async with page.expect_navigation(timeout=15000):
-                    await email_field.press("Enter")
-                log.debug("ניווט לשלב סיסמה התבצע בהצלחה (Enter)")
-            except Exception:
-                log.debug("לא זוהה ניווט אחרי Enter — ממתין...")
-                await asyncio.sleep(3)
+        enter_navigated = page.url != url_before_enter
 
         await random_delay(1, 3)
         await dismiss_cookie_dialog(page)
@@ -323,14 +317,60 @@ async def login(page, email: str, password: str):
         # חיפוש שדה סיסמה בדף החדש
         for selector in pass_selectors:
             try:
-                pass_field = await page.wait_for_selector(selector, timeout=10000)
+                pass_field = await page.wait_for_selector(selector, timeout=8000)
                 if pass_field:
                     log.debug(f"שדה סיסמה נמצא בשלב 2 עם: {selector}")
                     break
             except Exception:
                 continue
 
+        # ניסיון 2: אם Enter לא עזר, מנסים כפתור submit (fallback).
+        # חשוב: רק אם ה-Enter לא שינה את הדף! אם כבר ניווטנו לדף סיסמה,
+        # לחיצה על submit תשלח טופס עם סיסמה ריקה → סיכון לנעילת חשבון.
+        if not pass_field and not enter_navigated:
+            log.debug("שדה סיסמה לא נמצא אחרי Enter — מנסה כפתור submit")
+            next_btn = None
+            for selector in _LOGIN_BTN_SELECTORS:
+                try:
+                    next_btn = await page.query_selector(selector)
+                    if next_btn:
+                        log.debug(f"כפתור Next/Login נמצא עם: {selector}")
+                        break
+                except Exception:
+                    continue
+
+            if next_btn:
+                try:
+                    async with page.expect_navigation(timeout=15000):
+                        await next_btn.click()
+                    log.debug("ניווט לשלב סיסמה התבצע בהצלחה (כפתור)")
+                except Exception:
+                    log.debug("לא זוהה ניווט אחרי כפתור — ממתין לשינוי DOM...")
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=10000)
+                    except Exception:
+                        await asyncio.sleep(3)
+
+                await random_delay(1, 3)
+                await dismiss_cookie_dialog(page)
+
+                for selector in pass_selectors:
+                    try:
+                        pass_field = await page.wait_for_selector(selector, timeout=8000)
+                        if pass_field:
+                            log.debug(f"שדה סיסמה נמצא בשלב 2 עם: {selector}")
+                            break
+                    except Exception:
+                        continue
+
     if not pass_field:
+        # דיבאג: לוג תוכן הדף + צילום מסך מקומי
+        try:
+            page_text = await page.evaluate(
+                "() => (document.body?.innerText || '').substring(0, 800)")
+            log.error(f"תוכן דף — שדה סיסמה לא נמצא:\n{page_text}")
+        except Exception:
+            pass
         try:
             await page.screenshot(path="data/debug_no_password_field.png")
         except Exception:
@@ -391,16 +431,9 @@ async def login(page, email: str, password: str):
         except Exception:
             pass
 
-        # שמירה + שליחת צילום מסך לטלגרם
+        # שמירת צילום מסך מקומי לדיבאג
         try:
             await page.screenshot(path="data/debug_login_failed.png")
-            with open("data/debug_login_failed.png", "rb") as f:
-                await asyncio.to_thread(
-                    send_document,
-                    f.read(),
-                    "debug_login_failed.png",
-                    "🔍 צילום מסך — התחברות נכשלה",
-                )
         except Exception:
             pass
 
@@ -414,13 +447,6 @@ async def login(page, email: str, password: str):
     if "checkpoint" in current_url:
         try:
             await page.screenshot(path="data/debug_checkpoint.png")
-            with open("data/debug_checkpoint.png", "rb") as f:
-                await asyncio.to_thread(
-                    send_document,
-                    f.read(),
-                    "debug_checkpoint.png",
-                    "🔍 צילום מסך — פייסבוק דורש אימות נוסף (checkpoint)",
-                )
         except Exception:
             pass
         log.error(f"פייסבוק דורש אימות נוסף (checkpoint): {current_url}")
@@ -444,13 +470,6 @@ async def login(page, email: str, password: str):
             pass
         try:
             await page.screenshot(path="data/debug_login_failed.png")
-            with open("data/debug_login_failed.png", "rb") as f:
-                await asyncio.to_thread(
-                    send_document,
-                    f.read(),
-                    "debug_login_failed.png",
-                    "🔍 צילום מסך — טופס לוגין עדיין מוצג אחרי שליחה",
-                )
         except Exception:
             pass
         raise Exception(
@@ -492,13 +511,8 @@ def _extract_id_from_data_attrs(attrs_json: str) -> str | None:
     return None
 
 
-# תיקיית debug ל-HTML dumps של חילוצים שנכשלו
-_DEBUG_DIR = Path("data/debug_html")
 # מונה פנימי לסטטיסטיקת חילוץ URL
 _extraction_stats: dict[str, int] = {"success": 0, "fallback": 0}
-# מגבלת dumps שנשלחים לטלגרם בסבב (כדי לא להציף)
-_MAX_TELEGRAM_DUMPS = 3
-_telegram_dumps_sent = 0
 # דגל: scrape_group זיהה מצב wui → scrape_all צריך להתחבר מחדש
 _session_needs_refresh = False
 
@@ -621,11 +635,10 @@ def reset_extraction_stats():
     _extraction_stats["fallback"] = 0
 
 
-async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True,
+async def _extract_post_url(el, fallback_url: str, *,
                             page_urls: list[dict] | None = None) -> str:
     """מחלץ URL לפוסט מתוך אלמנט — מנסה מספר אסטרטגיות.
 
-    dump_on_fail — אם True ושום אסטרטגיה לא הצליחה, שומר HTML dump לניתוח.
     page_urls — קישורי פוסטים שנאספו בסריקת דף (לאסטרטגיה 7).
     """
     # אסטרטגיה 1: סלקטורים ישירים לקישורי פוסטים
@@ -759,63 +772,8 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True,
         except Exception:
             pass
 
-    # כל האסטרטגיות נכשלו — שמירת HTML dump לניתוח + שליחה לטלגרם
-    global _telegram_dumps_sent
+    # כל האסטרטגיות נכשלו
     _extraction_stats["fallback"] += 1
-    if dump_on_fail:
-        try:
-            _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-            # שומרים HTML של האלמנט + הורה קרוב שמכיל לינקים לפוסטים.
-            # חשוב: מחפשים הורה עם <a> שמכיל קישור לפוסט (posts, permalink, story)
-            # ולא סתם כל <a> — כי overlay לוגין מכיל <a> של "פתיחת האפליקציה"/"התחברות"
-            # שגורם ל-dump חסר ערך.
-            try:
-                snippet = await el.evaluate("""el => {
-                    const POST_PATTERNS = ['/posts/', '/permalink/', 'story_fbid',
-                                           '/story.php', 'multi_permalinks', 'pfbid', '/p/', '/share/p/'];
-                    let node = el;
-                    let highest = el;
-                    for (let i = 0; i < 30; i++) {
-                        if (!node.parentElement) break;
-                        node = node.parentElement;
-                        highest = node;
-                        const links = node.querySelectorAll('a[href]');
-                        for (const a of links) {
-                            const href = a.getAttribute('href') || '';
-                            if (POST_PATTERNS.some(p => href.includes(p))) {
-                                return node.outerHTML;
-                            }
-                        }
-                    }
-                    // לא מצאנו הורה עם לינק לפוסט — מחזירים את ההורה הכי גבוה + האלמנט עצמו
-                    return '<!-- no post links found in parents (30 levels) -->\n'
-                         + '<!-- element: -->\n' + el.outerHTML
-                         + '\n<!-- highest parent: -->\n' + highest.outerHTML;
-                }""")
-            except Exception:
-                snippet = await el.inner_html()
-            # חותכים ל-5000 תווים כדי לא לזרוק דיסק
-            snippet = snippet[:5000]
-            ts = re.sub(r'[:\s]', '_', str(asyncio.get_event_loop().time())[:10])
-            filename = f"failed_{ts}_{_extraction_stats['fallback']}.html"
-            dump_path = _DEBUG_DIR / filename
-            dump_path.write_text(snippet, encoding="utf-8")
-            log.debug(f"חילוץ URL נכשל — HTML dump נשמר: {dump_path}")
-
-            # שליחת ה-dump לטלגרם (עד _MAX_TELEGRAM_DUMPS בסבב)
-            if _telegram_dumps_sent < _MAX_TELEGRAM_DUMPS:
-                group_name = fallback_url.rstrip("/").split("/")[-1]
-                caption = f"🔍 HTML dump — חילוץ URL נכשל\nקבוצה: {group_name}"
-                sent = await asyncio.to_thread(
-                    send_document,
-                    snippet.encode("utf-8"),
-                    filename,
-                    caption,
-                )
-                if sent:
-                    _telegram_dumps_sent += 1
-        except Exception as e:
-            log.debug(f"לא הצלחתי לשמור HTML dump: {e}")
 
     log.debug(f"חילוץ URL נכשל — משתמש ב-fallback URL: {fallback_url[:60]}")
     return fallback_url
@@ -900,19 +858,27 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
         # זיהוי מצב wui — פייסבוק מציג רק לינקי "פתח באפליקציה" (סשן פג).
         # חשוב: הבדיקה רצה *אחרי* השהיה כדי לתת ל-React זמן לרנדר.
-        # אם עדיין wui אחרי 3 שניות נוספות — סימן אמיתי לסשן פג.
+        # בדיקה כפולה: (1) רוב הלינקים הם wui, (2) אין אלמנטי פוסטים בדף.
         if await _is_wui_page(page):
-            log.debug("זוהה מצב wui — ממתין 3 שניות נוספות לרינדור...")
-            await asyncio.sleep(3)
+            log.debug("זוהה מצב wui — ממתין 5 שניות נוספות לרינדור...")
+            await asyncio.sleep(5)
             if await _is_wui_page(page):
-                log.warning(
-                    "דף קבוצה במצב wui — רק לינקי 'פתח באפליקציה', "
-                    "אין קישורי פוסט. ייתכן שהסשן פג!"
-                )
-                global _session_needs_refresh
-                _session_needs_refresh = True
-                return posts
-            log.debug("מצב wui נעלם אחרי המתנה — ממשיכים")
+                # בדיקה נוספת: אם יש אלמנטי פוסטים, הדף לא באמת wui-only
+                has_posts = await page.query_selector(
+                    "article, div[data-ft], div[role='article']")
+                if has_posts:
+                    log.debug(
+                        "יש אלמנטי פוסטים למרות לינקי wui — ממשיכים (לא wui-only)")
+                else:
+                    log.warning(
+                        "דף קבוצה במצב wui — רק לינקי 'פתח באפליקציה', "
+                        "אין קישורי פוסט. ייתכן שהסשן פג!"
+                    )
+                    global _session_needs_refresh
+                    _session_needs_refresh = True
+                    return posts
+            else:
+                log.debug("מצב wui נעלם אחרי המתנה — ממשיכים")
 
         # גלילה חכמה — גוללים עד שמגיעים לפוסט שכבר נראה בסריקה קודמת
         MAX_SCROLLS = 10
@@ -1079,7 +1045,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         if stats["fallback"] > 0:
             log.warning(
                 f"חילוץ URL נכשל ב-{stats['fallback']} פוסטים — "
-                f"בדוק HTML dumps בתיקייה {_DEBUG_DIR}"
+                f"fallback ל-URL קבוצה (התנהגות צפויה ב-m.facebook.com)"
             )
 
     log.info(f"<<< נמצאו {len(posts)} פוסטים ב-{group_name}")
@@ -1087,15 +1053,6 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
 async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]:
     all_posts = []
-
-    # ניקוי dumps ישנים — מונע שליחת קבצים מסבבים קודמים
-    try:
-        import shutil
-        if _DEBUG_DIR.exists():
-            shutil.rmtree(_DEBUG_DIR)
-        _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
 
     log.info(f"מתחיל סריקה של {len(GROUPS)} קבוצות (מובייל)")
 
@@ -1150,9 +1107,6 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
         else:
             await login(page, email, password)
             await save_session(context)
-
-        global _telegram_dumps_sent
-        _telegram_dumps_sent = 0
 
         global _session_needs_refresh
         _session_needs_refresh = False
