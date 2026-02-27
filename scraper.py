@@ -39,9 +39,9 @@ async def _has_login_overlay(page) -> bool:
 # "5 שעות" לא-מעוגן ימחק מ-"עבודה של 5 שעות ביום" → שני פוסטים שונים יקבלו hash זהה.
 _TIMESTAMP_RE = re.compile(
     # "לפני 3 שעות" — prefix ייחודי ל-timestamps
-    r'לפני\s+\d+\s*(שע|דק|יו|שני|חוד|שבוע)\w*'
+    r'לפני\s+\d+\s*(שע|דק|יו|ימ|שני|חוד|שבוע)\w*'
     # שורה עצמאית עם מספר + יחידת זמן: "3 שעות", "5 minutes"
-    r'|^\d+\s*(שע|דק|יו|שני|חוד|שבוע|min|hr|hour|day|wk|month)\w*$'
+    r'|^\d+\s*(שע|דק|יו|ימ|שני|חוד|שבוע|min|hr|hour|day|wk|month)\w*$'
     # פורמט קצר בשורה עצמאית: "3h", "2d"
     r'|^\d+\s*[hdmwHDMW]$'
     # מילים עצמאיות בלבד (שורה שלמה)
@@ -456,7 +456,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
         # חותמת זמן בעברית: "12 שעות", "3 ימים", "דקה", "אתמול" וכו'
         # חותמת זמן באנגלית: "12h", "3d", "1m", "Just now", "Yesterday"
         is_timestamp = (
-            re.search(r'\d+\s*(שע|דק|יו|שני|חוד)', text)
+            re.search(r'\d+\s*(שע|דק|יו|ימ|שני|חוד)', text)
             or text in ("עכשיו", "אתמול")
             or re.search(r'^\d+\s*[hdmwHDMW]$', text)
             or text.lower() in ("just now", "yesterday")
@@ -549,7 +549,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
                 except Exception:
                     continue
                 is_timestamp = (
-                    re.search(r'\d+\s*(שע|דק|יו|שני|חוד)', text)
+                    re.search(r'\d+\s*(שע|דק|יו|ימ|שני|חוד)', text)
                     or text in ("עכשיו", "אתמול")
                     or re.search(r'^\d+\s*[hdmwHDMW]$', text)
                     or text.lower() in ("just now", "yesterday")

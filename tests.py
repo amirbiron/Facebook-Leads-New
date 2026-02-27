@@ -440,6 +440,12 @@ class TestStableTextForHash:
         t2 = "מחפש דירה בתל אביב\nלפני 5 שעות"
         assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
 
+    def test_timestamp_hebrew_yamim_removed(self):
+        """'לפני 3 ימים' (plural days) מוסר — ימים מתחיל ב-ימ, לא יו."""
+        t1 = "מחפש דירה בתל אביב\nלפני 3 ימים"
+        t2 = "מחפש דירה בתל אביב\nלפני 7 ימים"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
     def test_timestamp_english_removed(self):
         """timestamps באנגלית מוסרים."""
         t1 = "Looking for apartment\n3h"
