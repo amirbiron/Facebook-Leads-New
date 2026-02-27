@@ -1138,6 +1138,12 @@ async def run_cycle():
 
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
 
+    # דיאגנוסטיקה — מוודאים שה-DB שורד בין סשנים
+    from database import DB_PATH
+    stats = get_stats()
+    db_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    log.info(f"DB path: {DB_PATH} | size={db_size}B | seen={stats['seen']} sent={stats['sent']}")
+
     # טעינה מחדש של מילות מפתח וקבוצות מ-DB
     reload_keywords()
     try:
