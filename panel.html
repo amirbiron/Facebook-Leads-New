@@ -1281,7 +1281,7 @@
             <input type="time" id="quiet-end" dir="ltr">
           </div>
         </div>
-        <p class="hint">השאר ריק כדי לבטל שעות שקטות. הבוט לא יסרוק בטווח השעות הזה.</p>
+        <p class="hint">השאר ריק כדי לבטל שעות שקטות.</p>
 
         <div class="btn-row" style="margin-top: 16px;">
           <button class="btn btn-primary" onclick="saveSchedule()">שמור</button>
@@ -1902,8 +1902,8 @@
         loadKeywords('pre_filter'),
         loadKeywords('block'),
         loadForceSend(),
-        loadScanStatus(),
       ]);
+      // startScanPolling כבר קורא ל-loadScanStatus כפעולה ראשונה
       startScanPolling();
     }
 
