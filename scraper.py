@@ -45,6 +45,26 @@ async def _has_login_overlay(page) -> bool:
     except Exception:
         return False
 
+
+async def _is_wui_page(page) -> bool:
+    """בודק אם הדף מציג רק לינקי wui/action ('פתח באפליקציה') — סימן לסשן פג.
+
+    פייסבוק מובייל לפעמים לא עושה redirect ללוגין כשהסשן פג,
+    אלא מציג את התוכן עם לינקי wui בלבד (הורד אפליקציה / פתח בכרום וכו').
+    במצב הזה אין אף <a href> עם קישור לפוסט."""
+    try:
+        result = await page.evaluate("""() => {
+            const links = [...document.querySelectorAll('a[href]')];
+            if (links.length === 0) return false;
+            const wui = links.filter(a =>
+                (a.getAttribute('href') || '').includes('/wui/'));
+            return wui.length > 0 && wui.length >= links.length / 2;
+        }""")
+        return result
+    except Exception:
+        return False
+
+
 # ביטויים דינאמיים שמשתנים בין סריקות — מוסרים לפני חישוב hash.
 # חשוב: הביטויים מעוגנים כדי לא למחוק תוכן מתוך משפטים.
 # "5 שעות" לא-מעוגן ימחק מ-"עבודה של 5 שעות ביום" → שני פוסטים שונים יקבלו hash זהה.
@@ -413,6 +433,8 @@ _extraction_stats: dict[str, int] = {"success": 0, "fallback": 0}
 # מגבלת dumps שנשלחים לטלגרם בסבב (כדי לא להציף)
 _MAX_TELEGRAM_DUMPS = 3
 _telegram_dumps_sent = 0
+# דגל: scrape_group זיהה מצב wui → scrape_all צריך להתחבר מחדש
+_session_needs_refresh = False
 
 # JavaScript לסריקת כל הדף — מוצא את כל קישורי הפוסטים לפני עיבוד אלמנטים.
 # מאפשר התאמה גם כשהאלמנט עצמו קטן מדי ואין בו לינקים.
@@ -786,6 +808,16 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             log.warning("זוהה overlay לוגין (לפי טקסט) — ייתכן שהסשן פג!")
             return posts
 
+        # זיהוי מצב wui — פייסבוק מציג רק לינקי "פתח באפליקציה" (סשן פג)
+        if await _is_wui_page(page):
+            log.warning(
+                "דף קבוצה במצב wui — רק לינקי 'פתח באפליקציה', "
+                "אין קישורי פוסט. ייתכן שהסשן פג!"
+            )
+            global _session_needs_refresh
+            _session_needs_refresh = True
+            return posts
+
         # חילוץ שם הקבוצה מכותרת הדף (אמין יותר מסלקטורים בתוך ה-DOM)
         group_name = group["name"]
         try:
@@ -1034,8 +1066,10 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
             await page.goto("https://m.facebook.com", wait_until="domcontentloaded")
             await random_delay(1, 3)
             await dismiss_cookie_dialog(page)
-            if "login" in page.url or await _has_login_overlay(page):
-                log.warning("סשן פג — מתחבר מחדש")
+            is_wui = await _is_wui_page(page)
+            if "login" in page.url or await _has_login_overlay(page) or is_wui:
+                reason = "wui-only (רק לינקי 'פתח באפליקציה')" if is_wui else "login redirect/overlay"
+                log.warning(f"סשן פג ({reason}) — מתחבר מחדש")
                 await login(page, email, password)
                 await save_session(context)
             else:
@@ -1047,9 +1081,30 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
         global _telegram_dumps_sent
         _telegram_dumps_sent = 0
 
+        global _session_needs_refresh
+        _session_needs_refresh = False
+
         for i, group in enumerate(GROUPS, 1):
             log.info(f"--- קבוצה {i}/{len(GROUPS)} ---")
             posts = await scrape_group(page, group, seen_checker=seen_checker)
+
+            # אם scrape_group זיהה מצב wui — הסשן פג. מתחברים מחדש ומנסים שוב.
+            if _session_needs_refresh:
+                _session_needs_refresh = False
+                log.warning("סשן פג זוהה בקבוצה — מתחבר מחדש ומנסה שוב...")
+                try:
+                    await login(page, email, password)
+                    await save_session(context)
+                    posts = await scrape_group(page, group, seen_checker=seen_checker)
+                    if _session_needs_refresh:
+                        # גם אחרי re-login עדיין wui — בעיה אחרת, עוצרים
+                        _session_needs_refresh = False
+                        log.error("סשן פג גם אחרי התחברות מחדש — עוצרים סריקה")
+                        break
+                except Exception as e:
+                    log.error(f"התחברות מחדש נכשלה: {e}")
+                    break
+
             all_posts.extend(posts)
 
             # ניקוי זיכרון — מנווט לדף ריק כדי לשחרר את ה-DOM
