@@ -6,7 +6,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-DB_PATH = Path("data/leads.db")
+# נתיב אבסולוטי יחסית למיקום הקובץ — עובד גם ב-Docker וגם מקומית,
+# ולא תלוי ב-CWD שיכול להשתנות בזמן ריצה (Flask, threads).
+_BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = _BASE_DIR / "data" / "leads.db"
 
 
 def _now() -> datetime:

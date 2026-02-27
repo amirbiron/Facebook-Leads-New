@@ -12,7 +12,7 @@ from logger import get_logger
 
 log = get_logger("Scraper")
 
-SESSION_FILE = Path("data/fb_session.json")
+SESSION_FILE = Path(__file__).resolve().parent / "data" / "fb_session.json"
 
 # כותרות גנריות/שגויות שלא מייצגות שם קבוצה אמיתי
 _BAD_TITLES = {"facebook", "content not found", "page not found",
