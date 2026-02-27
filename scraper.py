@@ -364,7 +364,7 @@ async def login(page, email: str, password: str):
                         continue
 
     if not pass_field:
-        # דיבאג: לוג תוכן הדף + צילום מסך לטלגרם
+        # דיבאג: לוג תוכן הדף + צילום מסך מקומי
         try:
             page_text = await page.evaluate(
                 "() => (document.body?.innerText || '').substring(0, 800)")
