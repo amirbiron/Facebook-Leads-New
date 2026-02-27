@@ -414,6 +414,47 @@ _extraction_stats: dict[str, int] = {"success": 0, "fallback": 0}
 _MAX_TELEGRAM_DUMPS = 3
 _telegram_dumps_sent = 0
 
+# JavaScript לסריקת כל הדף — מוצא את כל קישורי הפוסטים לפני עיבוד אלמנטים.
+# מאפשר התאמה גם כשהאלמנט עצמו קטן מדי ואין בו לינקים.
+_PAGE_SCAN_JS = """() => {
+    const PP = ['/posts/', '/permalink/', 'story_fbid', '/story.php',
+                'multi_permalinks', 'pfbid', '/p/', '/share/p/'];
+    const isPU = h => PP.some(p => h.includes(p));
+    const pfx = h => h.startsWith('http') ? h : 'https://m.facebook.com' + h;
+
+    const allLinks = [...document.querySelectorAll('a[href]')];
+    const postLinks = [];
+    const seenUrls = new Set();
+
+    for (const a of allLinks) {
+        const href = a.getAttribute('href') || '';
+        if (!isPU(href)) continue;
+        const url = pfx(href);
+        if (seenUrls.has(url)) continue;
+        seenUrls.add(url);
+
+        // טיפוס בעץ למציאת מכולת הפוסט (טקסט > 100 תווים)
+        let node = a;
+        let text = '';
+        for (let i = 0; i < 30; i++) {
+            if (!node.parentElement || node.parentElement === document.body) break;
+            node = node.parentElement;
+            text = (node.innerText || '').trim();
+            if (text.length > 100) break;
+        }
+
+        postLinks.push({url, text: text.substring(0, 1000)});
+    }
+
+    return {
+        totalLinks: allLinks.length,
+        postLinkCount: postLinks.length,
+        postLinks,
+        sampleHrefs: allLinks.slice(0, 15).map(a =>
+            (a.getAttribute('href') || '').substring(0, 200))
+    };
+}"""
+
 # JavaScript לטיפוס בעץ ה-DOM — קריאה אחת שבודקת עד 15 רמות.
 # מחפש: קישורי פוסט, לינקי timestamp (עברית + אנגלית), ajaxify, data-ft/data-store.
 _CLIMB_DOM_JS = """(el, fallbackUrl) => {
@@ -432,7 +473,7 @@ _CLIMB_DOM_JS = """(el, fallbackUrl) => {
     const gid = gm ? gm[1] : null;
 
     let node = el;
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 30; i++) {
         node = node.parentElement;
         if (!node) break;
 
@@ -492,10 +533,12 @@ def reset_extraction_stats():
     _extraction_stats["fallback"] = 0
 
 
-async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True) -> str:
+async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True,
+                            page_urls: list[dict] | None = None) -> str:
     """מחלץ URL לפוסט מתוך אלמנט — מנסה מספר אסטרטגיות.
 
     dump_on_fail — אם True ושום אסטרטגיה לא הצליחה, שומר HTML dump לניתוח.
+    page_urls — קישורי פוסטים שנאספו בסריקת דף (לאסטרטגיה 7).
     """
     # אסטרטגיה 1: סלקטורים ישירים לקישורי פוסטים
     direct_selectors = [
@@ -597,7 +640,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
         pass
 
     # אסטרטגיה 6: חיפוש מקיף בעץ ה-DOM — קריאת JavaScript אחת.
-    # עולים עד 15 רמות (במקום 5 בגרסה הקודמת) ובודקים:
+    # עולים עד 30 רמות ובודקים:
     # קישורי פוסט (<a href>), לינקי timestamp, ajaxify, data-ft/data-store.
     # קריאה אחת במקום מספר round-trips → מהיר ויציב יותר.
     try:
@@ -609,6 +652,24 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
             return data["url"]
     except Exception:
         pass
+
+    # אסטרטגיה 7: התאמה לקישור מסריקת דף (page-level scan).
+    # כשהאלמנט קטן מדי (div[dir='auto']) ואין בו לינקים, מחפשים התאמה
+    # לפי תוכן טקסט — אם הטקסט של האלמנט מופיע בתוך מכולת פוסט שיש לה URL.
+    if page_urls:
+        try:
+            el_text = (await el.inner_text()).strip()
+            # שימוש ב-80 התווים הראשונים כמפתח חיפוש (מספיק לזיהוי ייחודי)
+            search_key = el_text[:80]
+            if len(search_key) >= 30:
+                for entry in page_urls:
+                    if search_key in entry.get('text', ''):
+                        url = entry['url']
+                        log.debug(f"חילוץ URL — אסטרטגיה 7 (page-level): {url[:80]}")
+                        _extraction_stats["success"] += 1
+                        return url
+        except Exception:
+            pass
 
     # כל האסטרטגיות נכשלו — שמירת HTML dump לניתוח + שליחה לטלגרם
     global _telegram_dumps_sent
@@ -626,7 +687,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
                                            '/story.php', 'multi_permalinks', 'pfbid', '/p/', '/share/p/'];
                     let node = el;
                     let highest = el;
-                    for (let i = 0; i < 15; i++) {
+                    for (let i = 0; i < 30; i++) {
                         if (!node.parentElement) break;
                         node = node.parentElement;
                         highest = node;
@@ -639,7 +700,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
                         }
                     }
                     // לא מצאנו הורה עם לינק לפוסט — מחזירים את ההורה הכי גבוה + האלמנט עצמו
-                    return '<!-- no post links found in parents -->\n'
+                    return '<!-- no post links found in parents (30 levels) -->\n'
                          + '<!-- element: -->\n' + el.outerHTML
                          + '\n<!-- highest parent: -->\n' + highest.outerHTML;
                 }""")
@@ -760,6 +821,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         KNOWN_THRESHOLD = 3  # כמה פוסטים מוכרים ברצף לפני עצירה (מונע עצירה על פוסט מוצמד)
         seen_texts = set()
         skipped_short = 0
+        page_post_urls = []  # קישורי פוסטים שנאספו בסריקת דף (page-level scan)
 
         log.debug("מתחיל גלילה חכמה...")
 
@@ -784,6 +846,29 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                     pass
                 break
 
+            # סריקת דף — מציאת כל קישורי הפוסטים לשימוש באסטרטגיה 7.
+            # רץ בכל סיבוב גלילה כי תוכן חדש נטען אחרי גלילה.
+            try:
+                scan = await page.evaluate(_PAGE_SCAN_JS)
+                existing = {e['url'] for e in page_post_urls}
+                new_count = 0
+                for entry in scan.get('postLinks', []):
+                    if entry['url'] not in existing:
+                        page_post_urls.append(entry)
+                        existing.add(entry['url'])
+                        new_count += 1
+                if scroll_i == 0:
+                    log.debug(
+                        f"סריקת דף — {scan['totalLinks']} לינקים, "
+                        f"{scan['postLinkCount']} קישורי פוסטים"
+                    )
+                    if scan['postLinkCount'] == 0 and scan.get('sampleHrefs'):
+                        log.debug(f"דוגמאות hrefs (ללא קישורי פוסט): {scan['sampleHrefs'][:5]}")
+                elif new_count > 0:
+                    log.debug(f"סריקת דף — {new_count} קישורים חדשים (סה\"כ {len(page_post_urls)})")
+            except Exception as e:
+                log.debug(f"שגיאה בסריקת דף: {e}")
+
             # מעבדים את כל האלמנטים ומדלגים על כאלה שכבר ראינו לפי תוכן.
             # לא משתמשים במעקב לפי אינדקס כי ה-DOM יכול להשתנות בגלילה
             # (virtualization, החלפת selector) מה שגורם לדילוג על אלמנטים חדשים.
@@ -806,7 +891,9 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
                     post_url = group["url"]
                     try:
-                        post_url = await _extract_post_url(el, group["url"])
+                        post_url = await _extract_post_url(
+                            el, group["url"], page_urls=page_post_urls
+                        )
                     except Exception:
                         pass
 
@@ -896,6 +983,15 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
 async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]:
     all_posts = []
+
+    # ניקוי dumps ישנים — מונע שליחת קבצים מסבבים קודמים
+    try:
+        import shutil
+        if _DEBUG_DIR.exists():
+            shutil.rmtree(_DEBUG_DIR)
+        _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
 
     log.info(f"מתחיל סריקה של {len(GROUPS)} קבוצות (מובייל)")
 
