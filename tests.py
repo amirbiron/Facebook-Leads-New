@@ -2574,6 +2574,32 @@ class TestExtractPostAgeDays:
         age = extract_post_age_days("3 days\nold post")
         assert age == 3.0
 
+    def test_english_days_ago(self):
+        age = extract_post_age_days("2 days ago\npost content")
+        assert age == 2.0
+
+    # ── false-positive prevention: ביטויי זמן בתוך גוף הטקסט ──
+    def test_no_false_positive_day_trial(self):
+        """'30 day trial' בתוך משפט — לא timestamp."""
+        age = extract_post_age_days("Get our 30 day trial for free!\nSign up now")
+        assert age is None
+
+    def test_no_false_positive_month_project(self):
+        """'3 month project' — לא timestamp."""
+        age = extract_post_age_days("Looking for a developer for a 3 month project")
+        assert age is None
+
+    def test_no_false_positive_hour_session(self):
+        """'2 hour session' — לא timestamp."""
+        age = extract_post_age_days("Join our 2 hour session on Python")
+        assert age is None
+
+    def test_english_standalone_line(self):
+        """שורה עצמאית '5 minutes' — כן timestamp."""
+        age = extract_post_age_days("User Name\n5 minutes\nPost content here")
+        assert age is not None
+        assert age < 0.01
+
     # ── אין timestamp ──
     def test_no_timestamp(self):
         age = extract_post_age_days("מחפש מתכנת פייתון לפרויקט. מישהו מכיר?")

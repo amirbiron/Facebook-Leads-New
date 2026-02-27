@@ -156,8 +156,10 @@ _AGE_HEBREW_SINGLE_RE = re.compile(
     r'לפני\s+(דקה|שעה|יום|יומיים|שבוע|חודש|שנה|שנתיים)\b', re.IGNORECASE
 )
 _AGE_SHORT_RE = re.compile(r'^(\d+)\s*([hdmwHDMW])$', re.MULTILINE)
+# מעוגן לשורה עצמאית — כדי לא לתפוס "30 day trial" או "3 month project" מתוך גוף הפוסט
 _AGE_ENGLISH_RE = re.compile(
-    r'(\d+)\s*(min|hr|hour|day|wk|week|month)\w*', re.IGNORECASE
+    r'^(\d+)\s*(min|hr|hour|day|wk|week|month)\w*(?:\s+ago)?$',
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
