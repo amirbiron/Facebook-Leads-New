@@ -2079,7 +2079,7 @@ class TestExtractPostUrl:
         el = _FakeElementForStrategies(
             selector_links={"a[href*='/posts/']": "/groups/123/posts/456"}
         )
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://m.facebook.com/groups/123/posts/456"
         assert get_extraction_stats()["success"] == 1
 
@@ -2090,7 +2090,7 @@ class TestExtractPostUrl:
         el = _FakeElementForStrategies(
             selector_links={"a[href*='/share/p/']": "https://www.facebook.com/share/p/1AkvNbuYNi/"}
         )
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://www.facebook.com/share/p/1AkvNbuYNi/"
         assert get_extraction_stats()["success"] == 1
 
@@ -2101,7 +2101,7 @@ class TestExtractPostUrl:
         el = _FakeElementForStrategies(
             selector_links={"a[href*='/posts/']": "https://m.facebook.com/groups/123/posts/456"}
         )
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://m.facebook.com/groups/123/posts/456"
 
     @pytest.mark.asyncio
@@ -2114,7 +2114,7 @@ class TestExtractPostUrl:
                 ("/groups/123/permalink/789", ""),
             ]
         )
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://m.facebook.com/groups/123/permalink/789"
         assert get_extraction_stats()["success"] == 1
 
@@ -2128,7 +2128,7 @@ class TestExtractPostUrl:
                 ("https://www.facebook.com/share/p/1AkvNbuYNi/", ""),
             ]
         )
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://www.facebook.com/share/p/1AkvNbuYNi/"
         assert get_extraction_stats()["success"] == 1
 
@@ -2141,7 +2141,7 @@ class TestExtractPostUrl:
                 ("/groups/123/permalink/999888", "3 שעות"),
             ]
         )
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert "999888" in result
         assert get_extraction_stats()["success"] == 1
 
@@ -2154,7 +2154,7 @@ class TestExtractPostUrl:
                 ("/groups/123/permalink/111222", "5h"),
             ]
         )
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert "111222" in result
 
     @pytest.mark.asyncio
@@ -2164,7 +2164,7 @@ class TestExtractPostUrl:
         el = _FakeElementForStrategies(
             attrs={"data-ft": '{"mf_story_key": "555666"}'}
         )
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://m.facebook.com/groups/123/permalink/555666/"
         assert get_extraction_stats()["success"] == 1
 
@@ -2175,7 +2175,7 @@ class TestExtractPostUrl:
         el = _FakeElementForStrategies(
             attrs={"data-store": '{"top_level_post_id": "777888"}'}
         )
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://m.facebook.com/groups/123/permalink/777888/"
 
     @pytest.mark.asyncio
@@ -2189,7 +2189,7 @@ class TestExtractPostUrl:
             inner_els={"[data-ft]": inner}
         )
         # צריך שהאלמנט החיצוני לא יחזיר data-ft בעצמו
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://m.facebook.com/groups/123/permalink/999111/"
 
     @pytest.mark.asyncio
@@ -2197,7 +2197,7 @@ class TestExtractPostUrl:
         """אסטרטגיה 5 — מזהה מספרי ב-id של האלמנט."""
         reset_extraction_stats()
         el = _FakeElementForStrategies(el_id="mall_post_1234567890")
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://m.facebook.com/groups/123/permalink/1234567890/"
         assert get_extraction_stats()["success"] == 1
 
@@ -2206,7 +2206,7 @@ class TestExtractPostUrl:
         """כשכל האסטרטגיות נכשלות — מחזיר fallback URL."""
         reset_extraction_stats()
         el = _FakeElementForStrategies(html="<div>no links</div>")
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == self.FALLBACK
         assert get_extraction_stats()["fallback"] == 1
 
@@ -2215,8 +2215,8 @@ class TestExtractPostUrl:
         """מונה fallback עולה בכל כישלון."""
         reset_extraction_stats()
         el = _FakeElementForStrategies()
-        await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
-        await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        await _extract_post_url(el, self.FALLBACK)
+        await _extract_post_url(el, self.FALLBACK)
         assert get_extraction_stats()["fallback"] == 2
 
     @pytest.mark.asyncio
@@ -2226,7 +2226,7 @@ class TestExtractPostUrl:
         el = _FakeElementForStrategies(
             attrs={"data-ft": '{"mf_story_key": "555666"}'}
         )
-        result = await _extract_post_url(el, "https://m.facebook.com/", dump_on_fail=False)
+        result = await _extract_post_url(el, "https://m.facebook.com/")
         # אין group ID ב-fallback, אז אסטרטגיה 4 לא מופעלת — fallback
         assert result == "https://m.facebook.com/"
 
@@ -2235,7 +2235,7 @@ class TestExtractPostUrl:
         """אסטרטגיה 5 — מזהה קצר מ-10 ספרות לא נחשב."""
         reset_extraction_stats()
         el = _FakeElementForStrategies(el_id="post_12345")
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == self.FALLBACK
 
     @pytest.mark.asyncio
@@ -2245,7 +2245,7 @@ class TestExtractPostUrl:
         import json
         climb = json.dumps({"url": "https://m.facebook.com/groups/123/posts/777/", "lvl": 3, "how": "post_link"})
         el = _FakeElementForStrategies(climb_result=climb)
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://m.facebook.com/groups/123/posts/777/"
         assert get_extraction_stats()["success"] == 1
 
@@ -2256,7 +2256,7 @@ class TestExtractPostUrl:
         import json
         climb = json.dumps({"url": "https://m.facebook.com/groups/123/permalink/888/", "lvl": 7, "how": "timestamp"})
         el = _FakeElementForStrategies(climb_result=climb)
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://m.facebook.com/groups/123/permalink/888/"
         assert get_extraction_stats()["success"] == 1
 
@@ -2267,7 +2267,7 @@ class TestExtractPostUrl:
         import json
         climb = json.dumps({"url": "https://m.facebook.com/groups/123/permalink/999/", "lvl": 5, "how": "ajaxify"})
         el = _FakeElementForStrategies(climb_result=climb)
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == "https://m.facebook.com/groups/123/permalink/999/"
         assert get_extraction_stats()["success"] == 1
 
@@ -2276,7 +2276,7 @@ class TestExtractPostUrl:
         """אסטרטגיה 6 — אם JS climbing לא מוצא כלום, ממשיכים ל-fallback."""
         reset_extraction_stats()
         el = _FakeElementForStrategies(climb_result=None)
-        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        result = await _extract_post_url(el, self.FALLBACK)
         assert result == self.FALLBACK
         assert get_extraction_stats()["fallback"] == 1
 
@@ -2291,7 +2291,7 @@ class TestExtractPostUrl:
         ]
         el = _FakeElementForStrategies(climb_result=None, text=post_text)
         result = await _extract_post_url(
-            el, self.FALLBACK, dump_on_fail=False, page_urls=page_urls
+            el, self.FALLBACK, page_urls=page_urls
         )
         assert result == "https://m.facebook.com/share/p/ABC123/"
         assert get_extraction_stats()["success"] == 1
@@ -2308,7 +2308,7 @@ class TestExtractPostUrl:
             climb_result=None, text="תוכן ייחודי שלא מופיע בשום מקום אחר בדף"
         )
         result = await _extract_post_url(
-            el, self.FALLBACK, dump_on_fail=False, page_urls=page_urls
+            el, self.FALLBACK, page_urls=page_urls
         )
         assert result == self.FALLBACK
         assert get_extraction_stats()["fallback"] == 1
@@ -2325,7 +2325,7 @@ class TestExtractPostUrl:
             climb_result=None, text="כותרת קצרה"
         )
         result = await _extract_post_url(
-            el, self.FALLBACK, dump_on_fail=False, page_urls=page_urls
+            el, self.FALLBACK, page_urls=page_urls
         )
         assert result == self.FALLBACK
 
@@ -2335,7 +2335,7 @@ class TestExtractPostUrl:
         reset_extraction_stats()
         el = _FakeElementForStrategies(climb_result=None, text="טקסט ארוך מספיק לבדיקה")
         result = await _extract_post_url(
-            el, self.FALLBACK, dump_on_fail=False, page_urls=[]
+            el, self.FALLBACK, page_urls=[]
         )
         assert result == self.FALLBACK
 

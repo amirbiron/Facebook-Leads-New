@@ -9,7 +9,6 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from logger import get_logger
-from notifier import send_document
 
 log = get_logger("Scraper")
 
@@ -374,13 +373,6 @@ async def login(page, email: str, password: str):
             pass
         try:
             await page.screenshot(path="data/debug_no_password_field.png")
-            with open("data/debug_no_password_field.png", "rb") as f:
-                await asyncio.to_thread(
-                    send_document,
-                    f.read(),
-                    "debug_no_password_field.png",
-                    "🔍 צילום מסך — שדה סיסמה לא נמצא בדף הלוגין",
-                )
         except Exception:
             pass
         page_title = await page.title()
@@ -439,16 +431,9 @@ async def login(page, email: str, password: str):
         except Exception:
             pass
 
-        # שמירה + שליחת צילום מסך לטלגרם
+        # שמירת צילום מסך מקומי לדיבאג
         try:
             await page.screenshot(path="data/debug_login_failed.png")
-            with open("data/debug_login_failed.png", "rb") as f:
-                await asyncio.to_thread(
-                    send_document,
-                    f.read(),
-                    "debug_login_failed.png",
-                    "🔍 צילום מסך — התחברות נכשלה",
-                )
         except Exception:
             pass
 
@@ -462,13 +447,6 @@ async def login(page, email: str, password: str):
     if "checkpoint" in current_url:
         try:
             await page.screenshot(path="data/debug_checkpoint.png")
-            with open("data/debug_checkpoint.png", "rb") as f:
-                await asyncio.to_thread(
-                    send_document,
-                    f.read(),
-                    "debug_checkpoint.png",
-                    "🔍 צילום מסך — פייסבוק דורש אימות נוסף (checkpoint)",
-                )
         except Exception:
             pass
         log.error(f"פייסבוק דורש אימות נוסף (checkpoint): {current_url}")
@@ -492,13 +470,6 @@ async def login(page, email: str, password: str):
             pass
         try:
             await page.screenshot(path="data/debug_login_failed.png")
-            with open("data/debug_login_failed.png", "rb") as f:
-                await asyncio.to_thread(
-                    send_document,
-                    f.read(),
-                    "debug_login_failed.png",
-                    "🔍 צילום מסך — טופס לוגין עדיין מוצג אחרי שליחה",
-                )
         except Exception:
             pass
         raise Exception(
@@ -540,13 +511,8 @@ def _extract_id_from_data_attrs(attrs_json: str) -> str | None:
     return None
 
 
-# תיקיית debug ל-HTML dumps של חילוצים שנכשלו
-_DEBUG_DIR = Path("data/debug_html")
 # מונה פנימי לסטטיסטיקת חילוץ URL
 _extraction_stats: dict[str, int] = {"success": 0, "fallback": 0}
-# מגבלת dumps שנשלחים לטלגרם בסבב (כדי לא להציף)
-_MAX_TELEGRAM_DUMPS = 3
-_telegram_dumps_sent = 0
 # דגל: scrape_group זיהה מצב wui → scrape_all צריך להתחבר מחדש
 _session_needs_refresh = False
 
@@ -669,11 +635,10 @@ def reset_extraction_stats():
     _extraction_stats["fallback"] = 0
 
 
-async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True,
+async def _extract_post_url(el, fallback_url: str, *,
                             page_urls: list[dict] | None = None) -> str:
     """מחלץ URL לפוסט מתוך אלמנט — מנסה מספר אסטרטגיות.
 
-    dump_on_fail — אם True ושום אסטרטגיה לא הצליחה, שומר HTML dump לניתוח.
     page_urls — קישורי פוסטים שנאספו בסריקת דף (לאסטרטגיה 7).
     """
     # אסטרטגיה 1: סלקטורים ישירים לקישורי פוסטים
@@ -807,63 +772,8 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True,
         except Exception:
             pass
 
-    # כל האסטרטגיות נכשלו — שמירת HTML dump לניתוח + שליחה לטלגרם
-    global _telegram_dumps_sent
+    # כל האסטרטגיות נכשלו
     _extraction_stats["fallback"] += 1
-    if dump_on_fail:
-        try:
-            _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-            # שומרים HTML של האלמנט + הורה קרוב שמכיל לינקים לפוסטים.
-            # חשוב: מחפשים הורה עם <a> שמכיל קישור לפוסט (posts, permalink, story)
-            # ולא סתם כל <a> — כי overlay לוגין מכיל <a> של "פתיחת האפליקציה"/"התחברות"
-            # שגורם ל-dump חסר ערך.
-            try:
-                snippet = await el.evaluate("""el => {
-                    const POST_PATTERNS = ['/posts/', '/permalink/', 'story_fbid',
-                                           '/story.php', 'multi_permalinks', 'pfbid', '/p/', '/share/p/'];
-                    let node = el;
-                    let highest = el;
-                    for (let i = 0; i < 30; i++) {
-                        if (!node.parentElement) break;
-                        node = node.parentElement;
-                        highest = node;
-                        const links = node.querySelectorAll('a[href]');
-                        for (const a of links) {
-                            const href = a.getAttribute('href') || '';
-                            if (POST_PATTERNS.some(p => href.includes(p))) {
-                                return node.outerHTML;
-                            }
-                        }
-                    }
-                    // לא מצאנו הורה עם לינק לפוסט — מחזירים את ההורה הכי גבוה + האלמנט עצמו
-                    return '<!-- no post links found in parents (30 levels) -->\n'
-                         + '<!-- element: -->\n' + el.outerHTML
-                         + '\n<!-- highest parent: -->\n' + highest.outerHTML;
-                }""")
-            except Exception:
-                snippet = await el.inner_html()
-            # חותכים ל-5000 תווים כדי לא לזרוק דיסק
-            snippet = snippet[:5000]
-            ts = re.sub(r'[:\s]', '_', str(asyncio.get_event_loop().time())[:10])
-            filename = f"failed_{ts}_{_extraction_stats['fallback']}.html"
-            dump_path = _DEBUG_DIR / filename
-            dump_path.write_text(snippet, encoding="utf-8")
-            log.debug(f"חילוץ URL נכשל — HTML dump נשמר: {dump_path}")
-
-            # שליחת ה-dump לטלגרם (עד _MAX_TELEGRAM_DUMPS בסבב)
-            if _telegram_dumps_sent < _MAX_TELEGRAM_DUMPS:
-                group_name = fallback_url.rstrip("/").split("/")[-1]
-                caption = f"🔍 HTML dump — חילוץ URL נכשל\nקבוצה: {group_name}"
-                sent = await asyncio.to_thread(
-                    send_document,
-                    snippet.encode("utf-8"),
-                    filename,
-                    caption,
-                )
-                if sent:
-                    _telegram_dumps_sent += 1
-        except Exception as e:
-            log.debug(f"לא הצלחתי לשמור HTML dump: {e}")
 
     log.debug(f"חילוץ URL נכשל — משתמש ב-fallback URL: {fallback_url[:60]}")
     return fallback_url
@@ -1135,7 +1045,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         if stats["fallback"] > 0:
             log.warning(
                 f"חילוץ URL נכשל ב-{stats['fallback']} פוסטים — "
-                f"בדוק HTML dumps בתיקייה {_DEBUG_DIR}"
+                f"fallback ל-URL קבוצה (התנהגות צפויה ב-m.facebook.com)"
             )
 
     log.info(f"<<< נמצאו {len(posts)} פוסטים ב-{group_name}")
@@ -1143,15 +1053,6 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
 async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]:
     all_posts = []
-
-    # ניקוי dumps ישנים — מונע שליחת קבצים מסבבים קודמים
-    try:
-        import shutil
-        if _DEBUG_DIR.exists():
-            shutil.rmtree(_DEBUG_DIR)
-        _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
 
     log.info(f"מתחיל סריקה של {len(GROUPS)} קבוצות (מובייל)")
 
@@ -1206,9 +1107,6 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
         else:
             await login(page, email, password)
             await save_session(context)
-
-        global _telegram_dumps_sent
-        _telegram_dumps_sent = 0
 
         global _session_needs_refresh
         _session_needs_refresh = False
