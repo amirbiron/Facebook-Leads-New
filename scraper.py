@@ -62,14 +62,18 @@ async def _is_wui_page(page) -> bool:
 
     פייסבוק מובייל לפעמים לא עושה redirect ללוגין כשהסשן פג,
     אלא מציג את התוכן עם לינקי wui בלבד (הורד אפליקציה / פתח בכרום וכו').
-    במצב הזה אין אף <a href> עם קישור לפוסט."""
+    במצב הזה אין אף <a href> עם קישור לפוסט.
+
+    סף מחמיר: לפחות 3 לינקי wui שמהווים לפחות 75% מכלל הלינקים.
+    סף נמוך יותר גורם ל-false positive כי פייסבוק מוסיף כמה לינקי wui
+    גם בדפים תקינים (עטיפת מובייל, באנר 'הורד אפליקציה')."""
     try:
         result = await page.evaluate("""() => {
             const links = [...document.querySelectorAll('a[href]')];
-            if (links.length === 0) return false;
+            if (links.length < 3) return false;
             const wui = links.filter(a =>
                 (a.getAttribute('href') || '').includes('/wui/'));
-            return wui.length > 0 && wui.length >= links.length / 2;
+            return wui.length >= 3 && wui.length >= links.length * 0.75;
         }""")
         return result
     except Exception:
@@ -940,19 +944,27 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
         # זיהוי מצב wui — פייסבוק מציג רק לינקי "פתח באפליקציה" (סשן פג).
         # חשוב: הבדיקה רצה *אחרי* השהיה כדי לתת ל-React זמן לרנדר.
-        # אם עדיין wui אחרי 3 שניות נוספות — סימן אמיתי לסשן פג.
+        # בדיקה כפולה: (1) רוב הלינקים הם wui, (2) אין אלמנטי פוסטים בדף.
         if await _is_wui_page(page):
-            log.debug("זוהה מצב wui — ממתין 3 שניות נוספות לרינדור...")
-            await asyncio.sleep(3)
+            log.debug("זוהה מצב wui — ממתין 5 שניות נוספות לרינדור...")
+            await asyncio.sleep(5)
             if await _is_wui_page(page):
-                log.warning(
-                    "דף קבוצה במצב wui — רק לינקי 'פתח באפליקציה', "
-                    "אין קישורי פוסט. ייתכן שהסשן פג!"
-                )
-                global _session_needs_refresh
-                _session_needs_refresh = True
-                return posts
-            log.debug("מצב wui נעלם אחרי המתנה — ממשיכים")
+                # בדיקה נוספת: אם יש אלמנטי פוסטים, הדף לא באמת wui-only
+                has_posts = await page.query_selector(
+                    "article, div[data-ft], div[role='article']")
+                if has_posts:
+                    log.debug(
+                        "יש אלמנטי פוסטים למרות לינקי wui — ממשיכים (לא wui-only)")
+                else:
+                    log.warning(
+                        "דף קבוצה במצב wui — רק לינקי 'פתח באפליקציה', "
+                        "אין קישורי פוסט. ייתכן שהסשן פג!"
+                    )
+                    global _session_needs_refresh
+                    _session_needs_refresh = True
+                    return posts
+            else:
+                log.debug("מצב wui נעלם אחרי המתנה — ממשיכים")
 
         # גלילה חכמה — גוללים עד שמגיעים לפוסט שכבר נראה בסריקה קודמת
         MAX_SCROLLS = 10
