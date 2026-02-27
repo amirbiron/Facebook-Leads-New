@@ -413,6 +413,37 @@ async def login(page, email: str, password: str):
         log.error(f"פייסבוק דורש אימות נוסף (checkpoint): {current_url}")
         raise Exception("פייסבוק דורש אימות נוסף — בדוק את החשבון ידנית")
 
+    # אימות נוסף: פייסבוק מובייל מפנה מ-/login ל-/ — בדיקת URL לא מספיקה.
+    # אם שדות הלוגין עדיין מוצגים, ההתחברות לא הצליחה באמת
+    # (ייתכן CAPTCHA, סיסמה שגויה, חסימה, או שינוי ב-UI).
+    still_has_form = None
+    try:
+        still_has_form = await page.query_selector("input[name='email']")
+    except Exception:
+        pass
+
+    if still_has_form:
+        try:
+            page_text = await page.evaluate(
+                "() => (document.body?.innerText || '').substring(0, 800)")
+            log.error(f"תוכן דף — טופס לוגין עדיין מוצג:\n{page_text}")
+        except Exception:
+            pass
+        try:
+            await page.screenshot(path="data/debug_login_failed.png")
+            with open("data/debug_login_failed.png", "rb") as f:
+                await asyncio.to_thread(
+                    send_document,
+                    f.read(),
+                    "debug_login_failed.png",
+                    "🔍 צילום מסך — טופס לוגין עדיין מוצג אחרי שליחה",
+                )
+        except Exception:
+            pass
+        raise Exception(
+            "התחברות נכשלה — טופס לוגין עדיין מוצג "
+            "(ייתכן CAPTCHA או סיסמה שגויה)")
+
     log.info(f"מחובר בהצלחה — URL: {current_url}")
 
 def extract_post_id(url: str) -> str:
@@ -830,16 +861,6 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             log.warning("זוהה overlay לוגין (לפי טקסט) — ייתכן שהסשן פג!")
             return posts
 
-        # זיהוי מצב wui — פייסבוק מציג רק לינקי "פתח באפליקציה" (סשן פג)
-        if await _is_wui_page(page):
-            log.warning(
-                "דף קבוצה במצב wui — רק לינקי 'פתח באפליקציה', "
-                "אין קישורי פוסט. ייתכן שהסשן פג!"
-            )
-            global _session_needs_refresh
-            _session_needs_refresh = True
-            return posts
-
         # חילוץ שם הקבוצה מכותרת הדף (אמין יותר מסלקטורים בתוך ה-DOM)
         group_name = group["name"]
         try:
@@ -863,6 +884,22 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             log.warning(f"שגיאה בחילוץ כותרת דף לקבוצה {group['url']}: {e}")
 
         await random_delay(2, 4)
+
+        # זיהוי מצב wui — פייסבוק מציג רק לינקי "פתח באפליקציה" (סשן פג).
+        # חשוב: הבדיקה רצה *אחרי* השהיה כדי לתת ל-React זמן לרנדר.
+        # אם עדיין wui אחרי 3 שניות נוספות — סימן אמיתי לסשן פג.
+        if await _is_wui_page(page):
+            log.debug("זוהה מצב wui — ממתין 3 שניות נוספות לרינדור...")
+            await asyncio.sleep(3)
+            if await _is_wui_page(page):
+                log.warning(
+                    "דף קבוצה במצב wui — רק לינקי 'פתח באפליקציה', "
+                    "אין קישורי פוסט. ייתכן שהסשן פג!"
+                )
+                global _session_needs_refresh
+                _session_needs_refresh = True
+                return posts
+            log.debug("מצב wui נעלם אחרי המתנה — ממשיכים")
 
         # גלילה חכמה — גוללים עד שמגיעים לפוסט שכבר נראה בסריקה קודמת
         MAX_SCROLLS = 10
