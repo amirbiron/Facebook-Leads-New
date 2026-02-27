@@ -339,15 +339,30 @@ async def login(page, email: str, password: str):
     await pass_field.fill(password)
     await random_delay(0.5, 1)
 
-    # שולח טופס — מנסה כפתור login, אחרת Enter
+    # שולח טופס — מנסה סלקטורים מרובים לכפתור login, אחרת Enter
     log.debug("שולח טופס לוגין...")
+    login_btn = None
+    login_btn_selectors = [
+        "button[name='login']",
+        "input[name='login']",
+        "button[data-sigil='m_login_button']",
+        "[data-sigil='touchable m_login_button']",
+        "button[type='submit']",
+        "input[type='submit']",
+    ]
+    for sel in login_btn_selectors:
+        login_btn = await page.query_selector(sel)
+        if login_btn:
+            log.debug(f"כפתור login נמצא עם: {sel}")
+            break
+
     try:
-        login_btn = await page.query_selector("button[name='login'], input[name='login']")
         if login_btn:
             async with page.expect_navigation(timeout=15000):
                 await login_btn.click()
             log.debug("ניווט התבצע בהצלחה (כפתור)")
         else:
+            log.debug("לא נמצא כפתור login — שולח Enter")
             async with page.expect_navigation(timeout=15000):
                 await pass_field.press("Enter")
             log.debug("ניווט התבצע בהצלחה (Enter)")
