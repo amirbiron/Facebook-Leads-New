@@ -1221,6 +1221,12 @@ async def run_cycle():
         return
 
     # שלב 1 — גרידה (דפדפן פתוח)
+    # מעדכנים total_groups מראש — כדי שהפרוגרס בר יראה את המצב כבר בזמן הקבוצה הראשונה
+    try:
+        from scraper import GROUPS
+        scan_progress["total_groups"] = len(GROUPS)
+    except Exception:
+        pass
     try:
         posts = await scrape_all(fb_email, fb_password, seen_checker=is_seen,
                                  on_group_done=_on_group_scraped)
