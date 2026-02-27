@@ -1082,6 +1082,7 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
         _telegram_dumps_sent = 0
 
         global _session_needs_refresh
+        _session_needs_refresh = False
 
         for i, group in enumerate(GROUPS, 1):
             log.info(f"--- קבוצה {i}/{len(GROUPS)} ---")
