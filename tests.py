@@ -653,6 +653,21 @@ class TestStableTextForHash:
         t2 = "מחפש מעצב גרפי לפרויקט"
         assert _stable_text_for_hash(t1) != _stable_text_for_hash(t2)
 
+    def test_phone_number_preserved_in_hash(self):
+        """מספרי טלפון ישראליים לא נמחקים מה-hash — הם תוכן משמעותי."""
+        assert "054-1234567" in _stable_text_for_hash("054-1234567")
+        assert "972-52-1234567" in _stable_text_for_hash("+972-52-1234567")
+        # פוסטים עם מספרי טלפון שונים חייבים לקבל hash שונה
+        t1 = "מחפש עבודה\n054-1234567"
+        t2 = "מחפש עבודה\n052-9876543"
+        assert _stable_text_for_hash(t1) != _stable_text_for_hash(t2)
+
+    def test_pure_numeric_noise_still_stripped(self):
+        """שורות שהן רק מספרים (לייקים/תגובות) עדיין נמחקות."""
+        assert _stable_text_for_hash("1,234") == ""
+        assert _stable_text_for_hash("5") == ""
+        assert _stable_text_for_hash("12.5") == ""
+
 
 class TestContentHashDedup:
     """בדיקות ל-content_hash dedup — מניעת כפילויות כשה-post_id משתנה בין סשנים."""

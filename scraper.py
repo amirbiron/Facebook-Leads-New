@@ -155,7 +155,8 @@ def _stable_text_for_hash(text: str) -> str:
         if not s:
             continue
         # דילוג על שורות שהן רק מספרים וסימני פיסוק (לייקים, תגובות)
-        if re.match(r'^[\d,.\-+ ]+$', s):
+        # זהירות: לא לכלול מקף (-) או פלוס (+) — הם חלק ממספרי טלפון ישראליים
+        if re.match(r'^\d[\d,. ]*$', s):
             continue
         # דילוג על מילות רעש UI
         if s in _NOISE_WORDS:
