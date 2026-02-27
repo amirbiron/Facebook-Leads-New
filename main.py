@@ -1013,7 +1013,6 @@ async def run_cycle():
             c_hash = _content_dedup_hash(post["content"])
             if is_content_hash_sent(c_hash):
                 log.debug(f"דילוג על force_send — תוכן זהה כבר נשלח (content_hash)")
-                rest_posts.append(post)
                 continue
             reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
             send_lead(
