@@ -94,6 +94,19 @@ _TIMESTAMP_RE = re.compile(
     re.MULTILINE | re.IGNORECASE
 )
 
+# שורות engagement שמשתנות בין סריקות (מספר תגובות/לייקים/שיתופים).
+# מעוגן לשורה שלמה כדי לא למחוק "5 תגובות" מתוך "קיבלתי 5 תגובות על הפוסט".
+# תומך בפורמט בודד ("5 תגובות") ומשולב ("5 תגובות · 3 שיתופים").
+_ENGAGEMENT_WORDS_PATTERN = (
+    r'(?:תגוב\w*|שיתו[פף]\w*|לייק\w*|צפי\w*'
+    r'|comments?|shares?|likes?|reactions?|views?)'
+)
+_ENGAGEMENT_LINE_RE = re.compile(
+    r'^\d[\d,.]*\s*' + _ENGAGEMENT_WORDS_PATTERN
+    + r'(?:\s*[·•|,]\s*\d[\d,.]*\s*' + _ENGAGEMENT_WORDS_PATTERN + r')*\s*$',
+    re.IGNORECASE
+)
+
 
 def _stable_text_for_hash(text: str) -> str:
     """מנרמל טקסט לחישוב hash יציב — מסיר timestamps, מספרים בודדים, ורעשי UI."""
@@ -106,6 +119,9 @@ def _stable_text_for_hash(text: str) -> str:
             continue
         # דילוג על שורות UI קצרות (Like, Comment, Share, הגב, שתף)
         if s in ('Like', 'Comment', 'Share', 'הגב', 'שתף', 'אהבתי'):
+            continue
+        # דילוג על שורות engagement שמשתנות בין סריקות ("5 תגובות", "3 שיתופים")
+        if _ENGAGEMENT_LINE_RE.match(s):
             continue
         stable.append(s)
     joined = '\n'.join(stable)
