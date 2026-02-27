@@ -670,18 +670,18 @@ async def _telegram_control_loop(
     except Exception:
         pass
 
-    # הודעת הפעלה + תפריט ראשי לכל משתמש מורשה (התנהגות קיימת)
-    try:
-        for chat_id_int in allowed_chat_ids:
+    # הודעת הפעלה + תפריט ראשי לכל משתמש מורשה
+    for cid in allowed_chat_ids:
+        try:
             await asyncio.to_thread(
                 send_message_with_buttons,
                 "הבוט פעיל — בחר פעולה:",
                 _main_menu_buttons(),
-                chat_id=chat_id_int,
+                chat_id=cid,
                 disable_web_page_preview=True,
             )
-    except Exception:
-        pass
+        except Exception:
+            pass
 
     offset = load_offset()
     log.info("בקרת טלגרם הופעלה. פקודות: /menu /scan /status")
