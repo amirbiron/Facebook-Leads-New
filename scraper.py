@@ -1067,7 +1067,13 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
     log.info(f"<<< נמצאו {len(posts)} פוסטים ב-{group_name}")
     return posts
 
-async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]:
+async def scrape_all(email: str, password: str, seen_checker=None,
+                     on_group_done=None) -> list[dict]:
+    """סורק את כל הקבוצות ומחזיר רשימת פוסטים.
+
+    on_group_done — callback אופציונלי שנקרא אחרי כל קבוצה:
+        on_group_done(group_name, group_index, total_groups, posts_found)
+    """
     all_posts = []
 
     log.info(f"מתחיל סריקה של {len(GROUPS)} קבוצות (מובייל)")
@@ -1150,6 +1156,13 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
                     break
 
             all_posts.extend(posts)
+
+            # עדכון callback התקדמות (אם סופק)
+            if on_group_done:
+                try:
+                    on_group_done(group["name"], i, len(GROUPS), len(posts))
+                except Exception:
+                    pass
 
             # ניקוי זיכרון — מנווט לדף ריק כדי לשחרר את ה-DOM
             try:

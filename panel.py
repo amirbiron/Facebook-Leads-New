@@ -26,8 +26,26 @@ log = get_logger("Panel")
 PANEL_PORT = int(os.environ.get("PANEL_PORT", os.environ.get("PORT", "8080")))
 
 
+class _QuietRequestFilter:
+    """מסנן בקשות polling תכופות מלוגים של werkzeug — מונע רעש."""
+    _QUIET_PATHS = {"/api/scan-status"}
+
+    def filter(self, record):
+        msg = record.getMessage() if hasattr(record, 'getMessage') else str(record.msg)
+        # werkzeug מלוגג בפורמט: '10.0.0.1 - - [date] "GET /path ..." 200 -'
+        for path in self._QUIET_PATHS:
+            if f'"GET {path} ' in msg or f'"GET {path}?' in msg:
+                return False
+        return True
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
+
+    # השתקת לוגי werkzeug לבקשות polling תכופות (scan-status כל 3 שניות)
+    import logging as _logging
+    werkzeug_log = _logging.getLogger("werkzeug")
+    werkzeug_log.addFilter(_QuietRequestFilter())
 
     # ── אימות — PANEL_TOKEN ──────────────────────────────────
     # אם PANEL_TOKEN מוגדר, כל בקשה ל-API חייבת לכלול את הטוקן
@@ -178,6 +196,39 @@ def create_app() -> Flask:
         from main import remove_force_send_keyword
         ok, msg = remove_force_send_keyword(word)
         return jsonify({"ok": ok, "message": msg})
+
+    # ── סטטוס סריקה בזמן אמת ────────────────────────────────
+
+    @app.route("/api/scan-status", methods=["GET"])
+    @require_auth
+    def get_scan_status():
+        from main import scan_progress
+        from database import get_stats, get_daily_stats
+        from datetime import datetime
+        import os
+        tz_name = os.environ.get("TIMEZONE", "UTC")
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo("UTC")
+        now = datetime.now(tz=tz)
+        today_prefix = now.strftime("%Y-%m-%d")
+        daily = get_daily_stats(today_prefix)
+        total = get_stats()
+        # העתקה עמוקה של groups_done — מונע race condition עם _on_group_scraped
+        # שמוסיף לרשימה מ-thread אחר בזמן הסריאליזציה
+        import copy
+        progress_snapshot = copy.deepcopy(scan_progress)
+        return jsonify({
+            **progress_snapshot,
+            "daily_seen": daily["seen"],
+            "daily_sent": daily["sent"],
+            "total_seen": total["seen"],
+            "total_sent": total["sent"],
+            "server_time": now.strftime("%H:%M:%S"),
+        })
 
     # ── מילות מפתח ────────────────────────────────────────────
 
