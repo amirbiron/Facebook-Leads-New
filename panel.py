@@ -179,6 +179,35 @@ def create_app() -> Flask:
         ok, msg = remove_force_send_keyword(word)
         return jsonify({"ok": ok, "message": msg})
 
+    # ── סטטוס סריקה בזמן אמת ────────────────────────────────
+
+    @app.route("/api/scan-status", methods=["GET"])
+    @require_auth
+    def get_scan_status():
+        from main import scan_progress
+        from database import get_stats, get_daily_stats
+        from datetime import datetime
+        import os
+        tz_name = os.environ.get("TIMEZONE", "UTC")
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo("UTC")
+        now = datetime.now(tz=tz)
+        today_prefix = now.strftime("%Y-%m-%d")
+        daily = get_daily_stats(today_prefix)
+        total = get_stats()
+        return jsonify({
+            **scan_progress,
+            "daily_seen": daily["seen"],
+            "daily_sent": daily["sent"],
+            "total_seen": total["seen"],
+            "total_sent": total["sent"],
+            "server_time": now.strftime("%H:%M:%S"),
+        })
+
     # ── מילות מפתח ────────────────────────────────────────────
 
     @app.route("/api/keywords/<kw_type>", methods=["GET"])

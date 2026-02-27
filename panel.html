@@ -692,6 +692,184 @@
         gap: 0;
       }
     }
+
+    /* ═══ Scan Status ═══ */
+
+    .scan-badge {
+      font-size: 11px;
+      font-weight: 500;
+      padding: 2px 10px;
+      border-radius: 20px;
+      margin-inline-start: auto;
+    }
+
+    .scan-badge-idle {
+      background: var(--secondary);
+      color: var(--text-secondary);
+    }
+
+    .scan-badge-active {
+      background: oklch(0.25 0.08 145);
+      color: var(--success);
+      animation: pulse-badge 2s ease-in-out infinite;
+    }
+
+    .scan-badge-done {
+      background: oklch(0.20 0.06 145);
+      color: var(--success);
+    }
+
+    .scan-badge-error {
+      background: var(--destructive-soft);
+      color: var(--destructive);
+    }
+
+    @keyframes pulse-badge {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    .scan-stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .scan-stat-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 14px 12px;
+      text-align: center;
+    }
+
+    .scan-stat-value {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.2;
+    }
+
+    .scan-stat-label {
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    .scan-progress-section {
+      margin-bottom: 16px;
+    }
+
+    .scan-phase-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .scan-phase-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    .scan-phase-detail {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .scan-progress-bar-track {
+      width: 100%;
+      height: 6px;
+      background: var(--bg);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .scan-progress-bar-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+
+    .scan-details {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin-bottom: 4px;
+    }
+
+    .scan-detail-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid oklch(0.22 0.01 270);
+      font-size: 13px;
+    }
+
+    .scan-detail-row:last-child {
+      border-bottom: none;
+    }
+
+    .scan-detail-key {
+      color: var(--text-secondary);
+    }
+
+    .scan-detail-val {
+      color: var(--text);
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .scan-groups-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .scan-group-done-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: var(--bg);
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+    }
+
+    .scan-group-done-name {
+      color: var(--text);
+      max-width: 70%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .scan-group-done-count {
+      color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .scan-times {
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    .scan-time-text {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    @media (max-width: 640px) {
+      .scan-stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
   </style>
 </head>
 <body>
@@ -739,7 +917,14 @@
       </div>
 
       <div class="sidebar-nav">
-        <a href="#account" class="nav-item active" data-section="account">
+        <a href="#scan-status" class="nav-item active" data-section="scan-status">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+          </svg>
+          <span>סטטוס סריקה</span>
+        </a>
+
+        <a href="#account" class="nav-item" data-section="account">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
           </svg>
@@ -796,6 +981,95 @@
         <h2>הגדרות</h2>
         <p>ניהול כל הגדרות הבוט ממקום אחד</p>
       </div>
+
+      <!-- ═══ סטטוס סריקה ═══ -->
+      <section id="scan-status" class="card">
+        <h3 class="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+          </svg>
+          סטטוס סריקה
+          <span id="scan-live-badge" class="scan-badge scan-badge-idle">ממתין</span>
+        </h3>
+        <p class="card-desc">מעקב אחרי סריקות בזמן אמת — מתעדכן אוטומטית כל 3 שניות</p>
+
+        <!-- סטטיסטיקות יומיות -->
+        <div class="scan-stats-grid">
+          <div class="scan-stat-card">
+            <div class="scan-stat-value" id="stat-daily-seen">0</div>
+            <div class="scan-stat-label">נסרקו היום</div>
+          </div>
+          <div class="scan-stat-card">
+            <div class="scan-stat-value" id="stat-daily-sent">0</div>
+            <div class="scan-stat-label">לידים היום</div>
+          </div>
+          <div class="scan-stat-card">
+            <div class="scan-stat-value" id="stat-total-seen">0</div>
+            <div class="scan-stat-label">סה״כ נסרקו</div>
+          </div>
+          <div class="scan-stat-card">
+            <div class="scan-stat-value" id="stat-total-sent">0</div>
+            <div class="scan-stat-label">סה״כ לידים</div>
+          </div>
+        </div>
+
+        <!-- פרוגרס בר + שלב נוכחי -->
+        <div class="scan-progress-section">
+          <div class="scan-phase-row">
+            <span class="scan-phase-label" id="scan-phase-text">ממתין לסריקה</span>
+            <span class="scan-phase-detail" id="scan-phase-detail"></span>
+          </div>
+          <div class="scan-progress-bar-track">
+            <div class="scan-progress-bar-fill" id="scan-progress-fill" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <!-- פרטי סריקה נוכחית -->
+        <div id="scan-details" class="scan-details" style="display:none;">
+          <div class="scan-detail-row">
+            <span class="scan-detail-key">קבוצה נוכחית</span>
+            <span class="scan-detail-val" id="scan-current-group">—</span>
+          </div>
+          <div class="scan-detail-row">
+            <span class="scan-detail-key">התקדמות</span>
+            <span class="scan-detail-val" id="scan-group-progress">—</span>
+          </div>
+          <div class="scan-detail-row">
+            <span class="scan-detail-key">פוסטים שנמצאו</span>
+            <span class="scan-detail-val" id="scan-posts-found">0</span>
+          </div>
+          <div class="scan-detail-row">
+            <span class="scan-detail-key">פוסטים חדשים</span>
+            <span class="scan-detail-val" id="scan-new-posts">0</span>
+          </div>
+          <div class="scan-detail-row">
+            <span class="scan-detail-key">לסיווג AI</span>
+            <span class="scan-detail-val" id="scan-to-classify">0</span>
+          </div>
+          <div class="scan-detail-row">
+            <span class="scan-detail-key">לידים בסבב</span>
+            <span class="scan-detail-val" id="scan-leads-sent">0</span>
+          </div>
+        </div>
+
+        <!-- קבוצות שהושלמו -->
+        <div id="scan-groups-done-section" style="display:none;">
+          <div class="card-section">
+            <h4 class="card-title" style="font-size:14px;">
+              <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              קבוצות שנסרקו
+            </h4>
+            <div id="scan-groups-done-list" class="scan-groups-list"></div>
+          </div>
+        </div>
+
+        <!-- זמנים -->
+        <div class="scan-times">
+          <span id="scan-time-info" class="scan-time-text"></span>
+        </div>
+      </section>
 
       <!-- ═══ חשבון פייסבוק ═══ -->
       <section id="account" class="card">
@@ -1437,6 +1711,141 @@
       }
     }
 
+    // ═══ Scan Status (Live Polling) ═══════════════════════
+
+    let _scanPollTimer = null;
+
+    function startScanPolling() {
+      // polling כל 3 שניות — קל מספיק גם ל-512MB VM
+      loadScanStatus();
+      _scanPollTimer = setInterval(loadScanStatus, 3000);
+    }
+
+    function stopScanPolling() {
+      if (_scanPollTimer) {
+        clearInterval(_scanPollTimer);
+        _scanPollTimer = null;
+      }
+    }
+
+    async function loadScanStatus() {
+      try {
+        const d = await api('/api/scan-status');
+        renderScanStatus(d);
+      } catch (e) {
+        // אם הפאנל לא מחובר / טוקן פג — לא מציגים שגיאה כל 3 שניות
+      }
+    }
+
+    function renderScanStatus(d) {
+      // באדג' — פעיל / ממתין / הסתיים / שגיאה
+      const badge = document.getElementById('scan-live-badge');
+      if (d.active) {
+        badge.textContent = 'פעיל';
+        badge.className = 'scan-badge scan-badge-active';
+      } else if (d.phase === 'done') {
+        badge.textContent = 'הסתיים';
+        badge.className = 'scan-badge scan-badge-done';
+      } else if (d.phase === 'error') {
+        badge.textContent = 'שגיאה';
+        badge.className = 'scan-badge scan-badge-error';
+      } else {
+        badge.textContent = 'ממתין';
+        badge.className = 'scan-badge scan-badge-idle';
+      }
+
+      // סטטיסטיקות
+      document.getElementById('stat-daily-seen').textContent = d.daily_seen ?? 0;
+      document.getElementById('stat-daily-sent').textContent = d.daily_sent ?? 0;
+      document.getElementById('stat-total-seen').textContent = d.total_seen ?? 0;
+      document.getElementById('stat-total-sent').textContent = d.total_sent ?? 0;
+
+      // שלב + פרוגרס בר
+      const phaseText = document.getElementById('scan-phase-text');
+      const phaseDetail = document.getElementById('scan-phase-detail');
+      const fill = document.getElementById('scan-progress-fill');
+
+      if (d.active) {
+        phaseText.textContent = d.phase_label || 'סורק...';
+        let pct = 0;
+        if (d.phase === 'scraping' && d.total_groups > 0) {
+          // חישוב אחוז לפי קבוצות שהושלמו
+          pct = Math.round(((d.groups_done?.length || 0) / d.total_groups) * 60);
+          phaseDetail.textContent = `קבוצה ${d.current_group_index || 0}/${d.total_groups}`;
+        } else if (d.phase === 'filtering') {
+          pct = 70;
+          phaseDetail.textContent = `${d.new_posts || 0} פוסטים חדשים`;
+        } else if (d.phase === 'classifying') {
+          pct = 85;
+          phaseDetail.textContent = `${d.posts_to_classify || 0} פוסטים`;
+        }
+        fill.style.width = pct + '%';
+      } else if (d.phase === 'done') {
+        phaseText.textContent = 'סריקה הסתיימה';
+        phaseDetail.textContent = d.leads_sent ? `${d.leads_sent} לידים` : 'ללא לידים חדשים';
+        fill.style.width = '100%';
+      } else if (d.phase === 'error') {
+        phaseText.textContent = 'שגיאה בסריקה';
+        phaseDetail.textContent = d.error ? d.error.substring(0, 60) : '';
+        fill.style.width = '0%';
+      } else {
+        phaseText.textContent = 'ממתין לסריקה הבאה';
+        phaseDetail.textContent = d.server_time ? `שעת שרת: ${d.server_time}` : '';
+        fill.style.width = '0%';
+      }
+
+      // פרטי סריקה — מוצגים רק בזמן סריקה או אחריה
+      const details = document.getElementById('scan-details');
+      if (d.active || d.phase === 'done' || d.phase === 'error') {
+        details.style.display = '';
+        document.getElementById('scan-current-group').textContent = d.current_group || '—';
+        document.getElementById('scan-group-progress').textContent =
+          d.total_groups ? `${d.groups_done?.length || 0} / ${d.total_groups}` : '—';
+        document.getElementById('scan-posts-found').textContent = d.total_posts_found ?? 0;
+        document.getElementById('scan-new-posts').textContent = d.new_posts ?? 0;
+        document.getElementById('scan-to-classify').textContent = d.posts_to_classify ?? 0;
+        document.getElementById('scan-leads-sent').textContent = d.leads_sent ?? 0;
+      } else {
+        details.style.display = 'none';
+      }
+
+      // קבוצות שהושלמו
+      const groupsSection = document.getElementById('scan-groups-done-section');
+      const groupsList = document.getElementById('scan-groups-done-list');
+      if (d.groups_done && d.groups_done.length > 0) {
+        groupsSection.style.display = '';
+        groupsList.innerHTML = '';
+        d.groups_done.forEach(g => {
+          const div = document.createElement('div');
+          div.className = 'scan-group-done-item';
+          div.innerHTML = `<span class="scan-group-done-name">${escapeHtml(g.name)}</span>
+            <span class="scan-group-done-count">${g.posts_found} פוסטים</span>`;
+          groupsList.appendChild(div);
+        });
+      } else {
+        groupsSection.style.display = 'none';
+      }
+
+      // זמנים
+      const timeInfo = document.getElementById('scan-time-info');
+      const parts = [];
+      if (d.started_at) {
+        const s = new Date(d.started_at);
+        parts.push('התחלה: ' + s.toLocaleTimeString('he-IL'));
+      }
+      if (d.finished_at) {
+        const f = new Date(d.finished_at);
+        parts.push('סיום: ' + f.toLocaleTimeString('he-IL'));
+        if (d.started_at) {
+          const dur = Math.round((new Date(d.finished_at) - new Date(d.started_at)) / 1000);
+          const mins = Math.floor(dur / 60);
+          const secs = dur % 60;
+          parts.push(`משך: ${mins > 0 ? mins + ' דק\' ' : ''}${secs} שנ\'`);
+        }
+      }
+      timeInfo.textContent = parts.join('  |  ');
+    }
+
     // ═══ Sidebar Navigation ═════════════════════════════
 
     function initNavigation() {
@@ -1491,7 +1900,9 @@
         loadKeywords('pre_filter'),
         loadKeywords('block'),
         loadForceSend(),
+        loadScanStatus(),
       ]);
+      startScanPolling();
     }
 
     document.addEventListener('DOMContentLoaded', async () => {

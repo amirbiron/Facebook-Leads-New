@@ -26,6 +26,25 @@ TELEGRAM_CONTROL = os.environ.get("TELEGRAM_CONTROL", "1").strip().lower() not i
 
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", os.environ.get("PORT", "8080")))
 
+# ── סטטוס סריקה בזמן אמת — נגיש מהפאנל דרך /api/scan-status ──
+# מילון שמתעדכן לאורך כל שלבי הסריקה. Flask קורא אותו (thread-safe לקריאה).
+scan_progress: dict = {
+    "active": False,
+    "phase": "idle",          # idle | scraping | filtering | classifying | done
+    "phase_label": "ממתין",
+    "current_group": "",
+    "current_group_index": 0,
+    "total_groups": 0,
+    "groups_done": [],        # [{"name": ..., "posts_found": ...}, ...]
+    "total_posts_found": 0,
+    "new_posts": 0,
+    "posts_to_classify": 0,
+    "leads_sent": 0,
+    "started_at": None,       # ISO string
+    "finished_at": None,      # ISO string
+    "error": "",
+}
+
 FB_EMAIL = os.environ.get("FB_EMAIL")
 FB_PASSWORD = os.environ.get("FB_PASSWORD")
 
@@ -1115,6 +1134,49 @@ def _content_dedup_hash(text: str) -> str:
         return ""
     return hashlib.md5(stable.encode()).hexdigest()
 
+def _reset_scan_progress():
+    """מאפס את scan_progress לפני סבב חדש."""
+    scan_progress.update({
+        "active": True,
+        "phase": "scraping",
+        "phase_label": "סורק קבוצות",
+        "current_group": "",
+        "current_group_index": 0,
+        "total_groups": 0,
+        "groups_done": [],
+        "total_posts_found": 0,
+        "new_posts": 0,
+        "posts_to_classify": 0,
+        "leads_sent": 0,
+        "started_at": _now_local().isoformat(),
+        "finished_at": None,
+        "error": "",
+    })
+
+
+def _finish_scan_progress(leads: int, error: str = ""):
+    """מסמן סיום סריקה ב-scan_progress."""
+    scan_progress.update({
+        "active": False,
+        "phase": "done" if not error else "error",
+        "phase_label": "הסתיים" if not error else "שגיאה",
+        "leads_sent": leads,
+        "finished_at": _now_local().isoformat(),
+        "error": error,
+    })
+
+
+def _on_group_scraped(group_name: str, group_index: int, total_groups: int, posts_found: int):
+    """callback שנקרא מ-scrape_all אחרי כל קבוצה — מעדכן את scan_progress."""
+    scan_progress["current_group"] = group_name
+    scan_progress["current_group_index"] = group_index
+    scan_progress["total_groups"] = total_groups
+    done_list = scan_progress["groups_done"]
+    done_list.append({"name": group_name, "posts_found": posts_found})
+    scan_progress["groups_done"] = done_list
+    scan_progress["total_posts_found"] = sum(g["posts_found"] for g in done_list)
+
+
 async def run_cycle():
     import gc
     # Lazy imports to keep startup light and allow running parts of the codebase
@@ -1122,6 +1184,8 @@ async def run_cycle():
     from scraper import scrape_all
     from classifier import classify_batch
     from notifier import send_lead, send_error_alert
+
+    _reset_scan_progress()
 
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
 
@@ -1153,14 +1217,17 @@ async def run_cycle():
 
     if not fb_email or not fb_password:
         log.error("חסרים FB_EMAIL או FB_PASSWORD — לא ניתן לסרוק")
+        _finish_scan_progress(0, error="חסרים פרטי חשבון")
         return
 
     # שלב 1 — גרידה (דפדפן פתוח)
     try:
-        posts = await scrape_all(fb_email, fb_password, seen_checker=is_seen)
+        posts = await scrape_all(fb_email, fb_password, seen_checker=is_seen,
+                                 on_group_done=_on_group_scraped)
         log.info(f"סך הכל פוסטים שנמצאו: {len(posts)}")
     except Exception as e:
         log.error(f"שגיאה בגרידה: {e}", exc_info=True)
+        _finish_scan_progress(0, error=str(e))
         try:
             await asyncio.to_thread(send_error_alert, f"שגיאה בגרידה: {e}")
         except Exception:
@@ -1171,12 +1238,16 @@ async def run_cycle():
     gc.collect()
     log.debug("זיכרון שוחרר אחרי סגירת דפדפן")
 
+    # עדכון סטטוס — עוברים לשלב סינון
+    scan_progress.update({"phase": "filtering", "phase_label": "מסנן פוסטים"})
+
     # שלב 2 — סינון כפילויות (בלי דפדפן — זיכרון נמוך)
     # לפוסטים עם URL אמיתי — בודקים לפי post_id ב-DB.
     # לפוסטים ללא URL אמיתי — ה-ID מבוסס hash תוכן (ייחודי לכל פוסט),
     # כך שגם הם נבדקים כראוי מול seen_posts.
     new_posts = [p for p in posts if not is_seen(p["id"])]
     log.info(f"פוסטים חדשים (לא נראו קודם): {len(new_posts)}")
+    scan_progress["new_posts"] = len(new_posts)
 
     # סימון כל הפוסטים כנראו (גם אלה שלא יעברו סינון מילות מפתח)
     for post in new_posts:
@@ -1259,8 +1330,12 @@ async def run_cycle():
         log.debug(f"דילוג על {skipped_already_sent} פוסטים שכבר נשלחו כלידים")
 
     to_classify = not_yet_sent
+    scan_progress["posts_to_classify"] = len(to_classify)
 
     if to_classify:
+        # עדכון סטטוס — עוברים לשלב סיווג AI
+        scan_progress.update({"phase": "classifying", "phase_label": "מסווג עם AI"})
+
         # סיווג באצ'ים — שליחת מספר פוסטים ל-AI בבקשה אחת
         results = classify_batch(to_classify)
 
@@ -1277,9 +1352,12 @@ async def run_cycle():
                 save_lead(post["id"], post["group"], post["content"], reason,
                           content_hash=post.get("_content_hash", ""))
                 leads_found += 1
+                scan_progress["leads_sent"] = leads_found
                 log.info(f"ליד נשלח: {reason}")
             else:
                 log.debug(f"לא רלוונטי: {result.get('reason', '')}")
+
+    _finish_scan_progress(leads_found)
 
     stats = get_stats()
     log.info(f"סבב הסתיים | לידים בסבב: {leads_found} | סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}")
