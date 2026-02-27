@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import signal
 import sys
 import threading
@@ -12,7 +13,7 @@ from database import (
     get_stats, get_daily_stats,
     cleanup_old_posts, add_group, remove_group, get_db_groups, ensure_groups_migrated,
     add_keyword, remove_keyword, get_db_keywords, ensure_keywords_migrated,
-    get_config,
+    get_config, set_config,
 )
 from logger import get_logger
 
@@ -144,6 +145,152 @@ def is_blocked(text: str) -> bool:
         return False
     text_lower = text.lower()
     return any(kw in text_lower for kw in BLOCK_KEYWORDS)
+
+# ── סינון לפי גיל פוסט ──────────────────────────────────────
+
+# ביטויים לחילוץ גיל פוסט מתוך הטקסט (עברית + אנגלית)
+_AGE_HEBREW_RE = re.compile(
+    # חשוב: בלי prefixים אמביוולנטיים (למשל "שנ" = "שניות" וגם "שנים").
+    # לכן היחידות כאן מפורשות/חד-משמעיות, והחילוץ מתבצע על "שורה עצמאית" בלבד.
+    r'^לפני\s+(?:כ[-־]?\s*)?(\d+)\s*'
+    r'(שני(?:ה|ות)|דק(?:ה|ות)|שע(?:ה|ות)|י(?:ום|מים)|שבוע(?:ות)?|חודש(?:ים)?|שנ(?:ה|ים))'
+    r'\b(?:\s*[·•].*)?$',
+    re.IGNORECASE
+)
+_AGE_HEBREW_SINGLE_RE = re.compile(
+    r'^לפני\s+(שנייה|שניות|דקה|שעה|יום|יומיים|שבוע|חודש|שנה|שנתיים)\b(?:\s*[·•].*)?$',
+    re.IGNORECASE
+)
+# פורמט קצר — שורה עצמאית בלבד: "3h", "2d" וכו'
+_AGE_SHORT_RE = re.compile(r'^(\d+)\s*([hdmw])$', re.IGNORECASE)
+# מעוגן לשורה עצמאית — כדי לא לתפוס "30 day trial" או "3 month project" מתוך גוף הפוסט
+_AGE_ENGLISH_RE = re.compile(
+    r'^(\d+)\s*(min|mins|minute|minutes|hr|hrs|hour|hours|day|days|wk|wks|week|weeks|month|months)\b'
+    r'(?:\s+ago)?(?:\s*[·•].*)?$',
+    re.IGNORECASE,
+)
+
+
+def extract_post_age_days(text: str) -> float | None:
+    """מחלץ גיל פוסט (בימים) מתוך הטקסט. מחזיר None אם לא נמצא timestamp.
+
+    פייסבוק מובייל מציג timestamps כמו "לפני 3 שעות", "לפני 2 ימים", "3h", "2d".
+    הפונקציה סורקת את התוכן ומחזירה את הגיל בימים (float).
+    """
+    if not text:
+        return None
+
+    # חשוב: כדי להימנע מ-false positives מתוך גוף הפוסט, מחפשים רק בשורות עצמאיות.
+    # (בדומה ל-_TIMESTAMP_RE ב-scraper.py שמוגדר כ-line-anchored)
+    for line in text.split('\n'):
+        s = line.strip()
+        if not s:
+            continue
+
+        # מילים עצמאיות
+        if s in ("עכשיו", "Just now"):
+            return 0.0
+        if s in ("אתמול", "Yesterday"):
+            return 1.0
+
+        # פורמט קצר — "3h", "2d" וכו' (שורה עצמאית)
+        m = _AGE_SHORT_RE.fullmatch(s)
+        if m:
+            num = int(m.group(1))
+            unit = m.group(2).lower()
+            if unit == 'm':    # minutes
+                return num / 1440.0
+            if unit == 'h':    # hours
+                return num / 24.0
+            if unit == 'd':    # days
+                return float(num)
+            if unit == 'w':    # weeks
+                return num * 7.0
+
+        # אנגלית — "3 hours", "2 days" וכו' (שורה עצמאית)
+        m = _AGE_ENGLISH_RE.fullmatch(s)
+        if m:
+            num = int(m.group(1))
+            unit = m.group(2).lower()
+            if unit in ("min", "mins", "minute", "minutes"):
+                return num / 1440.0
+            if unit in ("hr", "hrs", "hour", "hours"):
+                return num / 24.0
+            if unit in ("day", "days"):
+                return float(num)
+            if unit in ("wk", "wks", "week", "weeks"):
+                return num * 7.0
+            if unit in ("month", "months"):
+                return num * 30.0
+
+        # עברית — "לפני X [יחידה]" (שורה עצמאית)
+        m = _AGE_HEBREW_RE.fullmatch(s)
+        if m:
+            num = int(m.group(1))
+            unit = m.group(2)
+            if unit.startswith("שני"):       # שניות
+                return num / 86400.0
+            if unit.startswith("דק"):        # דקות
+                return num / 1440.0
+            if unit.startswith("שע"):        # שעות
+                return num / 24.0
+            if unit.startswith("י"):         # יום/ימים
+                return float(num)
+            if unit.startswith("שבוע"):      # שבוע/שבועות
+                return num * 7.0
+            if unit.startswith("חודש"):      # חודש/חודשים
+                return num * 30.0
+            if unit.startswith("שנ"):        # שנה/שנים
+                return num * 365.0
+
+        # עברית — יחידות בודדות ללא מספר ("לפני דקה", "לפני שעה", "לפני יומיים")
+        m = _AGE_HEBREW_SINGLE_RE.fullmatch(s)
+        if m:
+            word = m.group(1)
+            if word in ("שנייה", "שניות"):
+                return 1 / 86400.0
+            if word == "דקה":
+                return 1 / 1440.0
+            if word == "שעה":
+                return 1 / 24.0
+            if word == "יום":
+                return 1.0
+            if word == "יומיים":
+                return 2.0
+            if word == "שבוע":
+                return 7.0
+            if word == "חודש":
+                return 30.0
+            if word == "שנה":
+                return 365.0
+            if word == "שנתיים":
+                return 730.0
+
+    return None
+
+
+def _load_max_post_age() -> int | None:
+    """טוען הגדרת גיל מקסימלי לפוסט (בימים) מ-DB. מחזיר None אם לא מוגדר."""
+    val = get_config("max_post_age_days")
+    if val is not None:
+        try:
+            days = int(val)
+            return days if days > 0 else None
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def is_post_too_old(text: str, max_days: int) -> bool:
+    """בודק אם פוסט ישן מדי לפי גיל מקסימלי.
+    מחזיר True אם הפוסט ישן מדי (= לא לשלוח).
+    אם לא ניתן לקבוע את הגיל — מעביר את הפוסט (שמרני).
+    """
+    age = extract_post_age_days(text)
+    if age is None:
+        return False  # לא יודעים את הגיל → לא מסננים
+    return age >= max_days
+
 
 def _now_local() -> datetime:
     try:
@@ -515,6 +662,7 @@ async def _telegram_control_loop(
                 {"command": "groups", "description": "רשימת קבוצות"},
                 {"command": "keywords", "description": "מילות מפתח"},
                 {"command": "force_send", "description": "מילות 'שלח תמיד' (עוקף AI)"},
+                {"command": "max_age", "description": "סינון פוסטים ישנים (לפי ימים)"},
             ]},
             timeout=10,
         )
@@ -522,7 +670,7 @@ async def _telegram_control_loop(
     except Exception:
         pass
 
-    # שליחת תפריט ראשי בהפעלה — כדי שהכפתורים יופיעו מיד
+    # הודעת הפעלה + תפריט ראשי לכל משתמש מורשה
     for cid in allowed_chat_ids:
         try:
             await asyncio.to_thread(
@@ -530,6 +678,7 @@ async def _telegram_control_loop(
                 "הבוט פעיל — בחר פעולה:",
                 _main_menu_buttons(),
                 chat_id=cid,
+                disable_web_page_preview=True,
             )
         except Exception:
             pass
@@ -812,6 +961,44 @@ async def _telegram_control_loop(
                     )
                     continue
 
+                # ── גיל מקסימלי לפוסטים ────────────────────────
+                if cmd in ("/max_age",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        current = _load_max_post_age()
+                        status = f"{current} ימים" if current else "כבוי (ללא הגבלה)"
+                        await asyncio.to_thread(
+                            send_message,
+                            f"סינון פוסטים ישנים: {status}\n\n"
+                            "שימוש: /max_age <ימים> — פוסטים ישנים מהמספר הזה לא יישלחו\n"
+                            "/max_age 0 — ביטול סינון לפי גיל",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    arg = parts[1].strip()
+                    try:
+                        days = int(arg)
+                    except ValueError:
+                        await asyncio.to_thread(
+                            send_message, "יש להזין מספר שלם (למשל: /max_age 2)",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    if days <= 0:
+                        set_config("max_post_age_days", "0")
+                        await asyncio.to_thread(
+                            send_message, "סינון לפי גיל בוטל — כל הפוסטים יישלחו.",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                    else:
+                        set_config("max_post_age_days", str(days))
+                        await asyncio.to_thread(
+                            send_message,
+                            f"סינון גיל הוגדר: פוסטים ישנים מ-{days} ימים לא יישלחו.",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                    continue
+
         except requests.HTTPError as e:
             if e.response is not None and e.response.status_code == 409:
                 # 409 Conflict = אינסטנס אחר עושה polling — ממתין עם backoff
@@ -1003,6 +1190,16 @@ async def run_cycle():
         mark_seen(post["id"], post["group"])
 
     leads_found = 0
+
+    # שלב 2.5 — סינון פוסטים ישנים (לפי max_post_age_days)
+    # עוקף גם force_send — פוסט ישן לא יישלח גם אם מכיל מילת "שלח תמיד"
+    max_age = _load_max_post_age()
+    if max_age:
+        before_age = len(new_posts)
+        new_posts = [p for p in new_posts if not is_post_too_old(p["content"], max_age)]
+        filtered_by_age = before_age - len(new_posts)
+        if filtered_by_age:
+            log.info(f"סונן לפי גיל: {filtered_by_age} פוסטים ישנים מ-{max_age} ימים דולגו")
 
     # שלב 3 — "שלח תמיד": פוסטים עם מילת force_send עוקפים את כל הסינון (block/pre_filter/AI)
     force_send_posts = []

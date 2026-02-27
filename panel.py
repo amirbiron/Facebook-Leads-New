@@ -83,6 +83,15 @@ def create_app() -> Flask:
         # interval_minutes — env var בלבד (הוסר מהפאנל)
         interval = os.environ.get("INTERVAL_MINUTES", "10")
 
+        # max_post_age_days — 0 או ריק = כבוי
+        max_age_raw = get_config("max_post_age_days")
+        max_post_age_days = 0
+        if max_age_raw:
+            try:
+                max_post_age_days = int(max_age_raw)
+            except (ValueError, TypeError):
+                pass
+
         return jsonify({
             "fb_email": get_config("fb_email") or os.environ.get("FB_EMAIL", ""),
             "fb_password": get_config("fb_password") or os.environ.get("FB_PASSWORD", ""),
@@ -91,6 +100,7 @@ def create_app() -> Flask:
             "criteria_is_default": is_default,
             "quiet_hours": quiet_hours,
             "interval_minutes": interval,
+            "max_post_age_days": max_post_age_days,
         })
 
     @app.route("/api/settings", methods=["PUT"])
@@ -98,7 +108,7 @@ def create_app() -> Flask:
     def update_settings():
         data = request.get_json(force=True)
         allowed = ("fb_email", "fb_password", "classification_criteria",
-                    "quiet_hours")
+                    "quiet_hours", "max_post_age_days")
         for key in allowed:
             if key in data:
                 set_config(key, str(data[key]).strip())

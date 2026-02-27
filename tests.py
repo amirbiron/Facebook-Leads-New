@@ -2456,3 +2456,206 @@ class TestExtractionStats:
         assert get_extraction_stats()["success"] == 0
 
 
+# ──────────────────────────────────────────────────────────────
+# extract_post_age_days — חילוץ גיל פוסט מתוך טקסט
+# ──────────────────────────────────────────────────────────────
+
+from main import extract_post_age_days, is_post_too_old
+
+
+class TestExtractPostAgeDays:
+    """בדיקות לחילוץ גיל פוסט מתוך הטקסט."""
+
+    # ── עברית — "לפני X [יחידה]" ──
+    def test_hebrew_seconds(self):
+        age = extract_post_age_days("לפני 10 שניות\nטקסט של פוסט")
+        assert age is not None
+        assert age < 0.001  # 10 שניות = כמעט 0 ימים
+
+    def test_hebrew_minutes(self):
+        age = extract_post_age_days("לפני 5 דקות\nטקסט של פוסט")
+        assert age is not None
+        assert age < 0.01  # 5 דקות = פחות מ-0.01 יום
+
+    def test_hebrew_hours(self):
+        age = extract_post_age_days("לפני 3 שעות\nמחפש מפתח פייתון")
+        assert age is not None
+        assert 0.1 < age < 0.2  # 3/24 ≈ 0.125
+
+    def test_hebrew_days(self):
+        age = extract_post_age_days("לפני 2 ימים\nדרוש מתכנת")
+        assert age == 2.0
+
+    def test_hebrew_days_singular(self):
+        age = extract_post_age_days("לפני 1 יום")
+        assert age == 1.0
+
+    def test_hebrew_weeks(self):
+        age = extract_post_age_days("לפני 2 שבועות\nפוסט ישן")
+        assert age == 14.0
+
+    def test_hebrew_months(self):
+        age = extract_post_age_days("לפני 3 חודשים")
+        assert age == 90.0
+
+    # ── עברית — יחידות בודדות ──
+    def test_hebrew_single_minute(self):
+        age = extract_post_age_days("לפני דקה\nטקסט")
+        assert age is not None
+        assert age < 0.001
+
+    def test_hebrew_single_hour(self):
+        age = extract_post_age_days("לפני שעה\nטקסט")
+        assert age is not None
+        assert 0.03 < age < 0.05  # 1/24 ≈ 0.042
+
+    def test_hebrew_single_day(self):
+        age = extract_post_age_days("לפני יום\nטקסט")
+        assert age == 1.0
+
+    def test_hebrew_two_days(self):
+        age = extract_post_age_days("לפני יומיים")
+        assert age == 2.0
+
+    def test_hebrew_single_week(self):
+        age = extract_post_age_days("לפני שבוע")
+        assert age == 7.0
+
+    def test_hebrew_single_month(self):
+        age = extract_post_age_days("לפני חודש")
+        assert age == 30.0
+
+    def test_hebrew_single_year(self):
+        age = extract_post_age_days("לפני שנה")
+        assert age == 365.0
+
+    def test_hebrew_two_years(self):
+        age = extract_post_age_days("לפני שנתיים")
+        assert age == 730.0
+
+    # ── מילים עצמאיות ──
+    def test_now_hebrew(self):
+        age = extract_post_age_days("עכשיו\nטקסט של פוסט")
+        assert age == 0.0
+
+    def test_yesterday_hebrew(self):
+        age = extract_post_age_days("אתמול\nטקסט של פוסט")
+        assert age == 1.0
+
+    def test_just_now_english(self):
+        age = extract_post_age_days("Just now\nSome post text")
+        assert age == 0.0
+
+    def test_yesterday_english(self):
+        age = extract_post_age_days("Yesterday\nSome post")
+        assert age == 1.0
+
+    # ── פורמט קצר ──
+    def test_short_hours(self):
+        age = extract_post_age_days("3h\nטקסט")
+        assert age is not None
+        assert 0.1 < age < 0.2
+
+    def test_short_days(self):
+        age = extract_post_age_days("2d\nטקסט")
+        assert age == 2.0
+
+    def test_short_weeks(self):
+        age = extract_post_age_days("1w\nטקסט")
+        assert age == 7.0
+
+    def test_short_minutes(self):
+        age = extract_post_age_days("45m\nטקסט")
+        assert age is not None
+        assert age < 0.04
+
+    # ── אנגלית ──
+    def test_english_hours(self):
+        age = extract_post_age_days("6 hours ago\nLooking for developer")
+        assert age is not None
+        assert age == 6 / 24.0
+
+    def test_english_days(self):
+        age = extract_post_age_days("3 days\nold post")
+        assert age == 3.0
+
+    def test_english_days_ago(self):
+        age = extract_post_age_days("2 days ago\npost content")
+        assert age == 2.0
+
+    # ── false-positive prevention: ביטויי זמן בתוך גוף הטקסט ──
+    def test_no_false_positive_day_trial(self):
+        """'30 day trial' בתוך משפט — לא timestamp."""
+        age = extract_post_age_days("Get our 30 day trial for free!\nSign up now")
+        assert age is None
+
+    def test_no_false_positive_month_project(self):
+        """'3 month project' — לא timestamp."""
+        age = extract_post_age_days("Looking for a developer for a 3 month project")
+        assert age is None
+
+    def test_no_false_positive_hour_session(self):
+        """'2 hour session' — לא timestamp."""
+        age = extract_post_age_days("Join our 2 hour session on Python")
+        assert age is None
+
+    def test_english_standalone_line(self):
+        """שורה עצמאית '5 minutes' — כן timestamp."""
+        age = extract_post_age_days("User Name\n5 minutes\nPost content here")
+        assert age is not None
+        assert age < 0.01
+
+    # ── אין timestamp ──
+    def test_no_timestamp(self):
+        age = extract_post_age_days("מחפש מתכנת פייתון לפרויקט. מישהו מכיר?")
+        assert age is None
+
+    def test_empty_string(self):
+        age = extract_post_age_days("")
+        assert age is None
+
+    # ── timestamp מוטמע בתוך טקסט ארוך ──
+    def test_timestamp_embedded(self):
+        text = "שם המשתמש\nלפני 5 שעות\nמחפש עזרה עם בוט טלגרם\n3 תגובות"
+        age = extract_post_age_days(text)
+        assert age is not None
+        assert 0.2 < age < 0.22  # 5/24 ≈ 0.208
+
+    def test_no_false_positive_hebrew_seconds_in_sentence(self):
+        """ביטוי זמן בתוך משפט בעברית — לא timestamp."""
+        age = extract_post_age_days("דוגמה: לפני 10 שניות קיבלתי הודעה וזה לא timestamp")
+        assert age is None
+
+
+class TestIsPostTooOld:
+    """בדיקות לפונקציית is_post_too_old."""
+
+    def test_old_post_filtered(self):
+        """פוסט ישן מ-2 ימים עם סף 1 — מסונן."""
+        assert is_post_too_old("לפני 3 ימים\nפוסט ישן", max_days=2) is True
+
+    def test_young_post_passes(self):
+        """פוסט צעיר מ-3 שעות עם סף 1 — עובר."""
+        assert is_post_too_old("לפני 3 שעות\nפוסט חדש", max_days=1) is False
+
+    def test_no_timestamp_passes(self):
+        """פוסט ללא timestamp — עובר (שמרני, לא מסננים)."""
+        assert is_post_too_old("מחפש מתכנת", max_days=1) is False
+
+    def test_exact_threshold(self):
+        """פוסט בדיוק בסף — מסונן (>= max_days)."""
+        assert is_post_too_old("לפני 2 ימים\nטקסט", max_days=2) is True
+
+    def test_just_under_threshold(self):
+        """פוסט מתחת לסף — עובר."""
+        assert is_post_too_old("לפני 1 ימים\nטקסט", max_days=2) is False
+
+    def test_hours_under_threshold(self):
+        """פוסט של שעות עם סף 1 יום — עובר."""
+        assert is_post_too_old("לפני 23 שעות\nטקסט", max_days=1) is False
+
+    def test_weeks_old(self):
+        """פוסט ישן של שבוע עם סף 3 ימים — מסונן."""
+        assert is_post_too_old("לפני 1 שבועות\nטקסט", max_days=3) is True
+
+

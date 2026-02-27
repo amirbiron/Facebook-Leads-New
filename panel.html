@@ -774,6 +774,13 @@
           <span>שלח תמיד</span>
         </a>
 
+        <a href="#post-age" class="nav-item" data-section="post-age">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+          </svg>
+          <span>פוסטים ישנים</span>
+        </a>
+
         <a href="#schedule" class="nav-item" data-section="schedule">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
@@ -948,6 +955,38 @@
         <div id="force-send-list" class="chips"></div>
       </section>
 
+      <!-- ═══ פוסטים ישנים ═══ -->
+      <section id="post-age" class="card">
+        <h3 class="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+          </svg>
+          פוסטים ישנים
+        </h3>
+        <p class="card-desc">
+          סינון פוסטים לפי גיל — פוסטים ישנים מהסף שנבחר לא יישלחו לטלגרם.
+          עוקף גם מילות "שלח תמיד".
+        </p>
+
+        <div class="form-group">
+          <label for="max-post-age">גיל מקסימלי (ימים)</label>
+          <select id="max-post-age" style="width: 100%; padding: 10px 12px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; font-size: 0.95rem;">
+            <option value="0">ללא הגבלה (כבוי)</option>
+            <option value="1">יום אחד</option>
+            <option value="2">יומיים</option>
+            <option value="3">3 ימים</option>
+            <option value="5">5 ימים</option>
+            <option value="7">שבוע</option>
+            <option value="14">שבועיים</option>
+            <option value="30">חודש</option>
+          </select>
+        </div>
+
+        <div class="btn-row" style="margin-top: 16px;">
+          <button class="btn btn-primary" onclick="savePostAge()">שמור</button>
+        </div>
+      </section>
+
       <!-- ═══ לוח זמנים ═══ -->
       <section id="schedule" class="card">
         <h3 class="card-title">
@@ -1097,6 +1136,10 @@
 
         renderSourceBadge('criteria-source',
           currentSettings.criteria_is_default ? 'default' : 'custom');
+
+        // גיל מקסימלי לפוסטים
+        const maxAge = currentSettings.max_post_age_days || 0;
+        document.getElementById('max-post-age').value = String(maxAge);
       } catch (e) {
         toast('שגיאה בטעינת הגדרות: ' + e.message, 'error');
       }
@@ -1165,6 +1208,21 @@
           },
         });
         toast('לוח זמנים נשמר');
+      } catch (e) {
+        toast('שגיאה: ' + e.message, 'error');
+      }
+    }
+
+    async function savePostAge() {
+      const val = document.getElementById('max-post-age').value;
+      try {
+        await api('/api/settings', {
+          method: 'PUT',
+          body: {
+            max_post_age_days: val,
+          },
+        });
+        toast(val === '0' ? 'סינון גיל בוטל' : `סינון גיל הוגדר: ${val} ימים`);
       } catch (e) {
         toast('שגיאה: ' + e.message, 'error');
       }
