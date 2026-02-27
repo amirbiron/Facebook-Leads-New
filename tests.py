@@ -370,6 +370,14 @@ class TestExtractPostId:
         result = extract_post_id(url)
         assert result == "ABCdef123"
 
+    def test_share_p_pattern(self):
+        """פורמט share link חדש של פייסבוק — /share/p/ID."""
+        assert extract_post_id("https://www.facebook.com/share/p/1AkvNbuYNi/") == "1AkvNbuYNi"
+
+    def test_share_p_mobile(self):
+        """share link מאתר מובייל."""
+        assert extract_post_id("https://m.facebook.com/share/p/Xb2cD3fG/") == "Xb2cD3fG"
+
     def test_fallback_last_20_chars(self):
         url = "https://facebook.com/some/unknown/format"
         result = extract_post_id(url)
@@ -1870,6 +1878,14 @@ class TestIsPostUrl:
     def test_multi_permalinks(self):
         assert _is_post_url("https://m.facebook.com/groups/123/?multi_permalinks=456") is True
 
+    def test_share_p_pattern(self):
+        """פורמט share link חדש של פייסבוק."""
+        assert _is_post_url("https://www.facebook.com/share/p/1AkvNbuYNi/") is True
+
+    def test_share_p_mobile(self):
+        """share link מאתר מובייל."""
+        assert _is_post_url("https://m.facebook.com/share/p/Xb2cD3fG/") is True
+
 
 # ──────────────────────────────────────────────────────────────
 # 24. _extract_name_from_title — חילוץ שם קבוצה מכותרת דף
@@ -2009,7 +2025,8 @@ class _FakeElementForStrategies:
     """אלמנט מדומה גמיש יותר — תומך בכל האסטרטגיות."""
 
     def __init__(self, *, selector_links=None, all_links=None, attrs=None,
-                 inner_els=None, el_id=None, html="<div></div>"):
+                 inner_els=None, el_id=None, html="<div></div>",
+                 climb_result=None):
         # selector_links: dict of CSS selector -> href
         self._selector_links = selector_links or {}
         # all_links: list of (href, text) — לסריקה כללית
@@ -2018,6 +2035,8 @@ class _FakeElementForStrategies:
         self._inner_els = inner_els or {}
         self._el_id = el_id
         self._html = html
+        # climb_result: תוצאת JS climbing (אסטרטגיה 6) — JSON string או None
+        self._climb_result = climb_result
 
     async def query_selector(self, selector):
         if selector in self._inner_els:
@@ -2036,12 +2055,16 @@ class _FakeElementForStrategies:
             return self._el_id
         return self._attrs.get(name)
 
+    async def evaluate(self, expression, arg=None):
+        """מדמה el.evaluate() — מחזיר climb_result אם הוגדר (אסטרטגיה 6)."""
+        return self._climb_result
+
     async def inner_html(self):
         return self._html
 
 
 class TestExtractPostUrl:
-    """טסטים ל-_extract_post_url — כל 5 האסטרטגיות."""
+    """טסטים ל-_extract_post_url — כל 6 האסטרטגיות."""
 
     FALLBACK = "https://m.facebook.com/groups/123/"
 
@@ -2054,6 +2077,17 @@ class TestExtractPostUrl:
         )
         result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
         assert result == "https://m.facebook.com/groups/123/posts/456"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy1_share_link(self):
+        """אסטרטגיה 1 — סלקטור ישיר ל-share link חדש."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            selector_links={"a[href*='/share/p/']": "https://www.facebook.com/share/p/1AkvNbuYNi/"}
+        )
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://www.facebook.com/share/p/1AkvNbuYNi/"
         assert get_extraction_stats()["success"] == 1
 
     @pytest.mark.asyncio
@@ -2078,6 +2112,20 @@ class TestExtractPostUrl:
         )
         result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
         assert result == "https://m.facebook.com/groups/123/permalink/789"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy2_share_link_scan(self):
+        """אסטרטגיה 2 — סריקת לינקים מוצאת share link."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(
+            all_links=[
+                ("https://m.facebook.com/groups/123", ""),
+                ("https://www.facebook.com/share/p/1AkvNbuYNi/", ""),
+            ]
+        )
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://www.facebook.com/share/p/1AkvNbuYNi/"
         assert get_extraction_stats()["success"] == 1
 
     @pytest.mark.asyncio
@@ -2185,6 +2233,48 @@ class TestExtractPostUrl:
         el = _FakeElementForStrategies(el_id="post_12345")
         result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
         assert result == self.FALLBACK
+
+    @pytest.mark.asyncio
+    async def test_strategy6_dom_climbing_post_link(self):
+        """אסטרטגיה 6 — טיפוס ב-DOM מוצא קישור פוסט."""
+        reset_extraction_stats()
+        import json
+        climb = json.dumps({"url": "https://m.facebook.com/groups/123/posts/777/", "lvl": 3, "how": "post_link"})
+        el = _FakeElementForStrategies(climb_result=climb)
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://m.facebook.com/groups/123/posts/777/"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy6_dom_climbing_timestamp(self):
+        """אסטרטגיה 6 — טיפוס ב-DOM מוצא לינק timestamp."""
+        reset_extraction_stats()
+        import json
+        climb = json.dumps({"url": "https://m.facebook.com/groups/123/permalink/888/", "lvl": 7, "how": "timestamp"})
+        el = _FakeElementForStrategies(climb_result=climb)
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://m.facebook.com/groups/123/permalink/888/"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy6_dom_climbing_ajaxify(self):
+        """אסטרטגיה 6 — טיפוס ב-DOM מוצא ajaxify עם URL פוסט."""
+        reset_extraction_stats()
+        import json
+        climb = json.dumps({"url": "https://m.facebook.com/groups/123/permalink/999/", "lvl": 5, "how": "ajaxify"})
+        el = _FakeElementForStrategies(climb_result=climb)
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == "https://m.facebook.com/groups/123/permalink/999/"
+        assert get_extraction_stats()["success"] == 1
+
+    @pytest.mark.asyncio
+    async def test_strategy6_no_result_falls_through(self):
+        """אסטרטגיה 6 — אם JS climbing לא מוצא כלום, ממשיכים ל-fallback."""
+        reset_extraction_stats()
+        el = _FakeElementForStrategies(climb_result=None)
+        result = await _extract_post_url(el, self.FALLBACK, dump_on_fail=False)
+        assert result == self.FALLBACK
+        assert get_extraction_stats()["fallback"] == 1
 
 
 # ──────────────────────────────────────────────────────────────
