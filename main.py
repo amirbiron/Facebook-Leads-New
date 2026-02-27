@@ -670,19 +670,6 @@ async def _telegram_control_loop(
     except Exception:
         pass
 
-    # הודעת הפעלה + תפריט ראשי לכל משתמש מורשה
-    for cid in allowed_chat_ids:
-        try:
-            await asyncio.to_thread(
-                send_message_with_buttons,
-                "הבוט פעיל — בחר פעולה:",
-                _main_menu_buttons(),
-                chat_id=cid,
-                disable_web_page_preview=True,
-            )
-        except Exception:
-            pass
-
     offset = load_offset()
     log.info("בקרת טלגרם הופעלה. פקודות: /menu /scan /status")
     conflict_backoff = 5
@@ -1137,6 +1124,12 @@ async def run_cycle():
     from notifier import send_lead, send_error_alert
 
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
+
+    # דיאגנוסטיקה — מוודאים שה-DB שורד בין סשנים
+    from database import DB_PATH
+    stats = get_stats()
+    db_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    log.info(f"DB path: {DB_PATH} | size={db_size}B | seen={stats['seen']} sent={stats['sent']}")
 
     # טעינה מחדש של מילות מפתח וקבוצות מ-DB
     reload_keywords()
