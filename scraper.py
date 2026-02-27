@@ -19,6 +19,21 @@ SESSION_FILE = Path("data/fb_session.json")
 _BAD_TITLES = {"facebook", "content not found", "page not found",
                "error", "log in", "התחברות", "תוכן לא נמצא", "שגיאה"}
 
+# טקסטים של overlay לוגין במובייל — הצירוף הזה ייחודי לאוברליי ולא מופיע בפוסטים
+_LOGIN_OVERLAY_MARKERS = ("פתיחת האפליקציה", "התחברות")
+
+
+async def _has_login_overlay(page) -> bool:
+    """מזהה overlay לוגין לפי טקסט — כשפייסבוק מציג 'פתיחת האפליקציה / התחברות'
+    בלי redirect, כך שבדיקת URL לא מספיקה."""
+    try:
+        top_text = await page.evaluate(
+            "document.body?.innerText?.substring(0, 500) || ''"
+        )
+        return all(m in top_text for m in _LOGIN_OVERLAY_MARKERS)
+    except Exception:
+        return False
+
 # ביטויים דינאמיים שמשתנים בין סריקות — מוסרים לפני חישוב hash
 _TIMESTAMP_RE = re.compile(
     r'(לפני\s+)?\d+\s*(שע|דק|יו|שני|חוד|שבוע|min|hr|hour|day|wk|month)\w*'
@@ -549,17 +564,32 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
     if dump_on_fail:
         try:
             _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-            # שומרים HTML של האלמנט + הורה קרוב שמכיל לינקים
-            # מטפסים עד 5 רמות ומחפשים הורה עם <a> — אם לא מוצאים, לוקחים הכי גבוה
+            # שומרים HTML של האלמנט + הורה קרוב שמכיל לינקים לפוסטים.
+            # חשוב: מחפשים הורה עם <a> שמכיל קישור לפוסט (posts, permalink, story)
+            # ולא סתם כל <a> — כי overlay לוגין מכיל <a> של "פתיחת האפליקציה"/"התחברות"
+            # שגורם ל-dump חסר ערך.
             try:
                 snippet = await el.evaluate("""el => {
+                    const POST_PATTERNS = ['/posts/', '/permalink/', 'story_fbid',
+                                           '/story.php', 'multi_permalinks', 'pfbid', '/p/'];
                     let node = el;
+                    let highest = el;
                     for (let i = 0; i < 5; i++) {
                         if (!node.parentElement) break;
                         node = node.parentElement;
-                        if (node.querySelector('a[href]')) return node.outerHTML;
+                        highest = node;
+                        const links = node.querySelectorAll('a[href]');
+                        for (const a of links) {
+                            const href = a.getAttribute('href') || '';
+                            if (POST_PATTERNS.some(p => href.includes(p))) {
+                                return node.outerHTML;
+                            }
+                        }
                     }
-                    return node.outerHTML;
+                    // לא מצאנו הורה עם לינק לפוסט — מחזירים את ההורה הכי גבוה + האלמנט עצמו
+                    return '<!-- no post links found in parents -->\n'
+                         + '<!-- element: -->\n' + el.outerHTML
+                         + '\n<!-- highest parent: -->\n' + highest.outerHTML;
                 }""")
             except Exception:
                 snippet = await el.inner_html()
@@ -633,6 +663,12 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                     return posts
         except Exception:
             pass
+
+        # Fallback: זיהוי overlay לוגין לפי טקסט ("פתיחת האפליקציה / התחברות")
+        # כשהסלקטורים למעלה לא תופסים — ייתכן שפייסבוק שינה HTML
+        if await _has_login_overlay(page):
+            log.warning("זוהה overlay לוגין (לפי טקסט) — ייתכן שהסשן פג!")
+            return posts
 
         # חילוץ שם הקבוצה מכותרת הדף (אמין יותר מסלקטורים בתוך ה-DOM)
         group_name = group["name"]
@@ -843,7 +879,7 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
             await page.goto("https://m.facebook.com", wait_until="domcontentloaded")
             await random_delay(1, 3)
             await dismiss_cookie_dialog(page)
-            if "login" in page.url:
+            if "login" in page.url or await _has_login_overlay(page):
                 log.warning("סשן פג — מתחבר מחדש")
                 await login(page, email, password)
                 await save_session(context)
