@@ -413,6 +413,72 @@ _extraction_stats: dict[str, int] = {"success": 0, "fallback": 0}
 _MAX_TELEGRAM_DUMPS = 3
 _telegram_dumps_sent = 0
 
+# JavaScript לטיפוס בעץ ה-DOM — קריאה אחת שבודקת עד 15 רמות.
+# מחפש: קישורי פוסט, לינקי timestamp (עברית + אנגלית), ajaxify, data-ft/data-store.
+_CLIMB_DOM_JS = """(el, fallbackUrl) => {
+    const PP = ['/posts/', '/permalink/', 'story_fbid',
+                '/story.php', 'multi_permalinks', 'pfbid', '/p/'];
+    const tsHe = /\\d+\\s*(שע|דק|יו|ימ|שני|חוד)/;
+    const tsEn = /^\\d+\\s*[hdmwHDMW]$/;
+    const tsExact = new Set(['עכשיו', 'אתמול', 'just now', 'yesterday']);
+    const isPU = h => PP.some(p => h.includes(p));
+    const isTs = t => {
+        t = (t || '').trim();
+        return tsHe.test(t) || tsEn.test(t) || tsExact.has(t.toLowerCase());
+    };
+    const pfx = h => h.startsWith('http') ? h : 'https://m.facebook.com' + h;
+    const gm = fallbackUrl.match(/\\/groups\\/([^\\/?]+)/);
+    const gid = gm ? gm[1] : null;
+
+    let node = el;
+    for (let i = 0; i < 15; i++) {
+        node = node.parentElement;
+        if (!node) break;
+
+        const links = node.querySelectorAll('a[href]');
+        for (const a of links) {
+            const h = a.getAttribute('href') || '';
+            if (isPU(h)) return JSON.stringify({url: pfx(h), lvl: i+1, how: 'post_link'});
+        }
+        for (const a of links) {
+            const h = a.getAttribute('href') || '';
+            const t = a.textContent || '';
+            if (isTs(t) && h.includes('/groups/') && h !== fallbackUrl) {
+                const f = pfx(h);
+                if (f.length > fallbackUrl.length + 5)
+                    return JSON.stringify({url: f, lvl: i+1, how: 'timestamp'});
+            }
+        }
+
+        const ajx = node.querySelectorAll('[ajaxify]');
+        for (const ae of ajx) {
+            const v = ae.getAttribute('ajaxify') || '';
+            if (isPU(v)) return JSON.stringify({url: pfx(v), lvl: i+1, how: 'ajaxify'});
+        }
+
+        if (gid) {
+            for (const attr of ['data-ft', 'data-store']) {
+                const found = node.querySelector('[' + attr + ']');
+                const target = found || (node.hasAttribute && node.hasAttribute(attr) ? node : null);
+                if (target) {
+                    try {
+                        const d = JSON.parse(target.getAttribute(attr));
+                        for (const k of ['mf_story_key', 'top_level_post_id', 'tl_objid']) {
+                            if (d[k] && String(d[k]).trim())
+                                return JSON.stringify({
+                                    url: 'https://m.facebook.com/groups/' + gid
+                                         + '/permalink/' + String(d[k]).trim() + '/',
+                                    lvl: i+1, how: attr
+                                });
+                        }
+                    } catch(e) {}
+                }
+            }
+        }
+    }
+    return null;
+}"""
+
 
 def get_extraction_stats() -> dict[str, int]:
     """מחזיר עותק של סטטיסטיקת חילוץ URL (לשימוש בטסטים ולוגים)."""
@@ -528,51 +594,17 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
     except Exception:
         pass
 
-    # אסטרטגיה 6: טיפוס בעץ ה-DOM — כשהאלמנט קטן (למשל div[dir='auto'])
-    # ולא מכיל לינקים, מחפשים באלמנטים הורים עד שמוצאים קישור לפוסט.
+    # אסטרטגיה 6: חיפוש מקיף בעץ ה-DOM — קריאת JavaScript אחת.
+    # עולים עד 15 רמות (במקום 5 בגרסה הקודמת) ובודקים:
+    # קישורי פוסט (<a href>), לינקי timestamp, ajaxify, data-ft/data-store.
+    # קריאה אחת במקום מספר round-trips → מהיר ויציב יותר.
     try:
-        parent = (await el.evaluate_handle("el => el.parentElement")).as_element()
-        for _level in range(5):
-            if not parent:
-                break
-            # מחפשים לינק ישיר לפוסט בהורה
-            for sel in direct_selectors:
-                link = await parent.query_selector(sel)
-                if link:
-                    href = await link.get_attribute("href")
-                    if href:
-                        log.debug(f"חילוץ URL — אסטרטגיה 6 (הורה רמה {_level + 1}, סלקטור): {sel}")
-                        _extraction_stats["success"] += 1
-                        return href if href.startswith("http") else f"https://m.facebook.com{href}"
-            # מחפשים לינק timestamp בהורה
-            parent_links = await parent.query_selector_all("a[href]")
-            for a in parent_links:
-                href = await a.get_attribute("href") or ""
-                if _is_post_url(href):
-                    log.debug(f"חילוץ URL — אסטרטגיה 6 (הורה רמה {_level + 1}, סריקה): {href[:80]}")
-                    _extraction_stats["success"] += 1
-                    return href if href.startswith("http") else f"https://m.facebook.com{href}"
-            # מחפשים לינק timestamp
-            for a in parent_links:
-                href = await a.get_attribute("href") or ""
-                try:
-                    text = (await a.inner_text()).strip()
-                except Exception:
-                    continue
-                is_timestamp = (
-                    re.search(r'\d+\s*(שע|דק|יו|ימ|שני|חוד)', text)
-                    or text in ("עכשיו", "אתמול")
-                    or re.search(r'^\d+\s*[hdmwHDMW]$', text)
-                    or text.lower() in ("just now", "yesterday")
-                )
-                if is_timestamp and "/groups/" in href and href != fallback_url:
-                    full = href if href.startswith("http") else f"https://m.facebook.com{href}"
-                    if len(full) > len(fallback_url) + 5:
-                        log.debug(f"חילוץ URL — אסטרטגיה 6 (הורה רמה {_level + 1}, timestamp): {full[:80]}")
-                        _extraction_stats["success"] += 1
-                        return full
-            # עולים רמה נוספת
-            parent = (await parent.evaluate_handle("el => el.parentElement")).as_element()
+        found = await el.evaluate(_CLIMB_DOM_JS, fallback_url)
+        if found:
+            data = json.loads(found)
+            log.debug(f"חילוץ URL — אסטרטגיה 6 (DOM רמה {data['lvl']}, {data['how']}): {data['url'][:80]}")
+            _extraction_stats["success"] += 1
+            return data["url"]
     except Exception:
         pass
 
@@ -592,7 +624,7 @@ async def _extract_post_url(el, fallback_url: str, *, dump_on_fail: bool = True)
                                            '/story.php', 'multi_permalinks', 'pfbid', '/p/'];
                     let node = el;
                     let highest = el;
-                    for (let i = 0; i < 5; i++) {
+                    for (let i = 0; i < 15; i++) {
                         if (!node.parentElement) break;
                         node = node.parentElement;
                         highest = node;
