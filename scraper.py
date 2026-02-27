@@ -25,12 +25,23 @@ _LOGIN_OVERLAY_MARKERS = ("פתיחת האפליקציה", "התחברות")
 
 async def _has_login_overlay(page) -> bool:
     """מזהה overlay לוגין לפי טקסט — כשפייסבוק מציג 'פתיחת האפליקציה / התחברות'
-    בלי redirect, כך שבדיקת URL לא מספיקה."""
+    בלי redirect, כך שבדיקת URL לא מספיקה.
+
+    הבחנה מבאנר UI רגיל: overlay חוסם = דף כמעט ריק (< 500 תווים),
+    באנר רגיל = דף מלא בתוכן קבוצה (הרבה יותר מ-500 תווים)."""
     try:
-        top_text = await page.evaluate(
-            "document.body?.innerText?.substring(0, 500) || ''"
-        )
-        return all(m in top_text for m in _LOGIN_OVERLAY_MARKERS)
+        result = await page.evaluate("""() => {
+            const text = document.body?.innerText || '';
+            return { top: text.substring(0, 500), len: text.length };
+        }""")
+        top_text = result["top"]
+        total_len = result["len"]
+        if not all(m in top_text for m in _LOGIN_OVERLAY_MARKERS):
+            return False
+        # דף עם תוכן אמיתי (קבוצה + באנר UI) — לא overlay חוסם
+        if total_len > 500:
+            return False
+        return True
     except Exception:
         return False
 
