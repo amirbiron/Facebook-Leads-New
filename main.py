@@ -1238,110 +1238,46 @@ async def run_cycle():
     gc.collect()
     log.debug("זיכרון שוחרר אחרי סגירת דפדפן")
 
-    # עדכון סטטוס — עוברים לשלב סינון
-    scan_progress.update({"phase": "filtering", "phase_label": "מסנן פוסטים"})
-
-    # שלב 2 — סינון כפילויות (בלי דפדפן — זיכרון נמוך)
-    # לפוסטים עם URL אמיתי — בודקים לפי post_id ב-DB.
-    # לפוסטים ללא URL אמיתי — ה-ID מבוסס hash תוכן (ייחודי לכל פוסט),
-    # כך שגם הם נבדקים כראוי מול seen_posts.
-    new_posts = [p for p in posts if not is_seen(p["id"])]
-    log.info(f"פוסטים חדשים (לא נראו קודם): {len(new_posts)}")
-    scan_progress["new_posts"] = len(new_posts)
-
-    # סימון כל הפוסטים כנראו (גם אלה שלא יעברו סינון מילות מפתח)
-    for post in new_posts:
-        mark_seen(post["id"], post["group"])
-
+    # try/finally — מבטיח ש-_finish_scan_progress ייקרא גם אם יש exception
+    # אחרי שלב הגרידה (בסינון, סיווג, שליחה וכו')
     leads_found = 0
+    try:
+        # עדכון סטטוס — עוברים לשלב סינון
+        scan_progress.update({"phase": "filtering", "phase_label": "מסנן פוסטים"})
 
-    # שלב 2.5 — סינון פוסטים ישנים (לפי max_post_age_days)
-    # עוקף גם force_send — פוסט ישן לא יישלח גם אם מכיל מילת "שלח תמיד"
-    max_age = _load_max_post_age()
-    if max_age:
-        before_age = len(new_posts)
-        new_posts = [p for p in new_posts if not is_post_too_old(p["content"], max_age)]
-        filtered_by_age = before_age - len(new_posts)
-        if filtered_by_age:
-            log.info(f"סונן לפי גיל: {filtered_by_age} פוסטים ישנים מ-{max_age} ימים דולגו")
+        # שלב 2 — סינון כפילויות (בלי דפדפן — זיכרון נמוך)
+        # לפוסטים עם URL אמיתי — בודקים לפי post_id ב-DB.
+        # לפוסטים ללא URL אמיתי — ה-ID מבוסס hash תוכן (ייחודי לכל פוסט),
+        # כך שגם הם נבדקים כראוי מול seen_posts.
+        new_posts = [p for p in posts if not is_seen(p["id"])]
+        log.info(f"פוסטים חדשים (לא נראו קודם): {len(new_posts)}")
+        scan_progress["new_posts"] = len(new_posts)
 
-    # שלב 3 — "שלח תמיד": פוסטים עם מילת force_send עוקפים את כל הסינון (block/pre_filter/AI)
-    force_send_posts = []
-    rest_posts = []
-    for post in new_posts:
-        matched_kw = matches_force_send(post["content"])
-        if matched_kw and not is_lead_sent(post["id"]):
-            c_hash = _content_dedup_hash(post["content"])
-            if is_content_hash_sent(c_hash):
-                log.debug(f"דילוג על force_send — תוכן זהה כבר נשלח (content_hash)")
-                continue
-            reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
-            send_lead(
-                group_name=post["group"],
-                content=post["content"],
-                post_url=post["url"],
-                reason=reason,
-                has_real_url=post.get("has_real_url", True),
-            )
-            save_lead(post["id"], post["group"], post["content"], reason,
-                      content_hash=c_hash)
-            leads_found += 1
-            log.info(f"ליד (force_send): {matched_kw}")
-            force_send_posts.append(post)
-        else:
-            rest_posts.append(post)
+        # סימון כל הפוסטים כנראו (גם אלה שלא יעברו סינון מילות מפתח)
+        for post in new_posts:
+            mark_seen(post["id"], post["group"])
 
-    if force_send_posts:
-        log.info(f"נשלחו {len(force_send_posts)} לידים ישירות (force_send)")
+        # שלב 2.5 — סינון פוסטים ישנים (לפי max_post_age_days)
+        # עוקף גם force_send — פוסט ישן לא יישלח גם אם מכיל מילת "שלח תמיד"
+        max_age = _load_max_post_age()
+        if max_age:
+            before_age = len(new_posts)
+            new_posts = [p for p in new_posts if not is_post_too_old(p["content"], max_age)]
+            filtered_by_age = before_age - len(new_posts)
+            if filtered_by_age:
+                log.info(f"סונן לפי גיל: {filtered_by_age} פוסטים ישנים מ-{max_age} ימים דולגו")
 
-    # שלב 4א — סינון מילים חסומות (BLOCK_KEYWORDS)
-    if BLOCK_KEYWORDS:
-        before_block = len(rest_posts)
-        rest_posts = [p for p in rest_posts if not is_blocked(p["content"])]
-        blocked_count = before_block - len(rest_posts)
-        if blocked_count:
-            log.info(f"נחסמו {blocked_count} פוסטים לפי מילים חסומות (BLOCK_KEYWORDS)")
-
-    # שלב 4ב — סינון מילות מפתח לפני שליחה ל-AI
-    filtered_posts = [p for p in rest_posts if passes_keyword_filter(p["content"])]
-    skipped_by_filter = len(rest_posts) - len(filtered_posts)
-    if skipped_by_filter:
-        log.info(f"סונן לפי מילות מפתח: {skipped_by_filter} פוסטים לא רלוונטיים דולגו")
-    log.info(f"פוסטים שעוברים לסיווג AI: {len(filtered_posts)}")
-
-    if not filtered_posts:
-        log.info("אין פוסטים רלוונטיים — מדלג על סיווג")
-
-    # סינון פוסטים שכבר נשלחו כלידים — בדיקה לפי post_id + content_hash
-    not_yet_sent = []
-    skipped_already_sent = 0
-    for p in filtered_posts:
-        if is_lead_sent(p["id"]):
-            skipped_already_sent += 1
-            continue
-        c_hash = _content_dedup_hash(p["content"])
-        if is_content_hash_sent(c_hash):
-            skipped_already_sent += 1
-            log.debug(f"דילוג על פוסט — תוכן זהה כבר נשלח (content_hash)")
-            continue
-        p["_content_hash"] = c_hash
-        not_yet_sent.append(p)
-    if skipped_already_sent:
-        log.debug(f"דילוג על {skipped_already_sent} פוסטים שכבר נשלחו כלידים")
-
-    to_classify = not_yet_sent
-    scan_progress["posts_to_classify"] = len(to_classify)
-
-    if to_classify:
-        # עדכון סטטוס — עוברים לשלב סיווג AI
-        scan_progress.update({"phase": "classifying", "phase_label": "מסווג עם AI"})
-
-        # סיווג באצ'ים — שליחת מספר פוסטים ל-AI בבקשה אחת
-        results = classify_batch(to_classify)
-
-        for post, result in zip(to_classify, results):
-            if result.get("relevant"):
-                reason = result.get("reason", "")
+        # שלב 3 — "שלח תמיד": פוסטים עם מילת force_send עוקפים את כל הסינון (block/pre_filter/AI)
+        force_send_posts = []
+        rest_posts = []
+        for post in new_posts:
+            matched_kw = matches_force_send(post["content"])
+            if matched_kw and not is_lead_sent(post["id"]):
+                c_hash = _content_dedup_hash(post["content"])
+                if is_content_hash_sent(c_hash):
+                    log.debug(f"דילוג על force_send — תוכן זהה כבר נשלח (content_hash)")
+                    continue
+                reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
                 send_lead(
                     group_name=post["group"],
                     content=post["content"],
@@ -1350,14 +1286,85 @@ async def run_cycle():
                     has_real_url=post.get("has_real_url", True),
                 )
                 save_lead(post["id"], post["group"], post["content"], reason,
-                          content_hash=post.get("_content_hash", ""))
+                          content_hash=c_hash)
                 leads_found += 1
                 scan_progress["leads_sent"] = leads_found
-                log.info(f"ליד נשלח: {reason}")
+                log.info(f"ליד (force_send): {matched_kw}")
+                force_send_posts.append(post)
             else:
-                log.debug(f"לא רלוונטי: {result.get('reason', '')}")
+                rest_posts.append(post)
 
-    _finish_scan_progress(leads_found)
+        if force_send_posts:
+            log.info(f"נשלחו {len(force_send_posts)} לידים ישירות (force_send)")
+
+        # שלב 4א — סינון מילים חסומות (BLOCK_KEYWORDS)
+        if BLOCK_KEYWORDS:
+            before_block = len(rest_posts)
+            rest_posts = [p for p in rest_posts if not is_blocked(p["content"])]
+            blocked_count = before_block - len(rest_posts)
+            if blocked_count:
+                log.info(f"נחסמו {blocked_count} פוסטים לפי מילים חסומות (BLOCK_KEYWORDS)")
+
+        # שלב 4ב — סינון מילות מפתח לפני שליחה ל-AI
+        filtered_posts = [p for p in rest_posts if passes_keyword_filter(p["content"])]
+        skipped_by_filter = len(rest_posts) - len(filtered_posts)
+        if skipped_by_filter:
+            log.info(f"סונן לפי מילות מפתח: {skipped_by_filter} פוסטים לא רלוונטיים דולגו")
+        log.info(f"פוסטים שעוברים לסיווג AI: {len(filtered_posts)}")
+
+        if not filtered_posts:
+            log.info("אין פוסטים רלוונטיים — מדלג על סיווג")
+
+        # סינון פוסטים שכבר נשלחו כלידים — בדיקה לפי post_id + content_hash
+        not_yet_sent = []
+        skipped_already_sent = 0
+        for p in filtered_posts:
+            if is_lead_sent(p["id"]):
+                skipped_already_sent += 1
+                continue
+            c_hash = _content_dedup_hash(p["content"])
+            if is_content_hash_sent(c_hash):
+                skipped_already_sent += 1
+                log.debug(f"דילוג על פוסט — תוכן זהה כבר נשלח (content_hash)")
+                continue
+            p["_content_hash"] = c_hash
+            not_yet_sent.append(p)
+        if skipped_already_sent:
+            log.debug(f"דילוג על {skipped_already_sent} פוסטים שכבר נשלחו כלידים")
+
+        to_classify = not_yet_sent
+        scan_progress["posts_to_classify"] = len(to_classify)
+
+        if to_classify:
+            # עדכון סטטוס — עוברים לשלב סיווג AI
+            scan_progress.update({"phase": "classifying", "phase_label": "מסווג עם AI"})
+
+            # סיווג באצ'ים — שליחת מספר פוסטים ל-AI בבקשה אחת
+            results = classify_batch(to_classify)
+
+            for post, result in zip(to_classify, results):
+                if result.get("relevant"):
+                    reason = result.get("reason", "")
+                    send_lead(
+                        group_name=post["group"],
+                        content=post["content"],
+                        post_url=post["url"],
+                        reason=reason,
+                        has_real_url=post.get("has_real_url", True),
+                    )
+                    save_lead(post["id"], post["group"], post["content"], reason,
+                              content_hash=post.get("_content_hash", ""))
+                    leads_found += 1
+                    scan_progress["leads_sent"] = leads_found
+                    log.info(f"ליד נשלח: {reason}")
+                else:
+                    log.debug(f"לא רלוונטי: {result.get('reason', '')}")
+
+        _finish_scan_progress(leads_found)
+    except Exception as e:
+        log.error(f"שגיאה לאחר גרידה: {e}", exc_info=True)
+        _finish_scan_progress(leads_found, error=str(e))
+        raise
 
     stats = get_stats()
     log.info(f"סבב הסתיים | לידים בסבב: {leads_found} | סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}")

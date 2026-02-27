@@ -1716,6 +1716,8 @@
     let _scanPollTimer = null;
 
     function startScanPolling() {
+      // ניקוי טיימר קודם — מונע הצטברות intervals ב-re-auth
+      stopScanPolling();
       // polling כל 3 שניות — קל מספיק גם ל-512MB VM
       loadScanStatus();
       _scanPollTimer = setInterval(loadScanStatus, 3000);
