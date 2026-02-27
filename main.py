@@ -1134,6 +1134,11 @@ def _content_dedup_hash(text: str) -> str:
         return ""
     return hashlib.md5(stable.encode()).hexdigest()
 
+def _dedup_debug(post_id: str, content: str, c_hash: str, label: str):
+    """לוג דיאגנוסטי לזיהוי כפילויות — מציג snippet + hash + post_id."""
+    snippet = content.replace('\n', ' ')[:80]
+    log.info(f"[DEDUP-SEND] {label} | id={post_id[:20]} | hash={c_hash[:12]} | \"{snippet}...\"")
+
 def _reset_scan_progress():
     """מאפס את scan_progress לפני סבב חדש."""
     scan_progress.update({
@@ -1295,7 +1300,7 @@ async def run_cycle():
                           content_hash=c_hash)
                 leads_found += 1
                 scan_progress["leads_sent"] = leads_found
-                log.info(f"ליד (force_send): {matched_kw}")
+                _dedup_debug(post["id"], post["content"], c_hash, "force_send")
                 force_send_posts.append(post)
             else:
                 rest_posts.append(post)
@@ -1323,20 +1328,22 @@ async def run_cycle():
 
         # סינון פוסטים שכבר נשלחו כלידים — בדיקה לפי post_id + content_hash
         not_yet_sent = []
-        skipped_already_sent = 0
+        skipped_by_id = 0
+        skipped_by_hash = 0
         for p in filtered_posts:
             if is_lead_sent(p["id"]):
-                skipped_already_sent += 1
+                skipped_by_id += 1
                 continue
             c_hash = _content_dedup_hash(p["content"])
             if is_content_hash_sent(c_hash):
-                skipped_already_sent += 1
-                log.debug(f"דילוג על פוסט — תוכן זהה כבר נשלח (content_hash)")
+                skipped_by_hash += 1
+                snippet = p["content"].replace('\n', ' ')[:60]
+                log.info(f"[DEDUP-CATCH] content_hash caught dup | id={p['id'][:20]} | hash={c_hash[:12]} | \"{snippet}...\"")
                 continue
             p["_content_hash"] = c_hash
             not_yet_sent.append(p)
-        if skipped_already_sent:
-            log.debug(f"דילוג על {skipped_already_sent} פוסטים שכבר נשלחו כלידים")
+        if skipped_by_id or skipped_by_hash:
+            log.info(f"סינון כפילויות: {skipped_by_id} לפי post_id, {skipped_by_hash} לפי content_hash")
 
         to_classify = not_yet_sent
         scan_progress["posts_to_classify"] = len(to_classify)
@@ -1362,7 +1369,7 @@ async def run_cycle():
                               content_hash=post.get("_content_hash", ""))
                     leads_found += 1
                     scan_progress["leads_sent"] = leads_found
-                    log.info(f"ליד נשלח: {reason}")
+                    _dedup_debug(post["id"], post["content"], post.get("_content_hash", ""), "ai_classified")
                 else:
                     log.debug(f"לא רלוונטי: {result.get('reason', '')}")
 

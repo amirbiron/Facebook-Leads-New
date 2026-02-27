@@ -577,6 +577,97 @@ class TestStableTextForHash:
         h2 = hashlib.md5(_stable_text_for_hash(t2).encode()).hexdigest()[:16]
         assert h1 == h2
 
+    # ── נרמול עמוק — URLs, unicode, case ──────────────────────
+
+    def test_url_removed_from_hash(self):
+        """URLs עם פרמטרי מעקב שונים מייצרים אותו hash."""
+        t1 = "מחפש עבודה\nhttps://example.com/job?fbclid=abc123"
+        t2 = "מחפש עבודה\nhttps://example.com/job?fbclid=xyz789"
+        t3 = "מחפש עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+
+    def test_case_normalized(self):
+        """הבדלי case לא משנים את ה-hash."""
+        t1 = "Looking For A Developer"
+        t2 = "looking for a developer"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_unicode_direction_marks_removed(self):
+        """תווי כיווניות (LRM/RLM) לא משפיעים על ה-hash."""
+        t1 = "\u200eמחפש עבודה\u200f"
+        t2 = "מחפש עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_zero_width_chars_removed(self):
+        """תווי zero-width לא משפיעים על ה-hash."""
+        t1 = "מחפש\u200bעבודה\u2060טובה"
+        t2 = "מחפשעבודהטובה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_see_more_removed(self):
+        """'קרא עוד' / 'See more' מוסרים."""
+        t1 = "מחפש עבודה\nקרא עוד"
+        t2 = "מחפש עבודה\nSee more"
+        t3 = "מחפש עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    def test_see_translation_removed(self):
+        """'ראה תרגום' / 'See translation' מוסרים."""
+        t1 = "מחפש עבודה\nראה תרגום"
+        t2 = "מחפש עבודה\nSee translation"
+        t3 = "מחפש עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    def test_write_comment_removed(self):
+        """'כתוב תגובה...' מוסר."""
+        t1 = "מחפש עבודה\nכתוב תגובה..."
+        t2 = "מחפש עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_sponsored_removed(self):
+        """'ממומן' / 'Sponsored' מוסרים."""
+        t1 = "מחפש עבודה\nממומן"
+        t2 = "מחפש עבודה\nSponsored"
+        t3 = "מחפש עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    def test_pua_chars_removed(self):
+        """תווי Private Use Area (אייקונים של פייסבוק) מוסרים."""
+        t1 = "מחפש עבודה\uE001\uE100"
+        t2 = "מחפש עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_url_in_mid_sentence_removed(self):
+        """URL באמצע משפט מוסר ללא פגיעה בתוכן."""
+        t1 = "ראו כאן https://fb.com/p/123?ref=share מעניין מאוד"
+        t2 = "ראו כאן מעניין מאוד"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_real_content_not_affected_by_normalization(self):
+        """תוכן אמיתי לא נפגע — Hebrew content still distinguishes posts."""
+        t1 = "מחפש מפתח פייתון לפרויקט"
+        t2 = "מחפש מעצב גרפי לפרויקט"
+        assert _stable_text_for_hash(t1) != _stable_text_for_hash(t2)
+
+    def test_phone_number_preserved_in_hash(self):
+        """מספרי טלפון ישראליים לא נמחקים מה-hash — הם תוכן משמעותי."""
+        assert "054-1234567" in _stable_text_for_hash("054-1234567")
+        assert "972-52-1234567" in _stable_text_for_hash("+972-52-1234567")
+        # פוסטים עם מספרי טלפון שונים חייבים לקבל hash שונה
+        t1 = "מחפש עבודה\n054-1234567"
+        t2 = "מחפש עבודה\n052-9876543"
+        assert _stable_text_for_hash(t1) != _stable_text_for_hash(t2)
+
+    def test_pure_numeric_noise_still_stripped(self):
+        """שורות שהן רק מספרים (לייקים/תגובות) עדיין נמחקות."""
+        assert _stable_text_for_hash("1,234") == ""
+        assert _stable_text_for_hash("5") == ""
+        assert _stable_text_for_hash("12.5") == ""
+
 
 class TestContentHashDedup:
     """בדיקות ל-content_hash dedup — מניעת כפילויות כשה-post_id משתנה בין סשנים."""
