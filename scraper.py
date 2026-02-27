@@ -371,8 +371,23 @@ async def login(page, email: str, password: str):
             except Exception:
                 continue
 
+        # לוג תוכן הדף — לזיהוי CAPTCHA, אבטחה, או שגיאות לא צפויות
+        try:
+            page_text = await page.evaluate("() => (document.body?.innerText || '').substring(0, 800)")
+            log.error(f"תוכן דף לוגין שנכשל:\n{page_text}")
+        except Exception:
+            pass
+
+        # שמירה + שליחת צילום מסך לטלגרם
         try:
             await page.screenshot(path="data/debug_login_failed.png")
+            with open("data/debug_login_failed.png", "rb") as f:
+                await asyncio.to_thread(
+                    send_document,
+                    f.read(),
+                    "debug_login_failed.png",
+                    "🔍 צילום מסך — התחברות נכשלה",
+                )
         except Exception:
             pass
 
@@ -386,6 +401,13 @@ async def login(page, email: str, password: str):
     if "checkpoint" in current_url:
         try:
             await page.screenshot(path="data/debug_checkpoint.png")
+            with open("data/debug_checkpoint.png", "rb") as f:
+                await asyncio.to_thread(
+                    send_document,
+                    f.read(),
+                    "debug_checkpoint.png",
+                    "🔍 צילום מסך — פייסבוק דורש אימות נוסף (checkpoint)",
+                )
         except Exception:
             pass
         log.error(f"פייסבוק דורש אימות נוסף (checkpoint): {current_url}")
@@ -1069,7 +1091,8 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
             is_wui = await _is_wui_page(page)
             if "login" in page.url or await _has_login_overlay(page) or is_wui:
                 reason = "wui-only (רק לינקי 'פתח באפליקציה')" if is_wui else "login redirect/overlay"
-                log.warning(f"סשן פג ({reason}) — מתחבר מחדש")
+                log.warning(f"סשן פג ({reason}) — מנקה cookies ומתחבר מחדש")
+                await context.clear_cookies()
                 await login(page, email, password)
                 await save_session(context)
             else:
@@ -1091,8 +1114,9 @@ async def scrape_all(email: str, password: str, seen_checker=None) -> list[dict]
             # אם scrape_group זיהה מצב wui — הסשן פג. מתחברים מחדש ומנסים שוב.
             if _session_needs_refresh:
                 _session_needs_refresh = False
-                log.warning("סשן פג זוהה בקבוצה — מתחבר מחדש ומנסה שוב...")
+                log.warning("סשן פג זוהה בקבוצה — מנקה cookies ומתחבר מחדש...")
                 try:
+                    await context.clear_cookies()
                     await login(page, email, password)
                     await save_session(context)
                     posts = await scrape_group(page, group, seen_checker=seen_checker)
