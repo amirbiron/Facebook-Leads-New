@@ -1513,6 +1513,39 @@ class TestPanelAPI:
         assert data["ok"] is True
         assert data["auth_required"] is False
 
+    def test_scan_status_returns_default_idle(self, panel_client):
+        """בדיקה שה-endpoint מחזיר סטטוס idle כשאין סריקה."""
+        resp = panel_client.get("/api/scan-status")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["active"] is False
+        assert data["phase"] == "idle"
+        assert "daily_seen" in data
+        assert "server_time" in data
+
+    def test_scan_status_reflects_progress_updates(self, panel_client):
+        """בדיקה ש-scan_progress מ-main.py משתקף ב-endpoint — אותו dict בדיוק."""
+        from main import scan_progress
+        # שומרים ערכים מקוריים לשחזור
+        orig = dict(scan_progress)
+        try:
+            scan_progress.update({
+                "active": True,
+                "phase": "scraping",
+                "phase_label": "סורק קבוצות",
+                "current_group": "test_group",
+                "total_groups": 3,
+            })
+            resp = panel_client.get("/api/scan-status")
+            data = resp.get_json()
+            assert data["active"] is True
+            assert data["phase"] == "scraping"
+            assert data["phase_label"] == "סורק קבוצות"
+            assert data["current_group"] == "test_group"
+            assert data["total_groups"] == 3
+        finally:
+            scan_progress.update(orig)
+
     def test_cleared_quiet_hours_not_refilled_from_env(self, tmp_db, monkeypatch):
         """ערך ריק ב-DB (המשתמש ביטל) לא צריך לחזור ל-env var."""
         monkeypatch.setenv("QUIET_HOURS", "02:00-07:00")

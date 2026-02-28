@@ -47,6 +47,12 @@ scan_progress: dict = {
     "error": "",
 }
 
+# כשמריצים python main.py, המודול נטען כ-__main__ ולא כ-"main".
+# פאנל Flask עושה `from main import scan_progress` — שיוצר מודול "main" נפרד
+# עם dict חדש שלעולם לא מתעדכן → הפאנל תמיד מראה "ממתין".
+# הרישום כאן מבטיח ששני השמות מצביעים לאותו מודול.
+sys.modules.setdefault("main", sys.modules[__name__])
+
 FB_EMAIL = os.environ.get("FB_EMAIL")
 FB_PASSWORD = os.environ.get("FB_PASSWORD")
 
