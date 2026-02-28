@@ -122,11 +122,24 @@ _NOISE_WORDS = frozenset({
     'like', 'comment', 'share', 'send message', 'see more', 'see less',
     'see translation', 'write a comment...', 'write a comment…',
     'suggested for you', 'sponsored', 'all comments',
+    'most relevant', 'newest',
     'הגב', 'שתף', 'שתפ', 'אהבתי', 'קרא עוד', 'ראה עוד', 'הצג עוד',
     'ראה תרגום', 'כתוב תגובה...', 'כתוב תגובה…', 'כתוב תגובה',
     'שלח הודעה', 'מומלץ', 'מומלצת', 'מומלצים', 'ממומן',
     'כל התגובות', 'הגב/י', 'שתף/י',
+    'עוד', '... עוד', '… עוד', 'הרלוונטיות ביותר', 'החדשות ביותר',
 })
+
+# שורות דינמיות נוספות שמשתנות בין סריקות ולא נתפסות ע"י _ENGAGEMENT_LINE_RE.
+# "+N" — ספירת ריאקשנים/תגובות ("ו-עוד 3" / "+3").
+# "ו-עוד N אחרים" — רשימת מגיבים.
+# מעוגנים לשורה שלמה כדי לא למחוק "+3" מתוך מספר טלפון.
+_DYNAMIC_LINE_RE = re.compile(
+    r'^\+\d+$'
+    r'|^ו-עוד\s+\d+\s*(?:אחרי[םם]?)?$'
+    r'|^and\s+\d+\s+(?:more|others?)$',
+    re.IGNORECASE
+)
 
 # רגקס להסרת URLs (עם פרמטרי מעקב דינמיים כמו fbclid שמשתנים בין טעינות)
 _URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
@@ -173,6 +186,9 @@ def _stable_text_for_hash(text: str) -> str:
             continue
         # דילוג על שורות engagement שמשתנות בין סריקות ("5 תגובות", "3 שיתופים")
         if _ENGAGEMENT_LINE_RE.match(s):
+            continue
+        # דילוג על שורות דינמיות נוספות ("+3", "ו-עוד 5 אחרים")
+        if _DYNAMIC_LINE_RE.match(s):
             continue
         stable.append(s)
     joined = '\n'.join(stable)
