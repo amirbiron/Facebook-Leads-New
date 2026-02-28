@@ -291,13 +291,15 @@ async def _stop_scan_animation(leads_found: int, error: str = ""):
     if not chat_id or not msg_id:
         return
 
-    # בניית סיכום — כשיש לידים לא צריך ספירה (הם כבר נשלחו)
+    # כשיש לידים — הם כבר נשלחו כהודעות, לא צריך סיכום נוסף
+    if leads_found > 0 and not error:
+        return
+
+    # סיכום רק כשאין לידים או שיש שגיאה
     if error:
         summary = f"סריקה נכשלה — {error[:200]}"
-    elif leads_found == 0:
-        summary = "סריקה הושלמה — ללא לידים חדשים"
     else:
-        summary = "סריקה הושלמה"
+        summary = "סריקה הושלמה — ללא לידים חדשים"
 
     # אימוג'י scan_end (אם מוגדר)
     end_data = get_emoji("scan_end")

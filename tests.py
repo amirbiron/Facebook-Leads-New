@@ -3382,20 +3382,14 @@ class TestStopScanAnimation:
     """בדיקות ל-_stop_scan_animation — עצירת אנימציה ועריכת הודעה לסיכום."""
 
     @pytest.mark.asyncio
-    async def test_edits_message_with_leads_no_count(self, tmp_db):
-        """כשיש לידים — סיכום קצר בלי ספירה (הלידים כבר נשלחו כהודעות)."""
+    async def test_no_edit_when_leads_found(self, tmp_db):
+        """כשיש לידים — לא עורכים הודעה (הלידים כבר נשלחו כהודעות נפרדות)."""
         _scan_anim_state.clear()
         _scan_anim_state["chat_id"] = 123
         _scan_anim_state["message_id"] = 456
         with patch("notifier.edit_message_text") as mock_edit:
-            mock_edit.return_value = True
             await _stop_scan_animation(leads_found=3)
-            mock_edit.assert_called_once()
-            text_arg = mock_edit.call_args[0][2]
-            assert "הושלמה" in text_arg
-            # לא צריך ספירה — הלידים כבר נשלחו
-            assert "3" not in text_arg
-            assert "לידים" not in text_arg
+            mock_edit.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_edits_message_no_leads(self, tmp_db):
@@ -3422,13 +3416,14 @@ class TestStopScanAnimation:
 
     @pytest.mark.asyncio
     async def test_with_scan_end_emoji(self, tmp_db):
+        """אימוג'י scan_end מוטמע בסיכום (כשאין לידים)."""
         set_emoji("scan_end", "end_emoji_id", "\U0001f389")
         _scan_anim_state.clear()
         _scan_anim_state["chat_id"] = 123
         _scan_anim_state["message_id"] = 456
         with patch("notifier.edit_message_text") as mock_edit:
             mock_edit.return_value = True
-            await _stop_scan_animation(leads_found=1)
+            await _stop_scan_animation(leads_found=0)
             args = mock_edit.call_args
             text_arg = args[0][2]
             assert text_arg.startswith("\U0001f389")
