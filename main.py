@@ -1071,12 +1071,20 @@ async def _telegram_control_loop(
                     # שומרים chat_id — run_cycle ישלח אנימציית "סורק..." במקום הודעה רגילה
                     shared_state["scan_triggered_by"] = chat_id_int
                     scan_now_event.set()
+                    await asyncio.to_thread(
+                        send_message, "מתזמן סריקה עכשיו.",
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
                     continue
 
                 if cmd in ("/scan_force",):
                     shared_state["scan_triggered_by"] = chat_id_int
                     scan_force_event.set()
                     scan_now_event.set()
+                    await asyncio.to_thread(
+                        send_message, "מתזמן סריקה עכשיו (דילוג על שעות שקטות).",
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
                     continue
 
                 # ── ניהול קבוצות דינמי ──────────────────────────
