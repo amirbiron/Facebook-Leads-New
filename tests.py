@@ -2841,3 +2841,168 @@ class TestIsPostTooOld:
         assert is_post_too_old("לפני 1 שבועות\nטקסט", max_days=3) is True
 
 
+# ──────────────────────────────────────────────────────────────
+# מעקב עלויות API (issue #93)
+# ──────────────────────────────────────────────────────────────
+
+from database import (
+    save_api_usage, get_usage_stats, get_daily_usage_stats,
+    get_usage_by_model, _estimate_cost,
+)
+
+
+class TestEstimateCost:
+    """בדיקות חישוב עלות לפי מודל וטוקנים."""
+
+    def test_gpt4_1_mini_cost(self):
+        """עלות gpt-4.1-mini: $0.40/1M input, $1.60/1M output."""
+        cost = _estimate_cost("gpt-4.1-mini", 1_000_000, 1_000_000)
+        assert abs(cost - 2.0) < 0.001
+
+    def test_gpt4o_mini_cost(self):
+        """עלות gpt-4o-mini: $0.15/1M input, $0.60/1M output."""
+        cost = _estimate_cost("gpt-4o-mini", 1_000_000, 1_000_000)
+        assert abs(cost - 0.75) < 0.001
+
+    def test_unknown_model_uses_default(self):
+        """מודל לא מוכר — fallback לעלות ברירת מחדל."""
+        cost = _estimate_cost("unknown-model", 1_000_000, 1_000_000)
+        assert abs(cost - 2.0) < 0.001
+
+    def test_zero_tokens(self):
+        cost = _estimate_cost("gpt-4.1-mini", 0, 0)
+        assert cost == 0.0
+
+    def test_small_call(self):
+        """קריאה טיפוסית: 500 input + 200 output tokens."""
+        cost = _estimate_cost("gpt-4.1-mini", 500, 200)
+        expected = (500 * 0.40 + 200 * 1.60) / 1_000_000
+        assert abs(cost - expected) < 1e-9
+
+
+class TestSaveApiUsage:
+    """בדיקות שמירה ושליפת נתוני שימוש ב-API."""
+
+    def test_save_and_get_stats(self, tmp_db):
+        """שמירת שימוש ושליפה מצטברת."""
+        save_api_usage("gpt-4.1-mini", 100, 50, 150, "single")
+        save_api_usage("gpt-4.1-mini", 200, 100, 300, "batch")
+        stats = get_usage_stats()
+        assert stats["prompt_tokens"] == 300
+        assert stats["completion_tokens"] == 150
+        assert stats["total_tokens"] == 450
+        assert stats["total_calls"] == 2
+        assert stats["total_cost_usd"] > 0
+
+    def test_empty_stats(self, tmp_db):
+        """ללא נתונים — מחזיר אפסים."""
+        stats = get_usage_stats()
+        assert stats["total_tokens"] == 0
+        assert stats["total_calls"] == 0
+        assert stats["total_cost_usd"] == 0
+
+    def test_daily_stats(self, tmp_db):
+        """סטטיסטיקות יומיות מסננות לפי תאריך."""
+        save_api_usage("gpt-4.1-mini", 100, 50, 150, "single")
+        today = database._now().strftime("%Y-%m-%d")
+        daily = get_daily_usage_stats(today)
+        assert daily["total_calls"] == 1
+        assert daily["total_tokens"] == 150
+        # תאריך אחר — אין תוצאות
+        other = get_daily_usage_stats("1999-01-01")
+        assert other["total_calls"] == 0
+
+    def test_by_model(self, tmp_db):
+        """פירוט לפי מודל."""
+        save_api_usage("gpt-4.1-mini", 100, 50, 150, "single")
+        save_api_usage("gpt-4o-mini", 200, 100, 300, "batch")
+        by_model = get_usage_by_model()
+        assert len(by_model) == 2
+        models = {m["model"] for m in by_model}
+        assert "gpt-4.1-mini" in models
+        assert "gpt-4o-mini" in models
+
+
+class TestTrackUsage:
+    """בדיקות _track_usage ב-classifier.py."""
+
+    def test_track_usage_saves_to_db(self, tmp_db):
+        """_track_usage שומר נתונים ל-DB כשיש usage בתשובה."""
+        from classifier import _track_usage
+
+        class FakeUsage:
+            prompt_tokens = 100
+            completion_tokens = 50
+            total_tokens = 150
+
+        class FakeResponse:
+            usage = FakeUsage()
+
+        _track_usage(FakeResponse(), "gpt-4.1-mini", "single")
+        stats = get_usage_stats()
+        assert stats["total_calls"] == 1
+        assert stats["total_tokens"] == 150
+
+    def test_track_usage_no_usage_attr(self, tmp_db):
+        """_track_usage לא קורס כשאין usage בתשובה."""
+        from classifier import _track_usage
+
+        class FakeResponse:
+            usage = None
+
+        _track_usage(FakeResponse(), "gpt-4.1-mini", "single")
+        stats = get_usage_stats()
+        assert stats["total_calls"] == 0
+
+    def test_track_usage_missing_attr(self, tmp_db):
+        """_track_usage לא קורס כשאין שדה usage כלל."""
+        from classifier import _track_usage
+
+        class FakeResponse:
+            pass
+
+        _track_usage(FakeResponse(), "gpt-4.1-mini", "single")
+        stats = get_usage_stats()
+        assert stats["total_calls"] == 0
+
+
+class TestBuildDeveloperUsageText:
+    """בדיקות לפונקציית _build_developer_usage_text."""
+
+    def test_empty_usage(self, tmp_db, monkeypatch):
+        """ללא נתונים — מציג אפסים."""
+        from main import _build_developer_usage_text
+        monkeypatch.setattr("main.TIMEZONE_NAME", "UTC")
+        text = _build_developer_usage_text()
+        assert "קריאות: 0" in text
+        assert "$0.0000" in text
+
+    def test_with_data(self, tmp_db, monkeypatch):
+        """עם נתונים — מציג סטטיסטיקות."""
+        from main import _build_developer_usage_text
+        monkeypatch.setattr("main.TIMEZONE_NAME", "UTC")
+        save_api_usage("gpt-4.1-mini", 1000, 500, 1500, "single")
+        text = _build_developer_usage_text()
+        assert "1,500" in text  # total tokens formatted
+        assert "gpt-4.1-mini" in text
+
+
+class TestParseDeveloperChatIds:
+    """בדיקות _parse_developer_chat_ids."""
+
+    def test_empty(self, monkeypatch):
+        monkeypatch.setattr("main.DEVELOPER_CHAT_ID", "")
+        from main import _parse_developer_chat_ids
+        assert _parse_developer_chat_ids() == set()
+
+    def test_single_id(self, monkeypatch):
+        monkeypatch.setattr("main.DEVELOPER_CHAT_ID", "12345")
+        from main import _parse_developer_chat_ids
+        assert _parse_developer_chat_ids() == {12345}
+
+    def test_multiple_ids(self, monkeypatch):
+        monkeypatch.setattr("main.DEVELOPER_CHAT_ID", "111,222")
+        from main import _parse_developer_chat_ids
+        assert _parse_developer_chat_ids() == {111, 222}
+
+

@@ -14,6 +14,7 @@ from database import (
     cleanup_old_posts, add_group, remove_group, get_db_groups, ensure_groups_migrated,
     add_keyword, remove_keyword, get_db_keywords, ensure_keywords_migrated,
     get_config, set_config,
+    get_usage_stats, get_daily_usage_stats, get_usage_by_model,
 )
 from logger import get_logger
 
@@ -25,6 +26,7 @@ QUIET_HOURS = os.environ.get("QUIET_HOURS", "").strip()
 TELEGRAM_CONTROL = os.environ.get("TELEGRAM_CONTROL", "1").strip().lower() not in ("0", "false", "no", "off")
 
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", os.environ.get("PORT", "8080")))
+DEVELOPER_CHAT_ID = os.environ.get("DEVELOPER_CHAT_ID", "").strip()
 
 # ── סטטוס סריקה בזמן אמת — נגיש מהפאנל דרך /api/scan-status ──
 # מילון שמתעדכן לאורך כל שלבי הסריקה. Flask קורא אותו (thread-safe לקריאה).
@@ -507,6 +509,39 @@ def _build_blocked_text() -> str:
         f"מילים חסומות ({len(bl)}):\n{bl_text}\n\n"
         "פקודות: /block <מילה> | /unblock <מילה>"
     )
+
+
+def _build_developer_usage_text() -> str:
+    """בונה טקסט שימוש ב-API — נגיש רק למפתח."""
+    now = _now_local()
+    today_prefix = now.strftime("%Y-%m-%d")
+    total = get_usage_stats()
+    daily = get_daily_usage_stats(today_prefix)
+    by_model = get_usage_by_model()
+
+    lines = [
+        "מעקב עלויות API:\n",
+        f"היום ({today_prefix}):",
+        f"  קריאות: {daily['total_calls']}",
+        f"  טוקנים: {daily['total_tokens']:,} (in: {daily['prompt_tokens']:,} | out: {daily['completion_tokens']:,})",
+        f"  עלות: ${daily['total_cost_usd']:.4f}\n",
+        "סה\"כ מצטבר:",
+        f"  קריאות: {total['total_calls']}",
+        f"  טוקנים: {total['total_tokens']:,} (in: {total['prompt_tokens']:,} | out: {total['completion_tokens']:,})",
+        f"  עלות: ${total['total_cost_usd']:.4f}",
+    ]
+
+    if by_model:
+        lines.append("\nפירוט לפי מודל:")
+        for m in by_model:
+            lines.append(f"  {m['model']}: {m['total_calls']} קריאות, {m['total_tokens']:,} טוקנים, ${m['total_cost_usd']:.4f}")
+
+    return "\n".join(lines)
+
+
+def _parse_developer_chat_ids() -> set[int]:
+    """מפרסר DEVELOPER_CHAT_ID (תומך ב-ID אחד או כמה מופרדים בפסיק)."""
+    return _parse_allowed_chat_ids(DEVELOPER_CHAT_ID)
 
 
 async def _telegram_control_loop(
@@ -1003,6 +1038,25 @@ async def _telegram_control_loop(
                             f"סינון גיל הוגדר: פוסטים ישנים מ-{days} ימים לא יישלחו.",
                             chat_id=chat_id_int, disable_web_page_preview=True,
                         )
+                    continue
+
+                # ── מעקב עלויות — למפתח בלבד ─────────────────
+                if cmd in ("/developer_usage",):
+                    dev_ids = _parse_developer_chat_ids()
+                    if not dev_ids or chat_id_int not in dev_ids:
+                        await asyncio.to_thread(
+                            send_message, "פקודה זו זמינה רק למפתח.",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    usage_text = _build_developer_usage_text()
+                    await asyncio.to_thread(
+                        send_message_with_buttons,
+                        usage_text,
+                        _back_to_menu_button(),
+                        chat_id=chat_id_int,
+                        disable_web_page_preview=True,
+                    )
                     continue
 
         except requests.HTTPError as e:
