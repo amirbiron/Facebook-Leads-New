@@ -3039,3 +3039,199 @@ class TestParseDeveloperChatIds:
         assert _parse_developer_chat_ids() == {111, 222}
 
 
+# ──────────────────────────────────────────────────────────────
+# Group-Specific Force Send
+# ──────────────────────────────────────────────────────────────
+
+from main import (
+    add_group_force_send_keyword,
+    remove_group_force_send_keyword,
+    _load_group_force_send_keywords,
+    get_all_group_force_send,
+)
+
+
+class TestGroupForceSendCRUD:
+    """הוספה/מחיקה/טעינה של מילות force_send לקבוצה ספציפית."""
+
+    def test_add_and_load(self, tmp_db):
+        ok, msg = add_group_force_send_keyword("https://m.facebook.com/groups/123", "skill")
+        assert ok
+        kws = _load_group_force_send_keywords("https://m.facebook.com/groups/123")
+        assert "skill" in kws
+
+    def test_add_duplicate(self, tmp_db):
+        add_group_force_send_keyword("https://m.facebook.com/groups/123", "skill")
+        ok, msg = add_group_force_send_keyword("https://m.facebook.com/groups/123", "skill")
+        assert not ok
+
+    def test_remove(self, tmp_db):
+        add_group_force_send_keyword("https://m.facebook.com/groups/123", "skill")
+        ok, msg = remove_group_force_send_keyword("https://m.facebook.com/groups/123", "skill")
+        assert ok
+        kws = _load_group_force_send_keywords("https://m.facebook.com/groups/123")
+        assert "skill" not in kws
+
+    def test_remove_not_found(self, tmp_db):
+        ok, msg = remove_group_force_send_keyword("https://m.facebook.com/groups/123", "nonexistent")
+        assert not ok
+
+    def test_lowercased(self, tmp_db):
+        add_group_force_send_keyword("https://m.facebook.com/groups/123", "SKILL")
+        kws = _load_group_force_send_keywords("https://m.facebook.com/groups/123")
+        assert "skill" in kws
+
+    def test_url_normalization(self, tmp_db):
+        """כתובות שונות לאותה קבוצה — מנורמלות לאותו מפתח."""
+        add_group_force_send_keyword("www.facebook.com/groups/123", "skill")
+        kws = _load_group_force_send_keywords("https://m.facebook.com/groups/123")
+        assert "skill" in kws
+
+    def test_different_groups_isolated(self, tmp_db):
+        """מילות force_send בין קבוצות שונות מבודדות."""
+        add_group_force_send_keyword("https://m.facebook.com/groups/aaa", "word_a")
+        add_group_force_send_keyword("https://m.facebook.com/groups/bbb", "word_b")
+        kws_a = _load_group_force_send_keywords("https://m.facebook.com/groups/aaa")
+        kws_b = _load_group_force_send_keywords("https://m.facebook.com/groups/bbb")
+        assert "word_a" in kws_a and "word_b" not in kws_a
+        assert "word_b" in kws_b and "word_a" not in kws_b
+
+    def test_get_all(self, tmp_db):
+        """get_all_group_force_send מחזיר את כל הקבוצות שיש להן מילים."""
+        add_group_force_send_keyword("https://m.facebook.com/groups/aaa", "w1")
+        add_group_force_send_keyword("https://m.facebook.com/groups/bbb", "w2")
+        all_gfs = get_all_group_force_send()
+        assert len(all_gfs) == 2
+        assert "w1" in all_gfs["https://m.facebook.com/groups/aaa"]
+        assert "w2" in all_gfs["https://m.facebook.com/groups/bbb"]
+
+    def test_empty_group_not_in_get_all(self, tmp_db):
+        """קבוצה ללא מילים לא מופיעה ב-get_all."""
+        add_group_force_send_keyword("https://m.facebook.com/groups/aaa", "w1")
+        remove_group_force_send_keyword("https://m.facebook.com/groups/aaa", "w1")
+        all_gfs = get_all_group_force_send()
+        assert "https://m.facebook.com/groups/aaa" not in all_gfs
+
+
+class TestMatchesForceSendWithGroup:
+    """matches_force_send — בדיקת מילות גלובליות + קבוצה ספציפית."""
+
+    def test_global_match(self):
+        """מילה גלובלית תואמת ללא group_url."""
+        with patch("main.FORCE_SEND_KEYWORDS", ["skill"]), \
+             patch("main.GROUP_FORCE_SEND_KEYWORDS", {}):
+            assert matches_force_send("I have a Skill") == "skill"
+
+    def test_group_match(self):
+        """מילה ספציפית לקבוצה תואמת כשמועבר group_url מתאים."""
+        with patch("main.FORCE_SEND_KEYWORDS", []), \
+             patch("main.GROUP_FORCE_SEND_KEYWORDS", {
+                 "https://m.facebook.com/groups/123": ["getdrip"]
+             }):
+            result = matches_force_send(
+                "GetDRIP is great",
+                group_url="https://m.facebook.com/groups/123",
+            )
+            assert result == "getdrip"
+
+    def test_group_match_wrong_group(self):
+        """מילה ספציפית לקבוצה לא תואמת כשה-group_url שונה."""
+        with patch("main.FORCE_SEND_KEYWORDS", []), \
+             patch("main.GROUP_FORCE_SEND_KEYWORDS", {
+                 "https://m.facebook.com/groups/123": ["getdrip"]
+             }):
+            result = matches_force_send(
+                "GetDRIP is great",
+                group_url="https://m.facebook.com/groups/999",
+            )
+            assert result is None
+
+    def test_global_before_group(self):
+        """מילה גלובלית קודמת למילת קבוצה."""
+        with patch("main.FORCE_SEND_KEYWORDS", ["global_word"]), \
+             patch("main.GROUP_FORCE_SEND_KEYWORDS", {
+                 "https://m.facebook.com/groups/123": ["group_word"]
+             }):
+            result = matches_force_send(
+                "text with global_word and group_word",
+                group_url="https://m.facebook.com/groups/123",
+            )
+            assert result == "global_word"
+
+    def test_no_match_anywhere(self):
+        """אין התאמה לא גלובלית ולא לקבוצה."""
+        with patch("main.FORCE_SEND_KEYWORDS", ["skill"]), \
+             patch("main.GROUP_FORCE_SEND_KEYWORDS", {
+                 "https://m.facebook.com/groups/123": ["getdrip"]
+             }):
+            result = matches_force_send(
+                "just a regular post",
+                group_url="https://m.facebook.com/groups/123",
+            )
+            assert result is None
+
+    def test_no_group_url_skips_group_check(self):
+        """ללא group_url — בודק רק גלובליות."""
+        with patch("main.FORCE_SEND_KEYWORDS", []), \
+             patch("main.GROUP_FORCE_SEND_KEYWORDS", {
+                 "https://m.facebook.com/groups/123": ["getdrip"]
+             }):
+            result = matches_force_send("GetDRIP is great")
+            assert result is None
+
+
+class TestGroupForceSendPanelAPI:
+    """בדיקות API endpoints של group_force_send בפאנל."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch, tmp_db):
+        monkeypatch.setenv("PANEL_TOKEN", "")
+        from panel import create_app
+        app = create_app()
+        self.client = app.test_client()
+
+    def test_list_empty(self):
+        resp = self.client.get("/api/group_force_send")
+        data = resp.get_json()
+        assert data["groups"] == {}
+
+    def test_add_and_list(self):
+        resp = self.client.post("/api/group_force_send/keywords",
+                                json={"url": "https://m.facebook.com/groups/123", "word": "skill"})
+        assert resp.get_json()["ok"]
+
+        resp = self.client.get("/api/group_force_send/keywords?url=https://m.facebook.com/groups/123")
+        data = resp.get_json()
+        assert "skill" in data["keywords"]
+
+    def test_add_and_list_all(self):
+        self.client.post("/api/group_force_send/keywords",
+                         json={"url": "https://m.facebook.com/groups/aaa", "word": "w1"})
+        self.client.post("/api/group_force_send/keywords",
+                         json={"url": "https://m.facebook.com/groups/bbb", "word": "w2"})
+        resp = self.client.get("/api/group_force_send")
+        data = resp.get_json()
+        assert "w1" in data["groups"]["https://m.facebook.com/groups/aaa"]
+        assert "w2" in data["groups"]["https://m.facebook.com/groups/bbb"]
+
+    def test_delete(self):
+        self.client.post("/api/group_force_send/keywords",
+                         json={"url": "https://m.facebook.com/groups/123", "word": "skill"})
+        resp = self.client.delete("/api/group_force_send/keywords",
+                                  json={"url": "https://m.facebook.com/groups/123", "word": "skill"})
+        assert resp.get_json()["ok"]
+
+        resp = self.client.get("/api/group_force_send/keywords?url=https://m.facebook.com/groups/123")
+        assert resp.get_json()["keywords"] == []
+
+    def test_empty_url_rejected(self):
+        resp = self.client.post("/api/group_force_send/keywords",
+                                json={"url": "", "word": "skill"})
+        assert resp.status_code == 400
+
+    def test_empty_word_rejected(self):
+        resp = self.client.post("/api/group_force_send/keywords",
+                                json={"url": "https://m.facebook.com/groups/123", "word": ""})
+        assert resp.status_code == 400
+
+
