@@ -2904,8 +2904,7 @@ class TestSaveApiUsage:
     def test_daily_stats(self, tmp_db):
         """סטטיסטיקות יומיות מסננות לפי תאריך."""
         save_api_usage("gpt-4.1-mini", 100, 50, 150, "single")
-        from datetime import datetime
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = database._now().strftime("%Y-%m-%d")
         daily = get_daily_usage_stats(today)
         assert daily["total_calls"] == 1
         assert daily["total_tokens"] == 150
