@@ -205,13 +205,13 @@ _SCAN_DOTS = [".", "..", "..."]
 _SCAN_ANIM_INTERVAL = 2.0  # שניות בין עדכוני נקודות
 
 
-def _build_scan_emoji_entities() -> tuple[str, list[dict] | None]:
-    """בונה prefix + entities לאימוג'י scan_start (אם מוגדר).
+def _build_scan_emoji_entities(trigger: str = "scan_start") -> tuple[str, list[dict] | None]:
+    """בונה prefix + entities לאימוג'י (אם מוגדר).
 
     מחזיר (prefix_str, entities_list | None).
     אם אין אימוג'י מותאם — ("", None).
     """
-    data = get_emoji("scan_start")
+    data = get_emoji(trigger)
     if not data:
         return "", None
     placeholder = data.get("emoji", "\u2b50")
@@ -226,12 +226,13 @@ def _build_scan_emoji_entities() -> tuple[str, list[dict] | None]:
     return prefix, entities
 
 
-async def _start_scan_animation(chat_id: int):
-    """שולח הודעת סטטוס סריקה.
+async def _start_scan_animation(chat_id: int) -> asyncio.Task | None:
+    """שולח הודעת סטטוס סריקה ומחזיר task של אנימציית נקודות (או None).
 
-    אם יש אימוג'י מותאם ל-scan_start — שולח רק אותו (בלי נקודות).
-    אחרת — שולח "סורק." עם אנימציית נקודות.
-    שומר את ה-state ב-_scan_anim_state כדי שאפשר יהיה לערוך בסיום.
+    שולח את ההודעה הראשונה באופן סינכרוני (await) כדי שה-state
+    (_scan_anim_state) יהיה מוגדר לפני שמתחילים את הסריקה.
+    רק לולאת הנקודות רצה כ-task — כך ביטול ה-task בטוח ולא משאיר
+    הודעות יתומות.
     """
     from notifier import send_message_returning_id, edit_message_text
 
@@ -239,7 +240,7 @@ async def _start_scan_animation(chat_id: int):
     has_emoji = entities is not None
 
     if has_emoji:
-        # יש אימוג'י מונפש — שולח רק אותו, בלי אנימציית נקודות
+        # יש אימוג'י מונפש — שולח רק אותו, בלי נקודות
         text = prefix.rstrip()  # האימוג'י בלבד (ללא רווח נגרר)
     else:
         text = "סורק."
@@ -249,24 +250,27 @@ async def _start_scan_animation(chat_id: int):
     )
     if not msg_id:
         log.debug("לא הצלחתי לשלוח הודעת סטטוס סריקה")
-        return
+        return None
 
     _scan_anim_state["chat_id"] = chat_id
     _scan_anim_state["message_id"] = msg_id
 
     if has_emoji:
         # אין אנימציה — האימוג'י לבדו מספיק
-        return
+        return None
 
-    # לולאת אנימציית נקודות — רצה עד שהטאסק מבוטל
-    i = 1
-    while True:
-        await asyncio.sleep(_SCAN_ANIM_INTERVAL)
-        dot = _SCAN_DOTS[i % 3]
-        await asyncio.to_thread(
-            edit_message_text, chat_id, msg_id, f"סורק{dot}",
-        )
-        i += 1
+    # לולאת אנימציית נקודות — רצה כ-task עד ביטול
+    async def _dots_loop():
+        i = 1
+        while True:
+            await asyncio.sleep(_SCAN_ANIM_INTERVAL)
+            dot = _SCAN_DOTS[i % 3]
+            await asyncio.to_thread(
+                edit_message_text, chat_id, msg_id, f"סורק{dot}",
+            )
+            i += 1
+
+    return asyncio.create_task(_dots_loop())
 
 
 async def _stop_scan_animation(leads_found: int, error: str = ""):
@@ -304,19 +308,7 @@ async def _stop_scan_animation(leads_found: int, error: str = ""):
         summary = "סריקה הושלמה — ללא לידים חדשים"
 
     # אימוג'י scan_end (אם מוגדר)
-    end_data = get_emoji("scan_end")
-    entities = None
-    prefix = ""
-    if end_data:
-        placeholder = end_data.get("emoji", "\u2b50")
-        prefix = placeholder + " "
-        utf16_len = len(placeholder.encode("utf-16-le")) // 2
-        entities = [{
-            "type": "custom_emoji",
-            "offset": 0,
-            "length": utf16_len,
-            "custom_emoji_id": end_data["id"],
-        }]
+    prefix, entities = _build_scan_emoji_entities("scan_end")
 
     await asyncio.to_thread(
         edit_message_text, chat_id, msg_id, f"{prefix}{summary}",
@@ -1572,8 +1564,8 @@ async def run_cycle():
     user_triggered = triggered_by is not None
 
     if user_triggered:
-        # סריקה ידנית — אנימציית "סורק..." (כולל אימוג'י scan_start אם מוגדר)
-        anim_task = asyncio.create_task(_start_scan_animation(triggered_by))
+        # סריקה ידנית — שולח הודעה ומפעיל אנימציה (await — ה-state מוגדר לפני הסריקה)
+        anim_task = await _start_scan_animation(triggered_by)
         _scan_anim_state["task"] = anim_task
     else:
         # סריקה אוטומטית — רק אימוג'י (אם מוגדר)
