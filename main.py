@@ -1270,18 +1270,33 @@ if threading.current_thread() is threading.main_thread():
     signal.signal(signal.SIGINT, handle_signal)
 
 def _content_dedup_hash(text: str) -> str:
-    """מחשב hash תוכן לזיהוי כפילויות — משתמש בנרמול מ-scraper."""
+    """מחשב hash תוכן לזיהוי כפילויות — מבוסס על ליבת הטקסט בלבד.
+
+    משתמש ב-150 התווים הראשונים של הטקסט המנורמל (אחרי _stable_text_for_hash).
+    הסיבה: innerText של אלמנט פוסט כולל גם תגובות/תשובות שמופיעים בסוף הטקסט.
+    בין סריקות, תגובות חדשות מתווספות → ה-hash של הטקסט המלא משתנה → כפילות.
+    ליבת הפוסט (שם הכותב + תחילת הגוף) מופיעה תמיד בהתחלה ולא משתנה.
+    """
     import hashlib
     from scraper import _stable_text_for_hash
     stable = _stable_text_for_hash(text)
     if not stable:
         return ""
-    return hashlib.md5(stable.encode()).hexdigest()
+    # חותכים ל-150 תווים — ליבת הפוסט (שם + תחילת הגוף) יציבה בין סריקות,
+    # תוכן דינמי (תגובות, engagement) מופיע בסוף ונחתך.
+    # 150 ולא 200 כי בפוסטים קצרים (~180 תווים) חיתוך ל-200 כולל חלק מתגובות.
+    core = stable[:150]
+    return hashlib.md5(core.encode()).hexdigest()
 
 def _dedup_debug(post_id: str, content: str, c_hash: str, label: str):
-    """לוג דיאגנוסטי לזיהוי כפילויות — מציג snippet + hash + post_id."""
+    """לוג דיאגנוסטי לזיהוי כפילויות — מציג snippet + hash + post_id + stable text."""
     snippet = content.replace('\n', ' ')[:80]
     log.info(f"[DEDUP-SEND] {label} | id={post_id[:20]} | hash={c_hash[:12]} | \"{snippet}...\"")
+    # לוג מורחב: מציג את הטקסט המנורמל המלא (אחרי _stable_text_for_hash)
+    # זה מאפשר להשוות בין סריקות ולראות מה בדיוק שונה כשה-hash לא תואם
+    from scraper import _stable_text_for_hash
+    stable = _stable_text_for_hash(content)
+    log.debug(f"[DEDUP-STABLE] {c_hash[:12]} | stable_len={len(stable)} | \"{stable[:300]}...\"")
 
 def _reset_scan_progress():
     """מאפס את scan_progress לפני סבב חדש."""

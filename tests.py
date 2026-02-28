@@ -759,6 +759,97 @@ class TestStableTextForHash:
         t2 = "משה כהן פוסט חשוב"
         assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
 
+    # ── שורות דינמיות — "+N", "ו-עוד N אחרים", "עוד" ──────────
+
+    def test_plus_n_reaction_count_removed(self):
+        """'+3' — ספירת ריאקשנים/תגובות — שורה שלמה בלבד."""
+        t1 = "מחפש עבודה\n+3"
+        t2 = "מחפש עבודה\n+7"
+        t3 = "מחפש עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    def test_plus_n_in_phone_preserved(self):
+        """'+972-52-123' — פלוס במספר טלפון לא נמחק (שורה לא רק '+N')."""
+        t1 = "+972-52-1234567"
+        assert "+972-52-1234567" in _stable_text_for_hash(t1)
+
+    def test_and_more_others_hebrew_removed(self):
+        """'ו-עוד 5 אחרים' — שורת מגיבים מוסרת."""
+        t1 = "מחפש עבודה\nו-עוד 5 אחרים"
+        t2 = "מחפש עבודה\nו-עוד 12 אחרים"
+        t3 = "מחפש עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    def test_and_more_english_removed(self):
+        """'and 3 others' / 'and 5 more' — removed."""
+        t1 = "post content\nand 3 others"
+        t2 = "post content\nand 5 more"
+        t3 = "post content"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    def test_standalone_od_removed(self):
+        """'עוד' ו-'... עוד' standalone מוסרים — See more וריאנט."""
+        t1 = "מחפש עבודה\nעוד"
+        t2 = "מחפש עבודה\n... עוד"
+        t3 = "מחפש עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    def test_most_relevant_hebrew_removed(self):
+        """'הרלוונטיות ביותר' / 'החדשות ביותר' — מיון תגובות UI מוסר."""
+        t1 = "מחפש עבודה\nהרלוונטיות ביותר"
+        t2 = "מחפש עבודה\nהחדשות ביותר"
+        t3 = "מחפש עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    def test_most_relevant_english_removed(self):
+        """'Most relevant' / 'Newest' — comment sorting UI removed."""
+        t1 = "post content\nMost relevant"
+        t2 = "post content\nNewest"
+        t3 = "post content"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    # ── core hash: עמידות בפני תגובות שמתווספות בין סריקות ────
+
+    def test_core_hash_same_post_with_comments_added(self):
+        """אותו פוסט, אבל תגובות חדשות התווספו — core hash זהה."""
+        from main import _content_dedup_hash
+        base_post = (
+            "Neta Levy\n7 שעות\n"
+            "היי, אני נטע וזה ניסיון ראשון לבארטר מהסוג הזה🙂\n"
+            "אני צריכה דף נחיתה לסדנאות שלי ומישהו שיודע\n"
+            "לעשות קמפיין פרסום ממומן בפייסבוק\n"
+            "אני מציעה בתמורה ליווי אישי + תפריט תזונתי\n"
+        )
+        # סריקה 1 — ללא תגובות
+        t1 = base_post + "+3\n3 תגובות\nאהבתי\nהגב\nשתף"
+        # סריקה 2 — שעה אחרי, עם תגובות
+        t2 = (base_post.replace("7 שעות", "8 שעות")
+              + "+5\n5 תגובות · 2 שיתופים\nאהבתי\nהגב\nשתף\n"
+              + "הרלוונטיות ביותר\n"
+              + "David Cohen\nשלחי לי הודעה, אני יכול לעזור\n"
+              + "אהבתי\nהגב\n"
+              + "Sarah Levi\nגם אני מעוניינת!\nאהבתי\nהגב\n"
+              + "כתוב תגובה...")
+        h1 = _content_dedup_hash(t1)
+        h2 = _content_dedup_hash(t2)
+        assert h1 == h2, (
+            f"core hash צריך להיות זהה גם כשתגובות מתווספות: "
+            f"{h1} != {h2}"
+        )
+
+    def test_core_hash_different_posts_stay_different(self):
+        """פוסטים שונים לגמרי — core hash שונה."""
+        from main import _content_dedup_hash
+        t1 = "נטע לוי\nמחפשת דף נחיתה לסדנאות שלי"
+        t2 = "דוד כהן\nמחפש מתכנת לאפליקציית מובייל"
+        assert _content_dedup_hash(t1) != _content_dedup_hash(t2)
+
 
 class TestContentHashDedup:
     """בדיקות ל-content_hash dedup — מניעת כפילויות כשה-post_id משתנה בין סשנים."""
