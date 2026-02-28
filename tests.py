@@ -695,6 +695,14 @@ class TestStableTextForHash:
         t4 = "john doe 45 mins hey everyone"
         assert _stable_text_for_hash(t3) == _stable_text_for_hash(t4)
 
+    def test_time_word_boundary_no_partial_match(self):
+        """word boundary מונע התאמה חלקית — 'monthly' ו-'hourly' לא נפגעים."""
+        assert "monthly" in _stable_text_for_hash("5 monthly payments")
+        assert "hourly" in _stable_text_for_hash("hourly rate 100")
+        assert "weekly" in _stable_text_for_hash("3 weekly meetings")
+        # "יומי" (daily) לא נפגע
+        assert "יומי" in _stable_text_for_hash("שכר יומי 500")
+
     def test_supplementary_pua_chars_removed(self):
         """אייקוני פרטיות של פייסבוק (supplementary PUA) מוסרים מה-hash."""
         # Supplementary PUA-A (U+F0000-U+FFFFD) and PUA-B (U+100000-U+10FFFD)

@@ -95,9 +95,9 @@ _TIMESTAMP_RE = re.compile(
     # "אתמול ב-15:30" / "היום ב-10:00"
     r'|(?:אתמול|היום)\s+ב-?\s*\d{1,2}:\d{2}'
     # זמנים יחסיים בעברית: "8 שעות", "3 דקות", "2 ימים"
-    r'|\d+\s*(?:שעות|שעה|דקות|דקה|ימים|יום|שבועות|שבוע|חודשים|חודש|שניות|שנייה)'
+    r'|\d+\s*(?:שעות|שעה|דקות|דקה|ימים|יום|שבועות|שבוע|חודשים|חודש|שניות|שנייה)\b'
     # זמנים יחסיים באנגלית: "5 hours", "2 days", "30 mins"
-    r'|\d+\s*(?:hours?|minutes?|seconds?|days?|weeks?|months?|hrs?|mins?|secs?)',
+    r'|\d+\s*(?:hours?|minutes?|seconds?|days?|weeks?|months?|hrs?|mins?|secs?)\b',
     re.MULTILINE | re.IGNORECASE
 )
 
