@@ -1462,6 +1462,7 @@
         });
         toast('פרומפט AI נשמר');
         renderSourceBadge('criteria-source', 'custom');
+        document.getElementById('criteria-updated-banner').style.display = 'none';
       } catch (e) {
         toast('שגיאה: ' + e.message, 'error');
       }
