@@ -170,18 +170,31 @@ def get_emoji(trigger: str) -> dict | None:
     """מחזיר {"id": ..., "emoji": ...} לטריגר נתון, או None אם לא מוגדר."""
     return _load_emojis().get(trigger)
 
-async def _send_trigger_emoji(trigger: str):
-    """שולח אימוג'י מותאם אם מוגדר לטריגר הנתון. שקט אם לא מוגדר או נכשל."""
+async def _send_trigger_emoji(trigger: str) -> int | None:
+    """שולח אימוג'י מותאם אם מוגדר לטריגר הנתון. שקט אם לא מוגדר או נכשל.
+
+    מחזיר message_id אם ההודעה נשלחה, None אחרת.
+    """
     data = get_emoji(trigger)
     if not data:
-        return
+        return None
     try:
-        from notifier import send_custom_emoji
-        await asyncio.to_thread(
-            send_custom_emoji, data["id"], data.get("emoji", "\u2b50"),
+        from notifier import send_message_returning_id
+        placeholder = data.get("emoji", "\u2b50")
+        utf16_len = len(placeholder.encode("utf-16-le")) // 2
+        entities = [{
+            "type": "custom_emoji",
+            "offset": 0,
+            "length": utf16_len,
+            "custom_emoji_id": data["id"],
+        }]
+        msg_id = await asyncio.to_thread(
+            send_message_returning_id, placeholder, entities=entities,
         )
+        return msg_id
     except Exception as e:
         log.debug(f"שליחת אימוג'י טריגר {trigger} נכשלה: {e}")
+        return None
 
 def _utf16_slice(text: str, offset: int, length: int) -> str:
     """חולץ תת-מחרוזת לפי offset/length ב-UTF-16 code units (כפי ש-Telegram שולח).
@@ -1577,7 +1590,7 @@ async def run_cycle():
         _scan_anim_state["task"] = anim_task
     else:
         # סריקה אוטומטית — רק אימוג'י (אם מוגדר)
-        await _send_trigger_emoji("scan_start")
+        start_emoji_msg_id = await _send_trigger_emoji("scan_start")
 
     try:
         await _run_cycle_inner()
@@ -1588,6 +1601,12 @@ async def run_cycle():
             error = scan_progress.get("error", "")
             await _stop_scan_animation(leads, error)
         else:
+            # מוחק את אימוג'י תחילת הסריקה
+            if start_emoji_msg_id:
+                from notifier import delete_message, CHAT_ID
+                await asyncio.to_thread(
+                    delete_message, CHAT_ID, start_emoji_msg_id,
+                )
             await _send_trigger_emoji("scan_end")
 
 

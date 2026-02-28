@@ -3197,26 +3197,33 @@ class TestSendTriggerEmoji:
     @pytest.mark.asyncio
     async def test_sends_when_configured(self, tmp_db):
         set_emoji("scan_start", "emoji_id_test", "\U0001f60e")
-        with patch("notifier.send_custom_emoji") as mock_send:
-            mock_send.return_value = True
+        with patch("notifier.send_message_returning_id") as mock_send:
+            mock_send.return_value = 42
             from main import _send_trigger_emoji
-            await _send_trigger_emoji("scan_start")
-            mock_send.assert_called_once_with("emoji_id_test", "\U0001f60e")
+            result = await _send_trigger_emoji("scan_start")
+            mock_send.assert_called_once()
+            call_kwargs = mock_send.call_args
+            assert call_kwargs[0][0] == "\U0001f60e"
+            entities = call_kwargs[1]["entities"]
+            assert entities[0]["custom_emoji_id"] == "emoji_id_test"
+            assert result == 42
 
     @pytest.mark.asyncio
     async def test_silent_when_not_configured(self, tmp_db):
-        with patch("notifier.send_custom_emoji") as mock_send:
+        with patch("notifier.send_message_returning_id") as mock_send:
             from main import _send_trigger_emoji
-            await _send_trigger_emoji("scan_start")
+            result = await _send_trigger_emoji("scan_start")
             mock_send.assert_not_called()
+            assert result is None
 
     @pytest.mark.asyncio
     async def test_silent_on_send_failure(self, tmp_db):
         set_emoji("lead_found", "bad_id", "\u2b50")
-        with patch("notifier.send_custom_emoji", side_effect=Exception("network")):
+        with patch("notifier.send_message_returning_id", side_effect=Exception("network")):
             from main import _send_trigger_emoji
             # לא צריך לזרוק exception — שקט
-            await _send_trigger_emoji("lead_found")
+            result = await _send_trigger_emoji("lead_found")
+            assert result is None
 
     @pytest.mark.asyncio
     async def test_uses_default_placeholder(self, tmp_db):
@@ -3224,11 +3231,13 @@ class TestSendTriggerEmoji:
         from database import set_config
         import json as _json
         set_config("custom_emojis", _json.dumps({"scan_end": {"id": "test_id"}}))
-        with patch("notifier.send_custom_emoji") as mock_send:
-            mock_send.return_value = True
+        with patch("notifier.send_message_returning_id") as mock_send:
+            mock_send.return_value = 99
             from main import _send_trigger_emoji
-            await _send_trigger_emoji("scan_end")
-            mock_send.assert_called_once_with("test_id", "\u2b50")
+            result = await _send_trigger_emoji("scan_end")
+            mock_send.assert_called_once()
+            assert mock_send.call_args[0][0] == "\u2b50"
+            assert result == 99
 
 
 class TestPendingEmojiSet:
