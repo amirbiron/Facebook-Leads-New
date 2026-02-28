@@ -7,6 +7,8 @@ log = get_logger("Notifier")
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# chat ID נפרד להתראות שגיאה — אם מוגדר, שגיאות ילכו למפתח במקום ללקוח
+ERROR_CHAT_ID = os.environ.get("ERROR_CHAT_ID")
 
 def send_message(
     text: str,
@@ -212,10 +214,13 @@ def send_document(
 
 
 def send_error_alert(error: str) -> bool:
-    """שולח שגיאה קריטית כהודעת טלגרם (חתוך ל-500 תווים)."""
+    """שולח שגיאה קריטית כהודעת טלגרם (חתוך ל-500 תווים).
+    אם ERROR_CHAT_ID מוגדר — שולח למפתח. אחרת — ל-CHAT_ID הרגיל.
+    """
     truncated = error[:500]
     return send_message(
         f"⚠️ שגיאה בבוט:\n{truncated}",
+        chat_id=ERROR_CHAT_ID,
         disable_web_page_preview=True,
     )
 
