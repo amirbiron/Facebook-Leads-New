@@ -1412,17 +1412,25 @@ def _on_group_scraped(group_name: str, group_index: int, total_groups: int, post
 
 
 async def run_cycle():
+    _reset_scan_progress()
+
+    # סטיקר תחילת סריקה
+    await _send_trigger_sticker("scan_start")
+
+    # try/finally — מבטיח שסטיקר scan_end יישלח גם בשגיאה (סימטריה עם scan_start)
+    try:
+        await _run_cycle_inner()
+    finally:
+        await _send_trigger_sticker("scan_end")
+
+
+async def _run_cycle_inner():
     import gc
     # Lazy imports to keep startup light and allow running parts of the codebase
     # (like quiet-hours logic) without Playwright installed.
     from scraper import scrape_all
     from classifier import classify_batch
     from notifier import send_lead, send_error_alert
-
-    _reset_scan_progress()
-
-    # סטיקר תחילת סריקה
-    await _send_trigger_sticker("scan_start")
 
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
 
@@ -1612,9 +1620,6 @@ async def run_cycle():
         log.error(f"שגיאה לאחר גרידה: {e}", exc_info=True)
         _finish_scan_progress(leads_found, error=str(e))
         raise
-
-    # סטיקר סיום סריקה
-    await _send_trigger_sticker("scan_end")
 
     stats = get_stats()
     log.info(f"סבב הסתיים | לידים בסבב: {leads_found} | סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}")
