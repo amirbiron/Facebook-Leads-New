@@ -115,6 +115,75 @@ def matches_force_send(text: str) -> str | None:
     return None
 
 
+# ── סטיקרים מונפשים — שליחה אוטומטית לפי טריגר ──────────
+# טריגרים נתמכים:
+#   scan_start  — תחילת סבב סריקה
+#   scan_end    — סיום סבב סריקה
+#   lead_found  — כשנמצא ליד רלוונטי
+# הסטיקרים נשמרים ב-_config כ-JSON: {"scan_start": "file_id_xxx", ...}
+
+# תיאור הטריגרים בעברית — לתצוגה בפקודות טלגרם
+_STICKER_TRIGGER_LABELS = {
+    "scan_start": "תחילת סריקה",
+    "scan_end": "סיום סריקה",
+    "lead_found": "ליד נמצא",
+}
+
+def _load_stickers() -> dict[str, str]:
+    """טוען מיפוי טריגר → file_id מ-DB."""
+    import json as _json
+    try:
+        raw = get_config("stickers")
+        if raw:
+            return _json.loads(raw)
+    except Exception:
+        pass
+    return {}
+
+def _save_stickers(stickers: dict[str, str]):
+    """שומר מיפוי טריגר → file_id ב-DB."""
+    import json as _json
+    set_config("stickers", _json.dumps(stickers))
+
+def set_sticker(trigger: str, file_id: str) -> tuple[bool, str]:
+    """מקצה סטיקר לטריגר. מחזיר (success, message)."""
+    if trigger not in _STICKER_TRIGGER_LABELS:
+        valid = ", ".join(_STICKER_TRIGGER_LABELS.keys())
+        return False, f"טריגר לא מוכר: {trigger}\nטריגרים זמינים: {valid}"
+    stickers = _load_stickers()
+    stickers[trigger] = file_id
+    _save_stickers(stickers)
+    label = _STICKER_TRIGGER_LABELS[trigger]
+    return True, f"סטיקר הוגדר לטריגר: {label} ({trigger})"
+
+def remove_sticker(trigger: str) -> tuple[bool, str]:
+    """מסיר סטיקר מטריגר. מחזיר (success, message)."""
+    stickers = _load_stickers()
+    if trigger not in stickers:
+        return False, f"אין סטיקר מוגדר לטריגר: {trigger}"
+    del stickers[trigger]
+    _save_stickers(stickers)
+    label = _STICKER_TRIGGER_LABELS.get(trigger, trigger)
+    return True, f"סטיקר הוסר מטריגר: {label} ({trigger})"
+
+def get_sticker(trigger: str) -> str | None:
+    """מחזיר file_id של סטיקר לטריגר נתון, או None אם לא מוגדר."""
+    return _load_stickers().get(trigger)
+
+async def _send_trigger_sticker(trigger: str):
+    """שולח סטיקר מונפש אם מוגדר לטריגר הנתון. שקט אם לא מוגדר או נכשל."""
+    file_id = get_sticker(trigger)
+    if not file_id:
+        return
+    try:
+        from notifier import send_sticker
+        await asyncio.to_thread(send_sticker, file_id)
+    except Exception as e:
+        log.debug(f"שליחת סטיקר טריגר {trigger} נכשלה: {e}")
+
+# מילון שמאחסן מצב "ממתין לסטיקר" — {chat_id: trigger}
+_pending_sticker_set: dict[int, str] = {}
+
 def _load_block_keywords() -> list[str]:
     """טוען מילים חסומות מ-DB עם fallback למשתנה סביבה.
     None מ-DB = מעולם לא הוגדר → fallback.  [] = המשתמש רוקן הכל → רשימה ריקה.
@@ -717,6 +786,7 @@ async def _telegram_control_loop(
                 {"command": "keywords", "description": "מילות מפתח"},
                 {"command": "force_send", "description": "מילות 'שלח תמיד' (עוקף AI)"},
                 {"command": "max_age", "description": "סינון פוסטים ישנים (לפי ימים)"},
+                {"command": "stickers", "description": "סטיקרים מונפשים — הגדרה וצפייה"},
             ]},
             timeout=10,
         )
@@ -761,6 +831,38 @@ async def _telegram_control_loop(
                     continue
 
                 if chat_id_int not in allowed_chat_ids:
+                    continue
+
+                # ── טיפול בסטיקר נכנס — חילוץ file_id או הקצאה לטריגר ──
+                sticker_obj = msg.get("sticker")
+                if sticker_obj:
+                    file_id = sticker_obj.get("file_id", "")
+                    if not file_id:
+                        continue
+                    # אם ממתינים לסטיקר מהמשתמש הזה (אחרי /set_sticker)
+                    pending_trigger = _pending_sticker_set.pop(chat_id_int, None)
+                    if pending_trigger:
+                        ok, result_msg = set_sticker(pending_trigger, file_id)
+                        label = _STICKER_TRIGGER_LABELS.get(pending_trigger, pending_trigger)
+                        await asyncio.to_thread(
+                            send_message, result_msg,
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                    else:
+                        # לא ממתינים — מחזירים את ה-file_id למשתמש לשימוש עתידי
+                        is_animated = sticker_obj.get("is_animated", False)
+                        is_video = sticker_obj.get("is_video", False)
+                        sticker_type = "מונפש" if is_animated else ("וידאו" if is_video else "רגיל")
+                        await asyncio.to_thread(
+                            send_message,
+                            f"סטיקר {sticker_type} התקבל.\n"
+                            f"file\\_id:\n`{file_id}`\n\n"
+                            "כדי להקצות לטריגר, שלח:\n"
+                            "/set\\_sticker <trigger>\n"
+                            "ואז שלח את הסטיקר.",
+                            chat_id=chat_id_int,
+                            parse_mode="Markdown",
+                        )
                     continue
 
                 text = (msg.get("text") or "").strip()
@@ -1059,6 +1161,79 @@ async def _telegram_control_loop(
                     )
                     continue
 
+                # ── סטיקרים מונפשים ──────────────────────────
+                if cmd in ("/stickers",):
+                    stickers = _load_stickers()
+                    if stickers:
+                        lines = []
+                        for trigger, fid in stickers.items():
+                            label = _STICKER_TRIGGER_LABELS.get(trigger, trigger)
+                            lines.append(f"- {label} ({trigger}): `{fid[:20]}...`")
+                        stickers_text = "\n".join(lines)
+                    else:
+                        stickers_text = "(אין סטיקרים מוגדרים)"
+                    triggers_list = "\n".join(
+                        f"- `{k}` — {v}" for k, v in _STICKER_TRIGGER_LABELS.items()
+                    )
+                    await asyncio.to_thread(
+                        send_message,
+                        f"סטיקרים מוגדרים:\n{stickers_text}\n\n"
+                        f"טריגרים זמינים:\n{triggers_list}\n\n"
+                        "פקודות:\n"
+                        "/set\\_sticker <trigger> — שלח ואז שלח סטיקר\n"
+                        "/remove\\_sticker <trigger> — הסר סטיקר מטריגר",
+                        chat_id=chat_id_int,
+                        parse_mode="Markdown",
+                    )
+                    continue
+
+                if cmd in ("/set_sticker",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        triggers_list = "\n".join(
+                            f"- `{k}` — {v}" for k, v in _STICKER_TRIGGER_LABELS.items()
+                        )
+                        await asyncio.to_thread(
+                            send_message,
+                            f"שימוש: /set\\_sticker <trigger>\nואז שלח את הסטיקר.\n\n"
+                            f"טריגרים זמינים:\n{triggers_list}",
+                            chat_id=chat_id_int,
+                            parse_mode="Markdown",
+                        )
+                        continue
+                    trigger = parts[1].strip().lower()
+                    if trigger not in _STICKER_TRIGGER_LABELS:
+                        valid = ", ".join(_STICKER_TRIGGER_LABELS.keys())
+                        await asyncio.to_thread(
+                            send_message, f"טריגר לא מוכר: {trigger}\nטריגרים זמינים: {valid}",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    _pending_sticker_set[chat_id_int] = trigger
+                    label = _STICKER_TRIGGER_LABELS[trigger]
+                    await asyncio.to_thread(
+                        send_message,
+                        f"ממתין לסטיקר עבור טריגר: {label} ({trigger})\nשלח את הסטיקר עכשיו.",
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/remove_sticker",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /remove\\_sticker <trigger>",
+                            chat_id=chat_id_int, parse_mode="Markdown",
+                        )
+                        continue
+                    trigger = parts[1].strip().lower()
+                    ok, result_msg = remove_sticker(trigger)
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
         except requests.HTTPError as e:
             if e.response is not None and e.response.status_code == 409:
                 # 409 Conflict = אינסטנס אחר עושה polling — ממתין עם backoff
@@ -1246,6 +1421,9 @@ async def run_cycle():
 
     _reset_scan_progress()
 
+    # סטיקר תחילת סריקה
+    await _send_trigger_sticker("scan_start")
+
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
 
     # דיאגנוסטיקה — מוודאים שה-DB שורד בין סשנים
@@ -1343,6 +1521,7 @@ async def run_cycle():
                     log.debug(f"דילוג על force_send — תוכן זהה כבר נשלח (content_hash)")
                     continue
                 reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
+                await _send_trigger_sticker("lead_found")
                 send_lead(
                     group_name=post["group"],
                     content=post["content"],
@@ -1412,6 +1591,7 @@ async def run_cycle():
             for post, result in zip(to_classify, results):
                 if result.get("relevant"):
                     reason = result.get("reason", "")
+                    await _send_trigger_sticker("lead_found")
                     send_lead(
                         group_name=post["group"],
                         content=post["content"],
@@ -1432,6 +1612,9 @@ async def run_cycle():
         log.error(f"שגיאה לאחר גרידה: {e}", exc_info=True)
         _finish_scan_progress(leads_found, error=str(e))
         raise
+
+    # סטיקר סיום סריקה
+    await _send_trigger_sticker("scan_end")
 
     stats = get_stats()
     log.info(f"סבב הסתיים | לידים בסבב: {leads_found} | סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}")
