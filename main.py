@@ -1167,7 +1167,7 @@ async def _telegram_control_loop(
                         lines = []
                         for trigger, fid in stickers.items():
                             label = _STICKER_TRIGGER_LABELS.get(trigger, trigger)
-                            lines.append(f"- {label} ({trigger}): `{fid[:20]}...`")
+                            lines.append(f"- {label} (`{trigger}`): `{fid[:20]}...`")
                         stickers_text = "\n".join(lines)
                     else:
                         stickers_text = "(אין סטיקרים מוגדרים)"
