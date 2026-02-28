@@ -254,9 +254,10 @@ async def _start_scan_animation(chat_id: int) -> asyncio.Task | None:
 
     _scan_anim_state["chat_id"] = chat_id
     _scan_anim_state["message_id"] = msg_id
+    _scan_anim_state["is_emoji"] = has_emoji
 
     if has_emoji:
-        # אין אנימציה — האימוג'י לבדו מספיק
+        # אין אנימציה — האימוג'י לבדו מספיק (יימחק בסיום הסריקה)
         return None
 
     # לולאת אנימציית נקודות — רצה כ-task עד ביטול
@@ -274,16 +275,17 @@ async def _start_scan_animation(chat_id: int) -> asyncio.Task | None:
 
 
 async def _stop_scan_animation(leads_found: int, error: str = ""):
-    """עוצר את האנימציה ועורך את ההודעה לסיכום סריקה.
+    """עוצר את האנימציה ומטפל בהודעת הסטטוס.
 
-    סיכום מצומצם — כשיש לידים הם כבר נשלחו כהודעות נפרדות,
-    אז מספיק "סריקה הושלמה" בלי ספירה.
+    - אימוג'י מונפש (scan_start) — תמיד נמחק בסיום.
+    - הודעת "סורק..." — נמחקת אם יש לידים, נערכת לסיכום אם אין/שגיאה.
     """
-    from notifier import edit_message_text
+    from notifier import edit_message_text, delete_message, send_message
 
     task = _scan_anim_state.pop("task", None)
     chat_id = _scan_anim_state.pop("chat_id", None)
     msg_id = _scan_anim_state.pop("message_id", None)
+    is_emoji = _scan_anim_state.pop("is_emoji", False)
 
     if task and not task.done():
         task.cancel()
@@ -295,21 +297,34 @@ async def _stop_scan_animation(leads_found: int, error: str = ""):
     if not chat_id or not msg_id:
         return
 
-    # כשיש לידים — הם כבר נשלחו כהודעות, מוחקים את הודעת "סורק..."
+    if is_emoji:
+        # אימוג'י מונפש — תמיד מוחקים אותו
+        await asyncio.to_thread(delete_message, chat_id, msg_id)
+        # אם יש שגיאה או אין לידים — שולחים הודעת סיכום נפרדת
+        if error:
+            summary = f"סריקה נכשלה — {error[:200]}"
+        elif leads_found == 0:
+            summary = "סריקה הושלמה — ללא לידים חדשים"
+        else:
+            return
+        prefix, entities = _build_scan_emoji_entities("scan_end")
+        await asyncio.to_thread(
+            send_message, f"{prefix}{summary}",
+            chat_id=chat_id, entities=entities,
+        )
+        return
+
+    # הודעת "סורק..." — כשיש לידים מוחקים, אחרת עורכים לסיכום
     if leads_found > 0 and not error:
-        from notifier import delete_message
         await asyncio.to_thread(delete_message, chat_id, msg_id)
         return
 
-    # סיכום רק כשאין לידים או שיש שגיאה
     if error:
         summary = f"סריקה נכשלה — {error[:200]}"
     else:
         summary = "סריקה הושלמה — ללא לידים חדשים"
 
-    # אימוג'י scan_end (אם מוגדר)
     prefix, entities = _build_scan_emoji_entities("scan_end")
-
     await asyncio.to_thread(
         edit_message_text, chat_id, msg_id, f"{prefix}{summary}",
         entities=entities,

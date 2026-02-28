@@ -3476,6 +3476,50 @@ class TestStopScanAnimation:
         assert "message_id" not in _scan_anim_state
         assert "task" not in _scan_anim_state
 
+    @pytest.mark.asyncio
+    async def test_emoji_message_deleted_when_leads_found(self, tmp_db):
+        """הודעת אימוג'י מונפש נמחקת תמיד בסיום — כולל כשיש לידים."""
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        _scan_anim_state["is_emoji"] = True
+        with patch("notifier.delete_message") as mock_del, \
+             patch("notifier.send_message") as mock_send:
+            await _stop_scan_animation(leads_found=3)
+            mock_del.assert_called_once_with(123, 456)
+            mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_emoji_message_deleted_and_summary_sent_no_leads(self, tmp_db):
+        """אימוג'י נמחק + הודעת סיכום נפרדת כשאין לידים."""
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        _scan_anim_state["is_emoji"] = True
+        with patch("notifier.delete_message") as mock_del, \
+             patch("notifier.send_message") as mock_send:
+            await _stop_scan_animation(leads_found=0)
+            mock_del.assert_called_once_with(123, 456)
+            mock_send.assert_called_once()
+            text_arg = mock_send.call_args[0][0]
+            assert "ללא לידים" in text_arg
+
+    @pytest.mark.asyncio
+    async def test_emoji_message_deleted_and_error_sent(self, tmp_db):
+        """אימוג'י נמחק + הודעת שגיאה נפרדת."""
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        _scan_anim_state["is_emoji"] = True
+        with patch("notifier.delete_message") as mock_del, \
+             patch("notifier.send_message") as mock_send:
+            await _stop_scan_animation(leads_found=0, error="timeout")
+            mock_del.assert_called_once_with(123, 456)
+            mock_send.assert_called_once()
+            text_arg = mock_send.call_args[0][0]
+            assert "נכשלה" in text_arg
+            assert "timeout" in text_arg
+
 
 class TestScanDotsConstant:
     """וידוא שקבועי האנימציה הגיוניים."""
