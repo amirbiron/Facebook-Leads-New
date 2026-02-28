@@ -3039,3 +3039,87 @@ class TestParseDeveloperChatIds:
         assert _parse_developer_chat_ids() == {111, 222}
 
 
+# ──────────────────────────────────────────────────────────────
+# Sticker triggers (config-based)
+# ──────────────────────────────────────────────────────────────
+
+
+class TestStickerTriggers:
+    def test_set_and_get_sticker_trigger(self, tmp_db):
+        """הגדרת סטיקר לטריגר ושליפה."""
+        database.set_config("sticker_scan_start", "CAACAgIAAx0CXK...")
+        from main import _get_sticker
+        assert _get_sticker("scan_start") == "CAACAgIAAx0CXK..."
+
+    def test_get_sticker_trigger_not_set(self, tmp_db):
+        """טריגר לא מוגדר מחזיר None."""
+        from main import _get_sticker
+        assert _get_sticker("scan_start") is None
+
+    def test_clear_sticker_trigger(self, tmp_db):
+        """ניקוי טריגר — ערך ריק לא נחשב כמוגדר."""
+        database.set_config("sticker_lead_found", "file_id_1")
+        database.set_config("sticker_lead_found", "")
+        from main import _get_sticker
+        assert _get_sticker("lead_found") is None
+
+    def test_sticker_triggers_dict_exists(self):
+        """וידוא שמילון הטריגרים מוגדר עם הטריגרים הבסיסיים."""
+        from main import STICKER_TRIGGERS
+        assert "scan_start" in STICKER_TRIGGERS
+        assert "lead_found" in STICKER_TRIGGERS
+        assert "scan_done" in STICKER_TRIGGERS
+
+    def test_overwrite_sticker_trigger(self, tmp_db):
+        """החלפת file_id של טריגר קיים."""
+        database.set_config("sticker_scan_done", "old_id")
+        database.set_config("sticker_scan_done", "new_id")
+        from main import _get_sticker
+        assert _get_sticker("scan_done") == "new_id"
+
+
+# ──────────────────────────────────────────────────────────────
+# Notifier — send_sticker
+# ──────────────────────────────────────────────────────────────
+
+
+class TestSendSticker:
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "12345")
+    def test_send_sticker_success(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200)
+        from notifier import send_sticker
+        result = send_sticker("CAACAgIAAx0CXK...")
+        assert result is True
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        assert "sendSticker" in call_args[0][0]
+        assert call_args[1]["json"]["sticker"] == "CAACAgIAAx0CXK..."
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "12345")
+    def test_send_sticker_custom_chat_id(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200)
+        from notifier import send_sticker
+        result = send_sticker("file_id_1", chat_id=67890)
+        assert result is True
+        assert mock_post.call_args[1]["json"]["chat_id"] == "67890"
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "12345")
+    def test_send_sticker_failure(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=400, text="Bad Request")
+        from notifier import send_sticker
+        result = send_sticker("file_id_1")
+        assert result is False
+
+    @patch("notifier.BOT_TOKEN", "")
+    def test_send_sticker_no_token(self):
+        from notifier import send_sticker
+        result = send_sticker("file_id_1")
+        assert result is False
+
+

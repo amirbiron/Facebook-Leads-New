@@ -91,6 +91,15 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        # טבלת stickers ישנה — נשארת למיגרציה חלקה (לא נמחקת DB קיים)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS stickers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                file_id TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
 
 # ── CRUD ──────────────────────────────────────────────────────
 def is_seen(post_id: str) -> bool:
@@ -411,6 +420,7 @@ def get_usage_by_model() -> list[dict]:
         }
         for r in rows
     ]
+
 
 
 # ── Cleanup ───────────────────────────────────────────────────
