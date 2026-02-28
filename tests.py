@@ -3014,7 +3014,35 @@ from notifier import send_custom_emoji
 from main import (
     _load_emojis, _save_emojis, set_emoji, remove_emoji,
     get_emoji, _EMOJI_TRIGGER_LABELS, _pending_emoji_set,
+    _utf16_slice,
 )
+
+
+class TestUtf16Slice:
+    """בדיקות ל-_utf16_slice — חילוץ תת-מחרוזת לפי UTF-16 offsets."""
+
+    def test_bmp_char(self):
+        """תו BMP (⭐ U+2B50) = יחידת UTF-16 אחת."""
+        assert _utf16_slice("\u2b50hello", 0, 1) == "\u2b50"
+
+    def test_non_bmp_emoji(self):
+        """😎 (U+1F60E) = surrogate pair = 2 יחידות UTF-16."""
+        assert _utf16_slice("\U0001f60e", 0, 2) == "\U0001f60e"
+
+    def test_offset_after_non_bmp(self):
+        """offset אחרי אימוג'י non-BMP — offset=2 (לא 1)."""
+        text = "\U0001f60eABC"
+        assert _utf16_slice(text, 2, 1) == "A"
+        assert _utf16_slice(text, 2, 3) == "ABC"
+
+    def test_mixed_text(self):
+        """טקסט מעורב: BMP + non-BMP + ASCII."""
+        text = "Hi\U0001f60e\u2b50!"
+        # H=0, i=1, 😎=2-3, ⭐=4, !=5
+        assert _utf16_slice(text, 0, 2) == "Hi"
+        assert _utf16_slice(text, 2, 2) == "\U0001f60e"
+        assert _utf16_slice(text, 4, 1) == "\u2b50"
+        assert _utf16_slice(text, 5, 1) == "!"
 
 
 class TestSendCustomEmoji:
@@ -3038,7 +3066,18 @@ class TestSendCustomEmoji:
         assert entities[0]["type"] == "custom_emoji"
         assert entities[0]["custom_emoji_id"] == "5368324170671202286"
         assert entities[0]["offset"] == 0
-        assert entities[0]["length"] == len("\U0001f60e")
+        # 😎 (U+1F60E) = surrogate pair = 2 יחידות UTF-16
+        assert entities[0]["length"] == 2
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.CHAT_ID", "123")
+    def test_bmp_emoji_length_is_1(self, mock_post):
+        """אימוג'י מ-BMP (כמו ⭐ U+2B50) = יחידת UTF-16 אחת."""
+        mock_post.return_value = MagicMock(status_code=200)
+        send_custom_emoji("123", "\u2b50")
+        payload = mock_post.call_args[1]["json"]
+        assert payload["entities"][0]["length"] == 1
 
     @patch("notifier.requests.post")
     @patch("notifier.BOT_TOKEN", "fake-token")

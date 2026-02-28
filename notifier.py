@@ -230,6 +230,10 @@ def send_custom_emoji(
 
     target_chat = str(chat_id or CHAT_ID)
 
+    # Telegram Bot API מודד offset/length ב-UTF-16 code units, לא Unicode code points.
+    # אימוג'י מחוץ ל-BMP (כמו 😎 U+1F60E) דורשים surrogate pair = 2 יחידות UTF-16.
+    utf16_len = len(emoji_placeholder.encode("utf-16-le")) // 2
+
     try:
         response = requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
@@ -239,7 +243,7 @@ def send_custom_emoji(
                 "entities": [{
                     "type": "custom_emoji",
                     "offset": 0,
-                    "length": len(emoji_placeholder),
+                    "length": utf16_len,
                     "custom_emoji_id": custom_emoji_id,
                 }],
             },

@@ -183,6 +183,17 @@ async def _send_trigger_emoji(trigger: str):
     except Exception as e:
         log.debug(f"שליחת אימוג'י טריגר {trigger} נכשלה: {e}")
 
+def _utf16_slice(text: str, offset: int, length: int) -> str:
+    """חולץ תת-מחרוזת לפי offset/length ב-UTF-16 code units (כפי ש-Telegram שולח).
+
+    Python strings הם Unicode code points — אימוג'י מחוץ ל-BMP (כמו 😎)
+    הם code point אחד בפייתון אבל 2 יחידות UTF-16 (surrogate pair) בטלגרם.
+    """
+    encoded = text.encode("utf-16-le")
+    start = offset * 2      # כל יחידת UTF-16 = 2 בתים
+    end = (offset + length) * 2
+    return encoded[start:end].decode("utf-16-le")
+
 # מילון שמאחסן מצב "ממתין לאימוג'י" — {chat_id: trigger}
 _pending_emoji_set: dict[int, str] = {}
 
@@ -839,6 +850,8 @@ async def _telegram_control_loop(
                 # אם ממתינים לאימוג'י (אחרי /set_emoji) ובהודעה יש entity
                 # מסוג custom_emoji — מחלצים את ה-ID ומקצים לטריגר.
                 # אם לא ממתינים — מציגים את ה-ID למשתמש.
+                # חשוב: Telegram שולח offset/length ב-UTF-16 code units,
+                # אבל Python strings הם Unicode code points — צריך המרה.
                 _entities = msg.get("entities") or []
                 _ce = [e for e in _entities if e.get("type") == "custom_emoji"]
                 if _ce and _pending_emoji_set.get(chat_id_int):
@@ -846,7 +859,7 @@ async def _telegram_control_loop(
                     ce_id = ent.get("custom_emoji_id", "")
                     if ce_id:
                         msg_text = msg.get("text") or ""
-                        emoji_char = msg_text[ent["offset"]:ent["offset"] + ent["length"]] or "\u2b50"
+                        emoji_char = _utf16_slice(msg_text, ent["offset"], ent["length"]) or "\u2b50"
                         pending_trigger = _pending_emoji_set.pop(chat_id_int)
                         ok, result_msg = set_emoji(pending_trigger, ce_id, emoji_char)
                         await asyncio.to_thread(
@@ -864,7 +877,7 @@ async def _telegram_control_loop(
                     ent = _ce[0]
                     ce_id = ent.get("custom_emoji_id", "")
                     if ce_id:
-                        emoji_char = text[ent["offset"]:ent["offset"] + ent["length"]] or "?"
+                        emoji_char = _utf16_slice(text, ent["offset"], ent["length"]) or "?"
                         await asyncio.to_thread(
                             send_message,
                             f"אימוג'י מותאם התקבל: {emoji_char}\n"
