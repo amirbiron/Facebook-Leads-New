@@ -3007,46 +3007,100 @@ class TestParseDeveloperChatIds:
 
 
 # ──────────────────────────────────────────────────────────────
-# סטיקרים מונפשים
+# אימוג'י מותאם (Custom Emoji)
 # ──────────────────────────────────────────────────────────────
 
-from notifier import send_sticker
+from notifier import send_custom_emoji
 from main import (
-    _load_stickers, _save_stickers, set_sticker, remove_sticker,
-    get_sticker, _STICKER_TRIGGER_LABELS, _pending_sticker_set,
+    _load_emojis, _save_emojis, set_emoji, remove_emoji,
+    get_emoji, _EMOJI_TRIGGER_LABELS, _pending_emoji_set,
+    _utf16_slice,
 )
 
 
-class TestSendSticker:
-    """בדיקות לפונקציית send_sticker ב-notifier."""
+class TestUtf16Slice:
+    """בדיקות ל-_utf16_slice — חילוץ תת-מחרוזת לפי UTF-16 offsets."""
+
+    def test_bmp_char(self):
+        """תו BMP (⭐ U+2B50) = יחידת UTF-16 אחת."""
+        assert _utf16_slice("\u2b50hello", 0, 1) == "\u2b50"
+
+    def test_non_bmp_emoji(self):
+        """😎 (U+1F60E) = surrogate pair = 2 יחידות UTF-16."""
+        assert _utf16_slice("\U0001f60e", 0, 2) == "\U0001f60e"
+
+    def test_offset_after_non_bmp(self):
+        """offset אחרי אימוג'י non-BMP — offset=2 (לא 1)."""
+        text = "\U0001f60eABC"
+        assert _utf16_slice(text, 2, 1) == "A"
+        assert _utf16_slice(text, 2, 3) == "ABC"
+
+    def test_mixed_text(self):
+        """טקסט מעורב: BMP + non-BMP + ASCII."""
+        text = "Hi\U0001f60e\u2b50!"
+        # H=0, i=1, 😎=2-3, ⭐=4, !=5
+        assert _utf16_slice(text, 0, 2) == "Hi"
+        assert _utf16_slice(text, 2, 2) == "\U0001f60e"
+        assert _utf16_slice(text, 4, 1) == "\u2b50"
+        assert _utf16_slice(text, 5, 1) == "!"
+
+
+class TestSendCustomEmoji:
+    """בדיקות לפונקציית send_custom_emoji ב-notifier."""
 
     @patch("notifier.requests.post")
     @patch("notifier.BOT_TOKEN", "fake-token")
     @patch("notifier.CHAT_ID", "123")
-    def test_sends_sticker_successfully(self, mock_post):
+    def test_sends_emoji_successfully(self, mock_post):
         mock_post.return_value = MagicMock(status_code=200)
-        result = send_sticker("CAACAgIAAxkDAAI_file_id_123")
+        result = send_custom_emoji("5368324170671202286", "\U0001f60e")
         assert result is True
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        assert "sendSticker" in call_args[0][0]
+        assert "sendMessage" in call_args[0][0]
         payload = call_args[1]["json"]
         assert payload["chat_id"] == "123"
-        assert payload["sticker"] == "CAACAgIAAxkDAAI_file_id_123"
+        assert payload["text"] == "\U0001f60e"
+        entities = payload["entities"]
+        assert len(entities) == 1
+        assert entities[0]["type"] == "custom_emoji"
+        assert entities[0]["custom_emoji_id"] == "5368324170671202286"
+        assert entities[0]["offset"] == 0
+        # 😎 (U+1F60E) = surrogate pair = 2 יחידות UTF-16
+        assert entities[0]["length"] == 2
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.CHAT_ID", "123")
+    def test_bmp_emoji_length_is_1(self, mock_post):
+        """אימוג'י מ-BMP (כמו ⭐ U+2B50) = יחידת UTF-16 אחת."""
+        mock_post.return_value = MagicMock(status_code=200)
+        send_custom_emoji("123", "\u2b50")
+        payload = mock_post.call_args[1]["json"]
+        assert payload["entities"][0]["length"] == 1
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.CHAT_ID", "123")
+    def test_default_placeholder(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200)
+        send_custom_emoji("123456")
+        payload = mock_post.call_args[1]["json"]
+        assert payload["text"] == "\u2b50"
 
     @patch("notifier.requests.post")
     @patch("notifier.BOT_TOKEN", "fake-token")
     @patch("notifier.CHAT_ID", "123")
     def test_returns_false_on_failure(self, mock_post):
         mock_post.return_value = MagicMock(status_code=400, text="Bad request")
-        result = send_sticker("CAACAgIAAxkDAAI_file_id_123")
+        result = send_custom_emoji("123456")
         assert result is False
 
     @patch("notifier.requests.post")
     @patch("notifier.BOT_TOKEN", None)
     @patch("notifier.CHAT_ID", "123")
     def test_returns_false_without_token(self, mock_post):
-        result = send_sticker("CAACAgIAAxkDAAI_file_id_123")
+        result = send_custom_emoji("123456")
         assert result is False
         mock_post.assert_not_called()
 
@@ -3055,7 +3109,7 @@ class TestSendSticker:
     @patch("notifier.CHAT_ID", "123")
     def test_custom_chat_id(self, mock_post):
         mock_post.return_value = MagicMock(status_code=200)
-        send_sticker("file_id_abc", chat_id=456)
+        send_custom_emoji("123456", chat_id=456)
         payload = mock_post.call_args[1]["json"]
         assert payload["chat_id"] == "456"
 
@@ -3063,104 +3117,415 @@ class TestSendSticker:
     @patch("notifier.BOT_TOKEN", "fake-token")
     @patch("notifier.CHAT_ID", None)
     def test_returns_false_without_chat_id(self, mock_post):
-        result = send_sticker("file_id_abc")
+        result = send_custom_emoji("123456")
         assert result is False
         mock_post.assert_not_called()
 
 
-class TestStickerConfig:
-    """בדיקות לניהול סטיקרים — שמירה, טעינה, הקצאה, הסרה."""
+class TestEmojiConfig:
+    """בדיקות לניהול אימוג'י מותאם — שמירה, טעינה, הקצאה, הסרה."""
 
     def test_load_empty(self, tmp_db):
-        result = _load_stickers()
+        result = _load_emojis()
         assert result == {}
 
     def test_save_and_load(self, tmp_db):
-        stickers = {"scan_start": "file_id_1", "lead_found": "file_id_2"}
-        _save_stickers(stickers)
-        loaded = _load_stickers()
-        assert loaded == stickers
+        emojis = {
+            "scan_start": {"id": "111", "emoji": "\U0001f60e"},
+            "lead_found": {"id": "222", "emoji": "\U0001f389"},
+        }
+        _save_emojis(emojis)
+        loaded = _load_emojis()
+        assert loaded == emojis
 
-    def test_set_sticker_valid_trigger(self, tmp_db):
-        ok, msg = set_sticker("scan_start", "file_id_abc")
+    def test_set_emoji_valid_trigger(self, tmp_db):
+        ok, msg = set_emoji("scan_start", "123456", "\U0001f60e")
         assert ok is True
         assert "scan_start" in msg
-        assert get_sticker("scan_start") == "file_id_abc"
+        data = get_emoji("scan_start")
+        assert data["id"] == "123456"
+        assert data["emoji"] == "\U0001f60e"
 
-    def test_set_sticker_invalid_trigger(self, tmp_db):
-        ok, msg = set_sticker("invalid_trigger", "file_id_abc")
+    def test_set_emoji_invalid_trigger(self, tmp_db):
+        ok, msg = set_emoji("invalid_trigger", "123456")
         assert ok is False
         assert "לא מוכר" in msg
 
-    def test_set_sticker_overwrites(self, tmp_db):
-        set_sticker("scan_start", "old_id")
-        set_sticker("scan_start", "new_id")
-        assert get_sticker("scan_start") == "new_id"
+    def test_set_emoji_overwrites(self, tmp_db):
+        set_emoji("scan_start", "old_id", "\u2b50")
+        set_emoji("scan_start", "new_id", "\U0001f60e")
+        data = get_emoji("scan_start")
+        assert data["id"] == "new_id"
+        assert data["emoji"] == "\U0001f60e"
 
-    def test_remove_sticker(self, tmp_db):
-        set_sticker("scan_end", "file_id_xyz")
-        ok, msg = remove_sticker("scan_end")
+    def test_remove_emoji(self, tmp_db):
+        set_emoji("scan_end", "123", "\u2b50")
+        ok, msg = remove_emoji("scan_end")
         assert ok is True
-        assert get_sticker("scan_end") is None
+        assert get_emoji("scan_end") is None
 
-    def test_remove_sticker_not_found(self, tmp_db):
-        ok, msg = remove_sticker("scan_start")
+    def test_remove_emoji_not_found(self, tmp_db):
+        ok, msg = remove_emoji("scan_start")
         assert ok is False
-        assert "אין סטיקר" in msg
+        assert "אין אימוג'י" in msg
 
-    def test_get_sticker_not_set(self, tmp_db):
-        assert get_sticker("scan_start") is None
+    def test_get_emoji_not_set(self, tmp_db):
+        assert get_emoji("scan_start") is None
 
     def test_all_triggers_have_labels(self):
         """מוודא שכל טריגר מוגדר עם תיאור בעברית."""
         for trigger in ("scan_start", "scan_end", "lead_found"):
-            assert trigger in _STICKER_TRIGGER_LABELS
+            assert trigger in _EMOJI_TRIGGER_LABELS
 
     def test_set_does_not_affect_other_triggers(self, tmp_db):
-        set_sticker("scan_start", "id_1")
-        set_sticker("lead_found", "id_2")
-        assert get_sticker("scan_start") == "id_1"
-        assert get_sticker("lead_found") == "id_2"
-        assert get_sticker("scan_end") is None
+        set_emoji("scan_start", "id_1", "\u2b50")
+        set_emoji("lead_found", "id_2", "\U0001f389")
+        assert get_emoji("scan_start")["id"] == "id_1"
+        assert get_emoji("lead_found")["id"] == "id_2"
+        assert get_emoji("scan_end") is None
+
+    def test_default_placeholder(self, tmp_db):
+        """set_emoji ללא emoji_char משתמש ב-⭐ כברירת מחדל."""
+        set_emoji("scan_end", "789")
+        data = get_emoji("scan_end")
+        assert data["emoji"] == "\u2b50"
 
 
-class TestSendTriggerSticker:
-    """בדיקות ל-_send_trigger_sticker — שליחה לפי טריגר."""
+class TestSendTriggerEmoji:
+    """בדיקות ל-_send_trigger_emoji — שליחה לפי טריגר."""
 
     @pytest.mark.asyncio
     async def test_sends_when_configured(self, tmp_db):
-        set_sticker("scan_start", "file_id_test")
-        with patch("notifier.send_sticker") as mock_send:
+        set_emoji("scan_start", "emoji_id_test", "\U0001f60e")
+        with patch("notifier.send_custom_emoji") as mock_send:
             mock_send.return_value = True
-            from main import _send_trigger_sticker
-            await _send_trigger_sticker("scan_start")
-            mock_send.assert_called_once_with("file_id_test")
+            from main import _send_trigger_emoji
+            await _send_trigger_emoji("scan_start")
+            mock_send.assert_called_once_with("emoji_id_test", "\U0001f60e")
 
     @pytest.mark.asyncio
     async def test_silent_when_not_configured(self, tmp_db):
-        with patch("notifier.send_sticker") as mock_send:
-            from main import _send_trigger_sticker
-            await _send_trigger_sticker("scan_start")
+        with patch("notifier.send_custom_emoji") as mock_send:
+            from main import _send_trigger_emoji
+            await _send_trigger_emoji("scan_start")
             mock_send.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_silent_on_send_failure(self, tmp_db):
-        set_sticker("lead_found", "bad_id")
-        with patch("notifier.send_sticker", side_effect=Exception("network")):
-            from main import _send_trigger_sticker
+        set_emoji("lead_found", "bad_id", "\u2b50")
+        with patch("notifier.send_custom_emoji", side_effect=Exception("network")):
+            from main import _send_trigger_emoji
             # לא צריך לזרוק exception — שקט
-            await _send_trigger_sticker("lead_found")
+            await _send_trigger_emoji("lead_found")
+
+    @pytest.mark.asyncio
+    async def test_uses_default_placeholder(self, tmp_db):
+        """אם emoji חסר ב-data, משתמש ב-⭐."""
+        from database import set_config
+        import json as _json
+        set_config("custom_emojis", _json.dumps({"scan_end": {"id": "test_id"}}))
+        with patch("notifier.send_custom_emoji") as mock_send:
+            mock_send.return_value = True
+            from main import _send_trigger_emoji
+            await _send_trigger_emoji("scan_end")
+            mock_send.assert_called_once_with("test_id", "\u2b50")
 
 
-class TestPendingStickerSet:
-    """בדיקות למנגנון 'ממתין לסטיקר' — _pending_sticker_set."""
+class TestPendingEmojiSet:
+    """בדיקות למנגנון 'ממתין לאימוג'י' — _pending_emoji_set."""
 
     def test_dict_operations(self):
-        _pending_sticker_set.clear()
-        _pending_sticker_set[12345] = "scan_start"
-        assert _pending_sticker_set.get(12345) == "scan_start"
-        popped = _pending_sticker_set.pop(12345, None)
+        _pending_emoji_set.clear()
+        _pending_emoji_set[12345] = "scan_start"
+        assert _pending_emoji_set.get(12345) == "scan_start"
+        popped = _pending_emoji_set.pop(12345, None)
         assert popped == "scan_start"
-        assert _pending_sticker_set.get(12345) is None
+        assert _pending_emoji_set.get(12345) is None
+
+
+# ──────────────────────────────────────────────────────────────
+# אנימציית סריקה
+# ──────────────────────────────────────────────────────────────
+
+from main import (
+    _build_scan_emoji_entities,
+    _stop_scan_animation,
+    _scan_anim_state,
+    _SCAN_DOTS,
+)
+from notifier import send_message_returning_id
+
+
+class TestSendMessageReturningId:
+    """בדיקות ל-send_message_returning_id — שולח הודעה ומחזיר message_id."""
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "123456")
+    @patch("notifier.requests.post")
+    def test_returns_message_id_on_success(self, mock_post):
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 42}},
+        )
+        result = send_message_returning_id("hello")
+        assert result == 42
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "123456")
+    @patch("notifier.requests.post")
+    def test_returns_none_on_failure(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=400, text="Bad request")
+        result = send_message_returning_id("hello")
+        assert result is None
+
+    @patch("notifier.BOT_TOKEN", None)
+    def test_returns_none_without_token(self):
+        result = send_message_returning_id("hello", chat_id=123)
+        assert result is None
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "123456")
+    @patch("notifier.requests.post")
+    def test_sends_entities(self, mock_post):
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 99}},
+        )
+        entities = [{"type": "custom_emoji", "offset": 0, "length": 2, "custom_emoji_id": "abc"}]
+        send_message_returning_id("⭐ text", entities=entities)
+        payload = mock_post.call_args[1]["json"]
+        assert payload["entities"] == entities
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "123456")
+    @patch("notifier.requests.post")
+    def test_no_entities_by_default(self, mock_post):
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 1}},
+        )
+        send_message_returning_id("hello")
+        payload = mock_post.call_args[1]["json"]
+        assert "entities" not in payload
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "123456")
+    @patch("notifier.requests.post")
+    def test_custom_chat_id(self, mock_post):
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 7}},
+        )
+        send_message_returning_id("hi", chat_id=999)
+        payload = mock_post.call_args[1]["json"]
+        assert payload["chat_id"] == "999"
+
+
+class TestEditMessageEntities:
+    """בדיקות ל-entities חדש ב-edit_message_text."""
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.requests.post")
+    def test_entities_included_in_payload(self, mock_post):
+        from notifier import edit_message_text
+        mock_post.return_value = MagicMock(status_code=200)
+        entities = [{"type": "custom_emoji", "offset": 0, "length": 1, "custom_emoji_id": "xyz"}]
+        edit_message_text(123, 456, "text", entities=entities)
+        payload = mock_post.call_args[1]["json"]
+        assert payload["entities"] == entities
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.requests.post")
+    def test_no_entities_by_default(self, mock_post):
+        from notifier import edit_message_text
+        mock_post.return_value = MagicMock(status_code=200)
+        edit_message_text(123, 456, "text")
+        payload = mock_post.call_args[1]["json"]
+        assert "entities" not in payload
+
+
+class TestBuildScanEmojiEntities:
+    """בדיקות ל-_build_scan_emoji_entities — בניית prefix + entities."""
+
+    def test_no_emoji_configured(self, tmp_db):
+        prefix, entities = _build_scan_emoji_entities()
+        assert prefix == ""
+        assert entities is None
+
+    def test_with_emoji_configured(self, tmp_db):
+        set_emoji("scan_start", "emoji_123", "\U0001f50d")
+        prefix, entities = _build_scan_emoji_entities()
+        assert prefix == "\U0001f50d "
+        assert len(entities) == 1
+        assert entities[0]["type"] == "custom_emoji"
+        assert entities[0]["custom_emoji_id"] == "emoji_123"
+        # 🔍 = non-BMP = 2 UTF-16 code units
+        assert entities[0]["length"] == 2
+
+    def test_bmp_emoji_length(self, tmp_db):
+        set_emoji("scan_start", "emoji_456", "\u2b50")
+        prefix, entities = _build_scan_emoji_entities()
+        assert prefix == "\u2b50 "
+        assert entities[0]["length"] == 1
+
+    def test_default_placeholder(self, tmp_db):
+        """אם אין emoji char ב-data, ברירת מחדל ⭐."""
+        from database import set_config
+        import json as _json
+        set_config("custom_emojis", _json.dumps({"scan_start": {"id": "test_id"}}))
+        prefix, entities = _build_scan_emoji_entities()
+        assert prefix == "\u2b50 "
+        assert entities[0]["custom_emoji_id"] == "test_id"
+
+
+class TestStopScanAnimation:
+    """בדיקות ל-_stop_scan_animation — עצירת אנימציה ועריכת הודעה לסיכום."""
+
+    @pytest.mark.asyncio
+    async def test_deletes_message_when_leads_found(self, tmp_db):
+        """כשיש לידים — מוחקים את הודעת 'סורק...' (הלידים כבר נשלחו כהודעות נפרדות)."""
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.delete_message") as mock_del, \
+             patch("notifier.edit_message_text") as mock_edit:
+            await _stop_scan_animation(leads_found=3)
+            mock_del.assert_called_once_with(123, 456)
+            mock_edit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_edits_message_no_leads(self, tmp_db):
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.edit_message_text") as mock_edit:
+            mock_edit.return_value = True
+            await _stop_scan_animation(leads_found=0)
+            text_arg = mock_edit.call_args[0][2]
+            assert "ללא לידים" in text_arg
+
+    @pytest.mark.asyncio
+    async def test_edits_message_with_error(self, tmp_db):
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.edit_message_text") as mock_edit:
+            mock_edit.return_value = True
+            await _stop_scan_animation(leads_found=0, error="שגיאת רשת")
+            text_arg = mock_edit.call_args[0][2]
+            assert "נכשלה" in text_arg
+            assert "שגיאת רשת" in text_arg
+
+    @pytest.mark.asyncio
+    async def test_with_scan_end_emoji(self, tmp_db):
+        """אימוג'י scan_end מוטמע בסיכום (כשאין לידים)."""
+        set_emoji("scan_end", "end_emoji_id", "\U0001f389")
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.edit_message_text") as mock_edit:
+            mock_edit.return_value = True
+            await _stop_scan_animation(leads_found=0)
+            args = mock_edit.call_args
+            text_arg = args[0][2]
+            assert text_arg.startswith("\U0001f389")
+            entities_arg = args[1].get("entities")
+            assert entities_arg is not None
+            assert entities_arg[0]["custom_emoji_id"] == "end_emoji_id"
+
+    @pytest.mark.asyncio
+    async def test_cancels_running_task(self, tmp_db):
+        """אם יש task אנימציה רץ, מבטל אותו."""
+        import asyncio
+        cancelled = False
+        async def fake_animation():
+            nonlocal cancelled
+            try:
+                await asyncio.sleep(999)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+        task = asyncio.create_task(fake_animation())
+        await asyncio.sleep(0.01)  # נותנים ל-task להתחיל
+        _scan_anim_state.clear()
+        _scan_anim_state["task"] = task
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.edit_message_text") as mock_edit:
+            mock_edit.return_value = True
+            await _stop_scan_animation(leads_found=0)
+        assert cancelled is True
+
+    @pytest.mark.asyncio
+    async def test_no_state_does_nothing(self, tmp_db):
+        """אם אין state — לא עושה כלום ולא זורק exception."""
+        _scan_anim_state.clear()
+        with patch("notifier.edit_message_text") as mock_edit:
+            await _stop_scan_animation(leads_found=0)
+            mock_edit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleans_up_state(self, tmp_db):
+        """אחרי עצירה, ה-state נקי."""
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.edit_message_text"):
+            await _stop_scan_animation(leads_found=0)
+        assert "chat_id" not in _scan_anim_state
+        assert "message_id" not in _scan_anim_state
+        assert "task" not in _scan_anim_state
+
+    @pytest.mark.asyncio
+    async def test_emoji_message_deleted_when_leads_found(self, tmp_db):
+        """הודעת אימוג'י מונפש נמחקת תמיד בסיום — כולל כשיש לידים."""
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        _scan_anim_state["is_emoji"] = True
+        with patch("notifier.delete_message") as mock_del, \
+             patch("notifier.send_message") as mock_send:
+            await _stop_scan_animation(leads_found=3)
+            mock_del.assert_called_once_with(123, 456)
+            mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_emoji_message_deleted_and_summary_sent_no_leads(self, tmp_db):
+        """אימוג'י נמחק + הודעת סיכום נפרדת כשאין לידים."""
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        _scan_anim_state["is_emoji"] = True
+        with patch("notifier.delete_message") as mock_del, \
+             patch("notifier.send_message") as mock_send:
+            await _stop_scan_animation(leads_found=0)
+            mock_del.assert_called_once_with(123, 456)
+            mock_send.assert_called_once()
+            text_arg = mock_send.call_args[0][0]
+            assert "ללא לידים" in text_arg
+
+    @pytest.mark.asyncio
+    async def test_emoji_message_deleted_and_error_sent(self, tmp_db):
+        """אימוג'י נמחק + הודעת שגיאה נפרדת."""
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        _scan_anim_state["is_emoji"] = True
+        with patch("notifier.delete_message") as mock_del, \
+             patch("notifier.send_message") as mock_send:
+            await _stop_scan_animation(leads_found=0, error="timeout")
+            mock_del.assert_called_once_with(123, 456)
+            mock_send.assert_called_once()
+            text_arg = mock_send.call_args[0][0]
+            assert "נכשלה" in text_arg
+            assert "timeout" in text_arg
+
+
+class TestScanDotsConstant:
+    """וידוא שקבועי האנימציה הגיוניים."""
+
+    def test_three_dot_states(self):
+        assert len(_SCAN_DOTS) == 3
+        assert _SCAN_DOTS == [".", "..", "..."]
 
 

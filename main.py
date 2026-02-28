@@ -121,74 +121,221 @@ def matches_force_send(text: str) -> str | None:
     return None
 
 
-# ── סטיקרים מונפשים — שליחה אוטומטית לפי טריגר ──────────
+# ── אימוג'י מותאם (Custom Emoji) — שליחה אוטומטית לפי טריגר ──
 # טריגרים נתמכים:
 #   scan_start  — תחילת סבב סריקה
 #   scan_end    — סיום סבב סריקה
 #   lead_found  — כשנמצא ליד רלוונטי
-# הסטיקרים נשמרים ב-_config כ-JSON: {"scan_start": "file_id_xxx", ...}
+# נשמרים ב-_config כ-JSON: {"scan_start": {"id": "...", "emoji": "⭐"}, ...}
 
 # תיאור הטריגרים בעברית — לתצוגה בפקודות טלגרם
-_STICKER_TRIGGER_LABELS = {
+_EMOJI_TRIGGER_LABELS = {
     "scan_start": "תחילת סריקה",
     "scan_end": "סיום סריקה",
     "lead_found": "ליד נמצא",
 }
 
-def _load_stickers() -> dict[str, str]:
-    """טוען מיפוי טריגר → file_id מ-DB."""
+def _load_emojis() -> dict[str, dict]:
+    """טוען מיפוי טריגר → {"id": custom_emoji_id, "emoji": placeholder} מ-DB."""
     import json as _json
     try:
-        raw = get_config("stickers")
+        raw = get_config("custom_emojis")
         if raw:
             return _json.loads(raw)
     except Exception:
         pass
     return {}
 
-def _save_stickers(stickers: dict[str, str]):
-    """שומר מיפוי טריגר → file_id ב-DB."""
+def _save_emojis(emojis: dict[str, dict]):
+    """שומר מיפוי טריגר → emoji data ב-DB."""
     import json as _json
-    set_config("stickers", _json.dumps(stickers))
+    set_config("custom_emojis", _json.dumps(emojis))
 
-def set_sticker(trigger: str, file_id: str) -> tuple[bool, str]:
-    """מקצה סטיקר לטריגר. מחזיר (success, message)."""
-    if trigger not in _STICKER_TRIGGER_LABELS:
-        valid = ", ".join(_STICKER_TRIGGER_LABELS.keys())
+def set_emoji(trigger: str, custom_emoji_id: str, emoji_char: str = "\u2b50") -> tuple[bool, str]:
+    """מקצה אימוג'י מותאם לטריגר. מחזיר (success, message)."""
+    if trigger not in _EMOJI_TRIGGER_LABELS:
+        valid = ", ".join(_EMOJI_TRIGGER_LABELS.keys())
         return False, f"טריגר לא מוכר: {trigger}\nטריגרים זמינים: {valid}"
-    stickers = _load_stickers()
-    stickers[trigger] = file_id
-    _save_stickers(stickers)
-    label = _STICKER_TRIGGER_LABELS[trigger]
-    return True, f"סטיקר הוגדר לטריגר: {label} ({trigger})"
+    emojis = _load_emojis()
+    emojis[trigger] = {"id": custom_emoji_id, "emoji": emoji_char}
+    _save_emojis(emojis)
+    label = _EMOJI_TRIGGER_LABELS[trigger]
+    return True, f"אימוג'י הוגדר לטריגר: {label} ({trigger})"
 
-def remove_sticker(trigger: str) -> tuple[bool, str]:
-    """מסיר סטיקר מטריגר. מחזיר (success, message)."""
-    stickers = _load_stickers()
-    if trigger not in stickers:
-        return False, f"אין סטיקר מוגדר לטריגר: {trigger}"
-    del stickers[trigger]
-    _save_stickers(stickers)
-    label = _STICKER_TRIGGER_LABELS.get(trigger, trigger)
-    return True, f"סטיקר הוסר מטריגר: {label} ({trigger})"
+def remove_emoji(trigger: str) -> tuple[bool, str]:
+    """מסיר אימוג'י מטריגר. מחזיר (success, message)."""
+    emojis = _load_emojis()
+    if trigger not in emojis:
+        return False, f"אין אימוג'י מוגדר לטריגר: {trigger}"
+    del emojis[trigger]
+    _save_emojis(emojis)
+    label = _EMOJI_TRIGGER_LABELS.get(trigger, trigger)
+    return True, f"אימוג'י הוסר מטריגר: {label} ({trigger})"
 
-def get_sticker(trigger: str) -> str | None:
-    """מחזיר file_id של סטיקר לטריגר נתון, או None אם לא מוגדר."""
-    return _load_stickers().get(trigger)
+def get_emoji(trigger: str) -> dict | None:
+    """מחזיר {"id": ..., "emoji": ...} לטריגר נתון, או None אם לא מוגדר."""
+    return _load_emojis().get(trigger)
 
-async def _send_trigger_sticker(trigger: str):
-    """שולח סטיקר מונפש אם מוגדר לטריגר הנתון. שקט אם לא מוגדר או נכשל."""
-    file_id = get_sticker(trigger)
-    if not file_id:
+async def _send_trigger_emoji(trigger: str):
+    """שולח אימוג'י מותאם אם מוגדר לטריגר הנתון. שקט אם לא מוגדר או נכשל."""
+    data = get_emoji(trigger)
+    if not data:
         return
     try:
-        from notifier import send_sticker
-        await asyncio.to_thread(send_sticker, file_id)
+        from notifier import send_custom_emoji
+        await asyncio.to_thread(
+            send_custom_emoji, data["id"], data.get("emoji", "\u2b50"),
+        )
     except Exception as e:
-        log.debug(f"שליחת סטיקר טריגר {trigger} נכשלה: {e}")
+        log.debug(f"שליחת אימוג'י טריגר {trigger} נכשלה: {e}")
 
-# מילון שמאחסן מצב "ממתין לסטיקר" — {chat_id: trigger}
-_pending_sticker_set: dict[int, str] = {}
+def _utf16_slice(text: str, offset: int, length: int) -> str:
+    """חולץ תת-מחרוזת לפי offset/length ב-UTF-16 code units (כפי ש-Telegram שולח).
+
+    Python strings הם Unicode code points — אימוג'י מחוץ ל-BMP (כמו 😎)
+    הם code point אחד בפייתון אבל 2 יחידות UTF-16 (surrogate pair) בטלגרם.
+    """
+    encoded = text.encode("utf-16-le")
+    start = offset * 2      # כל יחידת UTF-16 = 2 בתים
+    end = (offset + length) * 2
+    return encoded[start:end].decode("utf-16-le")
+
+# מילון שמאחסן מצב "ממתין לאימוג'י" — {chat_id: trigger}
+_pending_emoji_set: dict[int, str] = {}
+
+# ── אנימציית "סורק..." — רק כשהלקוח מפעיל /scan או /scan_force ידנית ──
+# שומרים את פרטי ההודעה כדי לערוך אותה בזמן אמת ולסכם בסוף
+_scan_anim_state: dict = {}  # {"chat_id": int, "message_id": int, "task": Task | None}
+
+_SCAN_DOTS = [".", "..", "..."]
+_SCAN_ANIM_INTERVAL = 2.0  # שניות בין עדכוני נקודות
+
+
+def _build_scan_emoji_entities(trigger: str = "scan_start") -> tuple[str, list[dict] | None]:
+    """בונה prefix + entities לאימוג'י (אם מוגדר).
+
+    מחזיר (prefix_str, entities_list | None).
+    אם אין אימוג'י מותאם — ("", None).
+    """
+    data = get_emoji(trigger)
+    if not data:
+        return "", None
+    placeholder = data.get("emoji", "\u2b50")
+    prefix = placeholder + " "
+    utf16_len = len(placeholder.encode("utf-16-le")) // 2
+    entities = [{
+        "type": "custom_emoji",
+        "offset": 0,
+        "length": utf16_len,
+        "custom_emoji_id": data["id"],
+    }]
+    return prefix, entities
+
+
+async def _start_scan_animation(chat_id: int) -> asyncio.Task | None:
+    """שולח הודעת סטטוס סריקה ומחזיר task של אנימציית נקודות (או None).
+
+    שולח את ההודעה הראשונה באופן סינכרוני (await) כדי שה-state
+    (_scan_anim_state) יהיה מוגדר לפני שמתחילים את הסריקה.
+    רק לולאת הנקודות רצה כ-task — כך ביטול ה-task בטוח ולא משאיר
+    הודעות יתומות.
+    """
+    from notifier import send_message_returning_id, edit_message_text
+
+    prefix, entities = _build_scan_emoji_entities()
+    has_emoji = entities is not None
+
+    if has_emoji:
+        # יש אימוג'י מונפש — שולח רק אותו, בלי נקודות
+        text = prefix.rstrip()  # האימוג'י בלבד (ללא רווח נגרר)
+    else:
+        text = "סורק."
+
+    msg_id = await asyncio.to_thread(
+        send_message_returning_id, text, chat_id=chat_id, entities=entities,
+    )
+    if not msg_id:
+        log.debug("לא הצלחתי לשלוח הודעת סטטוס סריקה")
+        return None
+
+    _scan_anim_state["chat_id"] = chat_id
+    _scan_anim_state["message_id"] = msg_id
+    _scan_anim_state["is_emoji"] = has_emoji
+
+    if has_emoji:
+        # אין אנימציה — האימוג'י לבדו מספיק (יימחק בסיום הסריקה)
+        return None
+
+    # לולאת אנימציית נקודות — רצה כ-task עד ביטול
+    async def _dots_loop():
+        i = 1
+        while True:
+            await asyncio.sleep(_SCAN_ANIM_INTERVAL)
+            dot = _SCAN_DOTS[i % 3]
+            await asyncio.to_thread(
+                edit_message_text, chat_id, msg_id, f"סורק{dot}",
+            )
+            i += 1
+
+    return asyncio.create_task(_dots_loop())
+
+
+async def _stop_scan_animation(leads_found: int, error: str = ""):
+    """עוצר את האנימציה ומטפל בהודעת הסטטוס.
+
+    - אימוג'י מונפש (scan_start) — תמיד נמחק בסיום.
+    - הודעת "סורק..." — נמחקת אם יש לידים, נערכת לסיכום אם אין/שגיאה.
+    """
+    from notifier import edit_message_text, delete_message, send_message
+
+    task = _scan_anim_state.pop("task", None)
+    chat_id = _scan_anim_state.pop("chat_id", None)
+    msg_id = _scan_anim_state.pop("message_id", None)
+    is_emoji = _scan_anim_state.pop("is_emoji", False)
+
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    if not chat_id or not msg_id:
+        return
+
+    if is_emoji:
+        # אימוג'י מונפש — תמיד מוחקים אותו
+        await asyncio.to_thread(delete_message, chat_id, msg_id)
+        # אם יש שגיאה או אין לידים — שולחים הודעת סיכום נפרדת
+        if error:
+            summary = f"סריקה נכשלה — {error[:200]}"
+        elif leads_found == 0:
+            summary = "סריקה הושלמה — ללא לידים חדשים"
+        else:
+            return
+        prefix, entities = _build_scan_emoji_entities("scan_end")
+        await asyncio.to_thread(
+            send_message, f"{prefix}{summary}",
+            chat_id=chat_id, entities=entities,
+        )
+        return
+
+    # הודעת "סורק..." — כשיש לידים מוחקים, אחרת עורכים לסיכום
+    if leads_found > 0 and not error:
+        await asyncio.to_thread(delete_message, chat_id, msg_id)
+        return
+
+    if error:
+        summary = f"סריקה נכשלה — {error[:200]}"
+    else:
+        summary = "סריקה הושלמה — ללא לידים חדשים"
+
+    prefix, entities = _build_scan_emoji_entities("scan_end")
+    await asyncio.to_thread(
+        edit_message_text, chat_id, msg_id, f"{prefix}{summary}",
+        entities=entities,
+    )
+
 
 def _load_block_keywords() -> list[str]:
     """טוען מילים חסומות מ-DB עם fallback למשתנה סביבה.
@@ -716,7 +863,10 @@ async def _telegram_control_loop(
                     _back_to_menu_button(),
                 )
                 return
+            # שומרים chat_id — run_cycle ישלח אנימציית "סורק..."
+            shared_state["scan_triggered_by"] = chat_id_int
             scan_now_event.set()
+            # עורכים את הודעת התפריט ל-"מתזמן..." (האנימציה תהיה בהודעה חדשה)
             await asyncio.to_thread(
                 edit_message_text, chat_id_int, message_id,
                 "מתזמן סריקה עכשיו.",
@@ -792,7 +942,7 @@ async def _telegram_control_loop(
                 {"command": "keywords", "description": "מילות מפתח"},
                 {"command": "force_send", "description": "מילות 'שלח תמיד' (עוקף AI)"},
                 {"command": "max_age", "description": "סינון פוסטים ישנים (לפי ימים)"},
-                {"command": "stickers", "description": "סטיקרים מונפשים — הגדרה וצפייה"},
+                {"command": "emojis", "description": "אימוג'י מותאם — הגדרה וצפייה"},
             ]},
             timeout=10,
         )
@@ -839,40 +989,51 @@ async def _telegram_control_loop(
                 if chat_id_int not in allowed_chat_ids:
                     continue
 
-                # ── טיפול בסטיקר נכנס — חילוץ file_id או הקצאה לטריגר ──
-                sticker_obj = msg.get("sticker")
-                if sticker_obj:
-                    file_id = sticker_obj.get("file_id", "")
-                    if not file_id:
-                        continue
-                    # אם ממתינים לסטיקר מהמשתמש הזה (אחרי /set_sticker)
-                    pending_trigger = _pending_sticker_set.pop(chat_id_int, None)
-                    if pending_trigger:
-                        ok, result_msg = set_sticker(pending_trigger, file_id)
+                # ── חילוץ custom emoji מהודעה נכנסת ──────────────
+                # אם ממתינים לאימוג'י (אחרי /set_emoji) ובהודעה יש entity
+                # מסוג custom_emoji — מחלצים את ה-ID ומקצים לטריגר.
+                # אם לא ממתינים — מציגים את ה-ID למשתמש.
+                # חשוב: Telegram שולח offset/length ב-UTF-16 code units,
+                # אבל Python strings הם Unicode code points — צריך המרה.
+                _entities = msg.get("entities") or []
+                _ce = [e for e in _entities if e.get("type") == "custom_emoji"]
+                if _ce and _pending_emoji_set.get(chat_id_int):
+                    ent = _ce[0]
+                    ce_id = ent.get("custom_emoji_id", "")
+                    if ce_id:
+                        msg_text = msg.get("text") or ""
+                        emoji_char = _utf16_slice(msg_text, ent["offset"], ent["length"]) or "\u2b50"
+                        pending_trigger = _pending_emoji_set.pop(chat_id_int)
+                        ok, result_msg = set_emoji(pending_trigger, ce_id, emoji_char)
                         await asyncio.to_thread(
                             send_message, result_msg,
                             chat_id=chat_id_int, disable_web_page_preview=True,
                         )
-                    else:
-                        # לא ממתינים — מחזירים את ה-file_id למשתמש לשימוש עתידי
-                        is_animated = sticker_obj.get("is_animated", False)
-                        is_video = sticker_obj.get("is_video", False)
-                        sticker_type = "מונפש" if is_animated else ("וידאו" if is_video else "רגיל")
-                        await asyncio.to_thread(
-                            send_message,
-                            f"סטיקר {sticker_type} התקבל.\n"
-                            f"file\\_id:\n`{file_id}`\n\n"
-                            "כדי להקצות לטריגר, שלח:\n"
-                            "/set\\_sticker <trigger>\n"
-                            "ואז שלח את הסטיקר.",
-                            chat_id=chat_id_int,
-                            parse_mode="Markdown",
-                        )
-                    continue
+                        continue
 
                 text = (msg.get("text") or "").strip()
                 if not text:
                     continue
+
+                # אם ההודעה מכילה custom emoji ולא ממתינים — מציגים מזהה
+                # חשוב: offset/length מתייחסים לטקסט המקורי (לפני strip)
+                if _ce and not text.startswith("/"):
+                    ent = _ce[0]
+                    ce_id = ent.get("custom_emoji_id", "")
+                    if ce_id:
+                        raw_text = msg.get("text") or ""
+                        emoji_char = _utf16_slice(raw_text, ent["offset"], ent["length"]) or "?"
+                        await asyncio.to_thread(
+                            send_message,
+                            f"אימוג'י מותאם התקבל: {emoji_char}\n"
+                            f"custom\\_emoji\\_id:\n`{ce_id}`\n\n"
+                            "כדי להקצות לטריגר, שלח:\n"
+                            "/set\\_emoji <trigger>\n"
+                            "ואז שלח הודעה עם האימוג'י.",
+                            chat_id=chat_id_int,
+                            parse_mode="Markdown",
+                        )
+                        continue
 
                 first = text.split()[0].strip()
                 cmd = first.split("@", 1)[0].lower()
@@ -920,24 +1081,23 @@ async def _telegram_control_loop(
                         )
                         continue
 
-                    scan_now_event.set()
+                    # פידבק מיידי *לפני* הפעלת האירוע — כדי שההודעה תופיע לפני האימוג'י
                     await asyncio.to_thread(
-                        send_message,
-                        "מתזמן סריקה עכשיו.",
-                        chat_id=chat_id_int,
-                        disable_web_page_preview=True,
+                        send_message, "מתזמן סריקה עכשיו.",
+                        chat_id=chat_id_int, disable_web_page_preview=True,
                     )
+                    shared_state["scan_triggered_by"] = chat_id_int
+                    scan_now_event.set()
                     continue
 
                 if cmd in ("/scan_force",):
+                    await asyncio.to_thread(
+                        send_message, "מתזמן סריקה עכשיו (דילוג על שעות שקטות).",
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    shared_state["scan_triggered_by"] = chat_id_int
                     scan_force_event.set()
                     scan_now_event.set()
-                    await asyncio.to_thread(
-                        send_message,
-                        "מתזמן סריקה עכשיו (forced).",
-                        chat_id=chat_id_int,
-                        disable_web_page_preview=True,
-                    )
                     continue
 
                 # ── ניהול קבוצות דינמי ──────────────────────────
@@ -1166,73 +1326,74 @@ async def _telegram_control_loop(
                     )
                     continue
 
-                # ── סטיקרים מונפשים ──────────────────────────
-                if cmd in ("/stickers",):
-                    stickers = _load_stickers()
-                    if stickers:
+                # ── אימוג'י מותאם (Custom Emoji) ──────────────
+                if cmd in ("/emojis",):
+                    emojis = _load_emojis()
+                    if emojis:
                         lines = []
-                        for trigger, fid in stickers.items():
-                            label = _STICKER_TRIGGER_LABELS.get(trigger, trigger)
-                            lines.append(f"- {label} (`{trigger}`): `{fid[:20]}...`")
-                        stickers_text = "\n".join(lines)
+                        for trigger, data in emojis.items():
+                            label = _EMOJI_TRIGGER_LABELS.get(trigger, trigger)
+                            ec = data.get("emoji", "\u2b50")
+                            lines.append(f"- {label} (`{trigger}`): {ec} `{data['id'][:20]}...`")
+                        emojis_text = "\n".join(lines)
                     else:
-                        stickers_text = "(אין סטיקרים מוגדרים)"
+                        emojis_text = "(אין אימוג'י מוגדרים)"
                     triggers_list = "\n".join(
-                        f"- `{k}` — {v}" for k, v in _STICKER_TRIGGER_LABELS.items()
+                        f"- `{k}` — {v}" for k, v in _EMOJI_TRIGGER_LABELS.items()
                     )
                     await asyncio.to_thread(
                         send_message,
-                        f"סטיקרים מוגדרים:\n{stickers_text}\n\n"
+                        f"אימוג'י מוגדרים:\n{emojis_text}\n\n"
                         f"טריגרים זמינים:\n{triggers_list}\n\n"
                         "פקודות:\n"
-                        "/set\\_sticker <trigger> — שלח ואז שלח סטיקר\n"
-                        "/remove\\_sticker <trigger> — הסר סטיקר מטריגר",
+                        "/set\\_emoji <trigger> — שלח ואז שלח הודעה עם אימוג'י\n"
+                        "/remove\\_emoji <trigger> — הסר אימוג'י מטריגר",
                         chat_id=chat_id_int,
                         parse_mode="Markdown",
                     )
                     continue
 
-                if cmd in ("/set_sticker",):
+                if cmd in ("/set_emoji",):
                     parts = text.split(maxsplit=1)
                     if len(parts) < 2 or not parts[1].strip():
                         triggers_list = "\n".join(
-                            f"- `{k}` — {v}" for k, v in _STICKER_TRIGGER_LABELS.items()
+                            f"- `{k}` — {v}" for k, v in _EMOJI_TRIGGER_LABELS.items()
                         )
                         await asyncio.to_thread(
                             send_message,
-                            f"שימוש: /set\\_sticker <trigger>\nואז שלח את הסטיקר.\n\n"
+                            f"שימוש: /set\\_emoji <trigger>\nואז שלח הודעה עם אימוג'י מותאם.\n\n"
                             f"טריגרים זמינים:\n{triggers_list}",
                             chat_id=chat_id_int,
                             parse_mode="Markdown",
                         )
                         continue
                     trigger = parts[1].strip().lower()
-                    if trigger not in _STICKER_TRIGGER_LABELS:
-                        valid = ", ".join(_STICKER_TRIGGER_LABELS.keys())
+                    if trigger not in _EMOJI_TRIGGER_LABELS:
+                        valid = ", ".join(_EMOJI_TRIGGER_LABELS.keys())
                         await asyncio.to_thread(
                             send_message, f"טריגר לא מוכר: {trigger}\nטריגרים זמינים: {valid}",
                             chat_id=chat_id_int, disable_web_page_preview=True,
                         )
                         continue
-                    _pending_sticker_set[chat_id_int] = trigger
-                    label = _STICKER_TRIGGER_LABELS[trigger]
+                    _pending_emoji_set[chat_id_int] = trigger
+                    label = _EMOJI_TRIGGER_LABELS[trigger]
                     await asyncio.to_thread(
                         send_message,
-                        f"ממתין לסטיקר עבור טריגר: {label} ({trigger})\nשלח את הסטיקר עכשיו.",
+                        f"ממתין לאימוג'י עבור טריגר: {label} ({trigger})\nשלח הודעה עם אימוג'י מותאם עכשיו.",
                         chat_id=chat_id_int, disable_web_page_preview=True,
                     )
                     continue
 
-                if cmd in ("/remove_sticker",):
+                if cmd in ("/remove_emoji",):
                     parts = text.split(maxsplit=1)
                     if len(parts) < 2 or not parts[1].strip():
                         await asyncio.to_thread(
-                            send_message, "שימוש: /remove\\_sticker <trigger>",
+                            send_message, "שימוש: /remove\\_emoji <trigger>",
                             chat_id=chat_id_int, parse_mode="Markdown",
                         )
                         continue
                     trigger = parts[1].strip().lower()
-                    ok, result_msg = remove_sticker(trigger)
+                    ok, result_msg = remove_emoji(trigger)
                     await asyncio.to_thread(
                         send_message, result_msg,
                         chat_id=chat_id_int, disable_web_page_preview=True,
@@ -1419,14 +1580,28 @@ def _on_group_scraped(group_name: str, group_index: int, total_groups: int, post
 async def run_cycle():
     _reset_scan_progress()
 
-    # סטיקר תחילת סריקה
-    await _send_trigger_sticker("scan_start")
+    # בדיקה אם הסריקה הופעלה ידנית ע"י הלקוח
+    triggered_by = _scan_anim_state.pop("triggered_by", None)
+    user_triggered = triggered_by is not None
 
-    # try/finally — מבטיח שסטיקר scan_end יישלח גם בשגיאה (סימטריה עם scan_start)
+    if user_triggered:
+        # סריקה ידנית — שולח הודעה ומפעיל אנימציה (await — ה-state מוגדר לפני הסריקה)
+        anim_task = await _start_scan_animation(triggered_by)
+        _scan_anim_state["task"] = anim_task
+    else:
+        # סריקה אוטומטית — רק אימוג'י (אם מוגדר)
+        await _send_trigger_emoji("scan_start")
+
     try:
         await _run_cycle_inner()
     finally:
-        await _send_trigger_sticker("scan_end")
+        if user_triggered:
+            # עוצר אנימציה ועורך לסיכום
+            leads = scan_progress.get("leads_sent", 0)
+            error = scan_progress.get("error", "")
+            await _stop_scan_animation(leads, error)
+        else:
+            await _send_trigger_emoji("scan_end")
 
 
 async def _run_cycle_inner():
@@ -1534,7 +1709,7 @@ async def _run_cycle_inner():
                     log.debug(f"דילוג על force_send — תוכן זהה כבר נשלח (content_hash)")
                     continue
                 reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
-                await _send_trigger_sticker("lead_found")
+                await _send_trigger_emoji("lead_found")
                 send_lead(
                     group_name=post["group"],
                     content=post["content"],
@@ -1604,7 +1779,7 @@ async def _run_cycle_inner():
             for post, result in zip(to_classify, results):
                 if result.get("relevant"):
                     reason = result.get("reason", "")
-                    await _send_trigger_sticker("lead_found")
+                    await _send_trigger_emoji("lead_found")
                     send_lead(
                         group_name=post["group"],
                         content=post["content"],
@@ -1663,6 +1838,10 @@ async def main():
         async with scan_lock:
             shared_state["scan_in_progress"] = True
             shared_state["last_scan_started"] = _now_local()
+            # העברת chat_id מהלקוח שהפעיל סריקה ידנית (אם יש)
+            triggered_by = shared_state.pop("scan_triggered_by", None)
+            if triggered_by is not None:
+                _scan_anim_state["triggered_by"] = triggered_by
             try:
                 await run_cycle()
             finally:

@@ -48,6 +48,37 @@ def send_message(
         log.error(f"שגיאה בשליחה לטלגרם: {e}", exc_info=True)
         return False
 
+
+def send_message_returning_id(
+    text: str,
+    *,
+    chat_id: str | int | None = None,
+    entities: list[dict] | None = None,
+) -> int | None:
+    """שולח הודעה ומחזיר message_id (או None אם נכשל).
+
+    entities — רשימת MessageEntity (למשל custom_emoji).
+    """
+    if not BOT_TOKEN or not (chat_id or CHAT_ID):
+        return None
+    target_chat = str(chat_id or CHAT_ID)
+    payload: dict = {"chat_id": target_chat, "text": text}
+    if entities:
+        payload["entities"] = entities
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json=payload,
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return response.json()["result"]["message_id"]
+        log.error(f"send_message_returning_id נכשל: {response.status_code}: {response.text}")
+        return None
+    except Exception as e:
+        log.error(f"שגיאה ב-send_message_returning_id: {e}", exc_info=True)
+        return None
+
 def clean_post_content(text: str) -> str:
     """מנקה תוכן פוסט מ-Unicode פרטי של פייסבוק ורעשי UI."""
     # הסרת תגיות HTML שדלפו (כולל <img src="data:..."> עם base64)
@@ -129,6 +160,7 @@ def edit_message_text(
     buttons: list[list[dict]] | None = None,
     *,
     parse_mode: str | None = None,
+    entities: list[dict] | None = None,
 ) -> bool:
     """עורך הודעה קיימת (טקסט + כפתורים אופציונליים)."""
     if not BOT_TOKEN:
@@ -143,6 +175,8 @@ def edit_message_text(
         payload["reply_markup"] = {"inline_keyboard": buttons}
     if parse_mode:
         payload["parse_mode"] = parse_mode
+    if entities is not None:
+        payload["entities"] = entities
 
     try:
         response = requests.post(
@@ -156,6 +190,25 @@ def edit_message_text(
         return False
     except Exception as e:
         log.error(f"שגיאה בעריכת הודעה: {e}", exc_info=True)
+        return False
+
+
+def delete_message(chat_id: int | str, message_id: int) -> bool:
+    """מוחק הודעה בטלגרם."""
+    if not BOT_TOKEN:
+        return False
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage",
+            json={"chat_id": str(chat_id), "message_id": message_id},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return True
+        log.error(f"deleteMessage נכשל: {response.status_code}: {response.text}")
+        return False
+    except Exception as e:
+        log.error(f"שגיאה במחיקת הודעה: {e}", exc_info=True)
         return False
 
 
@@ -213,31 +266,49 @@ def send_document(
         return False
 
 
-def send_sticker(
-    sticker_file_id: str,
+def send_custom_emoji(
+    custom_emoji_id: str,
+    emoji_placeholder: str = "\u2b50",
     *,
     chat_id: str | int | None = None,
 ) -> bool:
-    """שולח סטיקר לטלגרם לפי file_id."""
+    """שולח אימוג'י מותאם (Custom Emoji) כהודעה בטלגרם.
+
+    custom_emoji_id — מזהה האימוג'י (נשלף מ-entities של הודעה נכנסת).
+    emoji_placeholder — אימוג'י רגיל שמשמש כ-fallback לקליינטים שלא תומכים.
+    """
     if not BOT_TOKEN or not (chat_id or CHAT_ID):
         log.error("חסרים TELEGRAM_BOT_TOKEN או TELEGRAM_CHAT_ID")
         return False
 
     target_chat = str(chat_id or CHAT_ID)
 
+    # Telegram Bot API מודד offset/length ב-UTF-16 code units, לא Unicode code points.
+    # אימוג'י מחוץ ל-BMP (כמו 😎 U+1F60E) דורשים surrogate pair = 2 יחידות UTF-16.
+    utf16_len = len(emoji_placeholder.encode("utf-16-le")) // 2
+
     try:
         response = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker",
-            json={"chat_id": target_chat, "sticker": sticker_file_id},
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": target_chat,
+                "text": emoji_placeholder,
+                "entities": [{
+                    "type": "custom_emoji",
+                    "offset": 0,
+                    "length": utf16_len,
+                    "custom_emoji_id": custom_emoji_id,
+                }],
+            },
             timeout=10,
         )
         if response.status_code == 200:
-            log.debug(f"סטיקר נשלח בהצלחה (chat_id={target_chat})")
+            log.debug(f"אימוג'י מותאם נשלח בהצלחה (chat_id={target_chat})")
             return True
-        log.error(f"sendSticker נכשל: {response.status_code}: {response.text}")
+        log.error(f"sendMessage (custom emoji) נכשל: {response.status_code}: {response.text}")
         return False
     except Exception as e:
-        log.error(f"שגיאה בשליחת סטיקר: {e}", exc_info=True)
+        log.error(f"שגיאה בשליחת אימוג'י מותאם: {e}", exc_info=True)
         return False
 
 
