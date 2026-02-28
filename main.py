@@ -873,11 +873,13 @@ async def _telegram_control_loop(
                     continue
 
                 # אם ההודעה מכילה custom emoji ולא ממתינים — מציגים מזהה
+                # חשוב: offset/length מתייחסים לטקסט המקורי (לפני strip)
                 if _ce and not text.startswith("/"):
                     ent = _ce[0]
                     ce_id = ent.get("custom_emoji_id", "")
                     if ce_id:
-                        emoji_char = _utf16_slice(text, ent["offset"], ent["length"]) or "?"
+                        raw_text = msg.get("text") or ""
+                        emoji_char = _utf16_slice(raw_text, ent["offset"], ent["length"]) or "?"
                         await asyncio.to_thread(
                             send_message,
                             f"אימוג'י מותאם התקבל: {emoji_char}\n"
