@@ -292,6 +292,33 @@ class TestSendErrorAlert:
         result = send_error_alert("error")
         assert result is False
 
+    @patch("notifier.send_message")
+    def test_sends_to_error_chat_id_when_set(self, mock_send):
+        """כש-ERROR_CHAT_ID מוגדר, שגיאות נשלחות למפתח."""
+        mock_send.return_value = True
+        import notifier
+        original = notifier.ERROR_CHAT_ID
+        try:
+            notifier.ERROR_CHAT_ID = "999999"
+            send_error_alert("test error")
+            assert mock_send.call_args[1]["chat_id"] == "999999"
+        finally:
+            notifier.ERROR_CHAT_ID = original
+
+    @patch("notifier.send_message")
+    def test_falls_back_to_default_when_error_chat_id_unset(self, mock_send):
+        """כש-ERROR_CHAT_ID לא מוגדר, שגיאות נשלחות ל-CHAT_ID הרגיל."""
+        mock_send.return_value = True
+        import notifier
+        original = notifier.ERROR_CHAT_ID
+        try:
+            notifier.ERROR_CHAT_ID = None
+            send_error_alert("test error")
+            # chat_id=None → send_message ישתמש ב-CHAT_ID הרגיל
+            assert mock_send.call_args[1]["chat_id"] is None
+        finally:
+            notifier.ERROR_CHAT_ID = original
+
 
 # ──────────────────────────────────────────────────────────────
 # 4c. send_document
