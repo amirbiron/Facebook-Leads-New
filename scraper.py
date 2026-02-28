@@ -122,12 +122,12 @@ _NOISE_WORDS = frozenset({
     'like', 'comment', 'share', 'send message', 'see more', 'see less',
     'see translation', 'write a comment...', 'write a comment…',
     'suggested for you', 'sponsored', 'all comments',
-    'most relevant', 'newest', 'all comments',
+    'most relevant', 'newest',
     'הגב', 'שתף', 'שתפ', 'אהבתי', 'קרא עוד', 'ראה עוד', 'הצג עוד',
     'ראה תרגום', 'כתוב תגובה...', 'כתוב תגובה…', 'כתוב תגובה',
     'שלח הודעה', 'מומלץ', 'מומלצת', 'מומלצים', 'ממומן',
     'כל התגובות', 'הגב/י', 'שתף/י',
-    'עוד', '... עוד', 'הרלוונטיות ביותר', 'החדשות ביותר',
+    'עוד', '... עוד', '… עוד', 'הרלוונטיות ביותר', 'החדשות ביותר',
 })
 
 # שורות דינמיות נוספות שמשתנות בין סריקות ולא נתפסות ע"י _ENGAGEMENT_LINE_RE.
