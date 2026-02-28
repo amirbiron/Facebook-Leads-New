@@ -90,9 +90,20 @@ def create_app() -> Flask:
     @require_auth
     def get_settings():
         from classifier import _CLASSIFICATION_CRITERIA_DEFAULT
+        import hashlib
 
         criteria_db = get_config("classification_criteria")
         is_default = not bool(criteria_db.strip()) if criteria_db else True
+
+        # בדיקה אם ברירת המחדל השתנתה מאז שהמשתמש שמר פרומפט מותאם
+        criteria_default_changed = False
+        if not is_default:
+            saved_hash = get_config("criteria_default_hash_at_save")
+            current_hash = hashlib.md5(
+                _CLASSIFICATION_CRITERIA_DEFAULT.strip().encode()
+            ).hexdigest()
+            if not saved_hash or saved_hash != current_hash:
+                criteria_default_changed = True
 
         # quiet_hours — ערך ריק ב-DB = המשתמש ביטל דרך הפאנל → לא לחזור ל-env
         qh_db = get_config("quiet_hours", _NOT_SET)
@@ -116,6 +127,7 @@ def create_app() -> Flask:
             "classification_criteria": criteria_db or _CLASSIFICATION_CRITERIA_DEFAULT,
             "classification_criteria_default": _CLASSIFICATION_CRITERIA_DEFAULT,
             "criteria_is_default": is_default,
+            "criteria_default_changed": criteria_default_changed,
             "quiet_hours": quiet_hours,
             "interval_minutes": interval,
             "max_post_age_days": max_post_age_days,
@@ -130,6 +142,21 @@ def create_app() -> Flask:
         for key in allowed:
             if key in data:
                 set_config(key, str(data[key]).strip())
+
+        # שמירת hash של ברירת המחדל בזמן שמירת פרומפט מותאם
+        if "classification_criteria" in data:
+            import hashlib
+            val = str(data["classification_criteria"]).strip()
+            if val:
+                from classifier import _CLASSIFICATION_CRITERIA_DEFAULT
+                h = hashlib.md5(
+                    _CLASSIFICATION_CRITERIA_DEFAULT.strip().encode()
+                ).hexdigest()
+                set_config("criteria_default_hash_at_save", h)
+            else:
+                # איפוס לברירת מחדל — מנקים את ה-hash
+                set_config("criteria_default_hash_at_save", "")
+
         return jsonify({"ok": True})
 
     # ── קבוצות ────────────────────────────────────────────────
