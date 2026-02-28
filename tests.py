@@ -3497,7 +3497,7 @@ class TestStopScanAnimation:
         _scan_anim_state["message_id"] = 456
         _scan_anim_state["is_emoji"] = True
         with patch("notifier.delete_message") as mock_del, \
-             patch("notifier.send_message") as mock_send:
+             patch("notifier.send_message_returning_id") as mock_send:
             await _stop_scan_animation(leads_found=0)
             mock_del.assert_called_once_with(123, 456)
             mock_send.assert_called_once()
@@ -3512,7 +3512,7 @@ class TestStopScanAnimation:
         _scan_anim_state["message_id"] = 456
         _scan_anim_state["is_emoji"] = True
         with patch("notifier.delete_message") as mock_del, \
-             patch("notifier.send_message") as mock_send:
+             patch("notifier.send_message_returning_id") as mock_send:
             await _stop_scan_animation(leads_found=0, error="timeout")
             mock_del.assert_called_once_with(123, 456)
             mock_send.assert_called_once()

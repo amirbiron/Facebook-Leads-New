@@ -280,7 +280,7 @@ async def _stop_scan_animation(leads_found: int, error: str = ""):
     - אימוג'י מונפש (scan_start) — תמיד נמחק בסיום.
     - הודעת "סורק..." — נמחקת אם יש לידים, נערכת לסיכום אם אין/שגיאה.
     """
-    from notifier import edit_message_text, delete_message, send_message
+    from notifier import edit_message_text, delete_message, send_message_returning_id
 
     task = _scan_anim_state.pop("task", None)
     chat_id = _scan_anim_state.pop("chat_id", None)
@@ -309,7 +309,7 @@ async def _stop_scan_animation(leads_found: int, error: str = ""):
             return
         prefix, entities = _build_scan_emoji_entities("scan_end")
         await asyncio.to_thread(
-            send_message, f"{prefix}{summary}",
+            send_message_returning_id, f"{prefix}{summary}",
             chat_id=chat_id, entities=entities,
         )
         return
@@ -1869,6 +1869,7 @@ async def main():
                 if not force and quiet and _is_quiet_now(_now_local(), quiet):
                     # Should not happen (we don't schedule /scan during quiet hours),
                     # but guard anyway.
+                    shared_state.pop("scan_triggered_by", None)
                     log.info("בקשת סריקה נדחתה בגלל שעות שקטות")
                 else:
                     log.info(f"מריץ סריקה לפי פקודה (force={force})")
