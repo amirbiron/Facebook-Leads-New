@@ -227,38 +227,54 @@ def _build_scan_emoji_entities() -> tuple[str, list[dict] | None]:
 
 
 async def _start_scan_animation(chat_id: int):
-    """שולח הודעת 'סורק.' ומתחיל אנימציית נקודות.
+    """שולח הודעת סטטוס סריקה.
 
-    שומר את ה-state ב-_scan_anim_state כדי שאפשר יהיה לעצור ולערוך בסיום.
+    אם יש אימוג'י מותאם ל-scan_start — שולח רק אותו (בלי נקודות).
+    אחרת — שולח "סורק." עם אנימציית נקודות.
+    שומר את ה-state ב-_scan_anim_state כדי שאפשר יהיה לערוך בסיום.
     """
     from notifier import send_message_returning_id, edit_message_text
 
     prefix, entities = _build_scan_emoji_entities()
-    text = f"{prefix}סורק."
+    has_emoji = entities is not None
+
+    if has_emoji:
+        # יש אימוג'י מונפש — שולח רק אותו, בלי אנימציית נקודות
+        text = prefix.rstrip()  # האימוג'י בלבד (ללא רווח נגרר)
+    else:
+        text = "סורק."
+
     msg_id = await asyncio.to_thread(
         send_message_returning_id, text, chat_id=chat_id, entities=entities,
     )
     if not msg_id:
-        log.debug("לא הצלחתי לשלוח הודעת אנימציית סריקה")
+        log.debug("לא הצלחתי לשלוח הודעת סטטוס סריקה")
         return
 
     _scan_anim_state["chat_id"] = chat_id
     _scan_anim_state["message_id"] = msg_id
 
-    # לולאת אנימציה — רצה עד שהטאסק מבוטל
+    if has_emoji:
+        # אין אנימציה — האימוג'י לבדו מספיק
+        return
+
+    # לולאת אנימציית נקודות — רצה עד שהטאסק מבוטל
     i = 1
     while True:
         await asyncio.sleep(_SCAN_ANIM_INTERVAL)
         dot = _SCAN_DOTS[i % 3]
         await asyncio.to_thread(
-            edit_message_text, chat_id, msg_id, f"{prefix}סורק{dot}",
-            entities=entities,
+            edit_message_text, chat_id, msg_id, f"סורק{dot}",
         )
         i += 1
 
 
 async def _stop_scan_animation(leads_found: int, error: str = ""):
-    """עוצר את האנימציה ועורך את ההודעה לסיכום סריקה."""
+    """עוצר את האנימציה ועורך את ההודעה לסיכום סריקה.
+
+    סיכום מצומצם — כשיש לידים הם כבר נשלחו כהודעות נפרדות,
+    אז מספיק "סריקה הושלמה" בלי ספירה.
+    """
     from notifier import edit_message_text
 
     task = _scan_anim_state.pop("task", None)
@@ -275,13 +291,13 @@ async def _stop_scan_animation(leads_found: int, error: str = ""):
     if not chat_id or not msg_id:
         return
 
-    # בניית סיכום
+    # בניית סיכום — כשיש לידים לא צריך ספירה (הם כבר נשלחו)
     if error:
         summary = f"סריקה נכשלה — {error[:200]}"
-    elif leads_found > 0:
-        summary = f"סריקה הושלמה — {leads_found} לידים חדשים"
-    else:
+    elif leads_found == 0:
         summary = "סריקה הושלמה — ללא לידים חדשים"
+    else:
+        summary = "סריקה הושלמה"
 
     # אימוג'י scan_end (אם מוגדר)
     end_data = get_emoji("scan_end")

@@ -3382,7 +3382,8 @@ class TestStopScanAnimation:
     """בדיקות ל-_stop_scan_animation — עצירת אנימציה ועריכת הודעה לסיכום."""
 
     @pytest.mark.asyncio
-    async def test_edits_message_with_leads(self, tmp_db):
+    async def test_edits_message_with_leads_no_count(self, tmp_db):
+        """כשיש לידים — סיכום קצר בלי ספירה (הלידים כבר נשלחו כהודעות)."""
         _scan_anim_state.clear()
         _scan_anim_state["chat_id"] = 123
         _scan_anim_state["message_id"] = 456
@@ -3391,8 +3392,10 @@ class TestStopScanAnimation:
             await _stop_scan_animation(leads_found=3)
             mock_edit.assert_called_once()
             text_arg = mock_edit.call_args[0][2]
-            assert "3 לידים" in text_arg
             assert "הושלמה" in text_arg
+            # לא צריך ספירה — הלידים כבר נשלחו
+            assert "3" not in text_arg
+            assert "לידים" not in text_arg
 
     @pytest.mark.asyncio
     async def test_edits_message_no_leads(self, tmp_db):
