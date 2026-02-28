@@ -10,7 +10,7 @@
 |-------|--------|
 | `scraper.py` | גלישה בפייסבוק עם Playwright (אתר מובייל) |
 | `main.py` | אורקסטרציה, לולאת טלגרם, שעות שקטות |
-| `classifier.py` | סיווג פוסטים עם OpenAI gpt-5-nano — תומך סיווג באצ'ים (`classify_batch`) + auto-fallback למודל הבא |
+| `classifier.py` | סיווג פוסטים עם OpenAI gpt-4.1-mini — תומך סיווג באצ'ים (`classify_batch`) + auto-fallback למודל הבא |
 | `notifier.py` | שליחת הודעות טלגרם |
 | `database.py` | SQLite — seen_posts, sent_leads, groups, keywords, _config |
 | `logger.py` | לוגר |
@@ -94,7 +94,7 @@
 - **חילוץ URL** — 7 אסטרטגיות (סלקטורים ישירים → סריקת לינקים → timestamp → data-attributes → element ID → DOM climbing → page-level scan). Fallback ל-URL קבוצה אם הכל נכשל. **שים לב:** `m.facebook.com` לא תמיד מכיל לינקים לפוסטים בודדים — ה-fallback הוא התנהגות צפויה, לא באג (ראו באג #11).
 
 ## סיווג (classifier.py)
-- משתמש ב-OpenAI Chat Completions API (מודל `gpt-5-nano`). משתנה סביבה: `OPENAI_API_KEY`.
+- משתמש ב-OpenAI Chat Completions API (מודל `gpt-4.1-mini`). משתנה סביבה: `OPENAI_API_KEY`.
 - `classify_post()` — סיווג פוסט בודד (fallback).
 - `classify_batch()` — סיווג מספר פוסטים בבקשה אחת (ברירת מחדל: 5 לבאצ').
 - `_chat_completion()` — פונקציית עזר לקריאת API עם auto-fallback למודל הבא אם הנוכחי deprecated (404/410).
