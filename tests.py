@@ -703,6 +703,19 @@ class TestStableTextForHash:
         # "יומי" (daily) לא נפגע
         assert "יומי" in _stable_text_for_hash("שכר יומי 500")
 
+    def test_time_no_cross_line_match(self):
+        """מספר בסוף שורה + יחידת זמן בתחילת שורה הבאה — לא נמחקים."""
+        # "מחיר 50\nשעות עבודה" — ה-50 ו-"שעות" לא צריכים להתאים
+        result = _stable_text_for_hash("מחיר 50\nשעות עבודה")
+        assert "50" in result
+        assert "שעות עבודה" in result
+
+    def test_years_hebrew_stripped(self):
+        """שנים/שנה מוסרים — כמו שאר יחידות הזמן."""
+        t1 = "משה כהן 2 שנים פוסט חשוב"
+        t2 = "משה כהן 5 שנים פוסט חשוב"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
     def test_supplementary_pua_chars_removed(self):
         """אייקוני פרטיות של פייסבוק (supplementary PUA) מוסרים מה-hash."""
         # Supplementary PUA-A (U+F0000-U+FFFFD) and PUA-B (U+100000-U+10FFFD)
