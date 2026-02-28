@@ -1921,7 +1921,9 @@
 
         container.innerHTML = '';
         groups.forEach(group => {
-          const kws = groupKeywords[group.url] || [];
+          // נרמול URL — מסיר slash בסוף כדי להתאים למפתחות ב-groupKeywords
+          const normalizedUrl = group.url.replace(/\/+$/, '');
+          const kws = groupKeywords[normalizedUrl] || groupKeywords[group.url] || [];
           const acc = buildGroupAccordion(group, kws);
           container.appendChild(acc);
         });

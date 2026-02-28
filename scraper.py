@@ -204,9 +204,9 @@ def _extract_name_from_title(page_title: str) -> str | None:
 
 # שימוש ב-m.facebook.com — אתר מובייל קל בהרבה בזיכרון
 DEFAULT_GROUPS = [
-    {"name": "הכול על אוטומציות בינה מלאכותית AI - IL ישראל", "url": "https://m.facebook.com/groups/640894321475593/"},
+    {"name": "הכול על אוטומציות בינה מלאכותית AI - IL ישראל", "url": "https://m.facebook.com/groups/640894321475593"},
     {"name": "דרושים מתכנתים ואנשי פיתוח", "url": "https://m.facebook.com/groups/1920854911477422"},
-    {"name": "AI ISRAEL – בינה מלאכותית כלים ושימושים", "url": "https://m.facebook.com/groups/1934524236895744/"},
+    {"name": "AI ISRAEL – בינה מלאכותית כלים ושימושים", "url": "https://m.facebook.com/groups/1934524236895744"},
     {"name": "בינה מלאכותית AI ISRAEL", "url": "https://m.facebook.com/groups/2055437551629206"},
     {"name": "Vibe Coding - Israel", "url": "https://m.facebook.com/groups/1684554685829832"},
 ]
