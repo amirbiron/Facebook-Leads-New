@@ -213,6 +213,37 @@ def send_document(
         return False
 
 
+def send_sticker(
+    file_id: str,
+    *,
+    chat_id: str | int | None = None,
+) -> bool:
+    """שולח סטיקר לטלגרם דרך sendSticker.
+
+    file_id — מזהה הסטיקר בשרתי טלגרם.
+    """
+    if not BOT_TOKEN or not (chat_id or CHAT_ID):
+        log.error("חסרים TELEGRAM_BOT_TOKEN או TELEGRAM_CHAT_ID")
+        return False
+
+    target_chat = str(chat_id or CHAT_ID)
+
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker",
+            json={"chat_id": target_chat, "sticker": file_id},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            log.debug(f"סטיקר נשלח לטלגרם (chat_id={target_chat})")
+            return True
+        log.error(f"sendSticker נכשל: {response.status_code}: {response.text}")
+        return False
+    except Exception as e:
+        log.error(f"שגיאה בשליחת סטיקר לטלגרם: {e}", exc_info=True)
+        return False
+
+
 def send_error_alert(error: str) -> bool:
     """שולח שגיאה קריטית כהודעת טלגרם (חתוך ל-500 תווים).
     אם ERROR_CHAT_ID מוגדר — שולח למפתח. אחרת — ל-CHAT_ID הרגיל.

@@ -15,6 +15,8 @@ from database import (
     add_keyword, remove_keyword, get_db_keywords, ensure_keywords_migrated,
     get_config, set_config,
     get_usage_stats, get_daily_usage_stats, get_usage_by_model,
+    add_sticker, remove_sticker, rename_sticker, get_stickers, get_sticker_by_name,
+    _next_sticker_name,
 )
 from logger import get_logger
 
@@ -563,6 +565,7 @@ async def _telegram_control_loop(
     from notifier import (
         send_message, send_message_with_buttons,
         edit_message_text, answer_callback_query,
+        send_sticker as send_sticker_tg,
     )
     import requests
     import json
@@ -717,6 +720,7 @@ async def _telegram_control_loop(
                 {"command": "keywords", "description": "מילות מפתח"},
                 {"command": "force_send", "description": "מילות 'שלח תמיד' (עוקף AI)"},
                 {"command": "max_age", "description": "סינון פוסטים ישנים (לפי ימים)"},
+                {"command": "stickers", "description": "סטיקרים שמורים"},
             ]},
             timeout=10,
         )
@@ -761,6 +765,32 @@ async def _telegram_control_loop(
                     continue
 
                 if chat_id_int not in allowed_chat_ids:
+                    continue
+
+                # ── לכידת סטיקרים — שמירת file_id אוטומטית ──
+                sticker_obj = msg.get("sticker")
+                if sticker_obj:
+                    file_id = sticker_obj.get("file_id", "")
+                    if file_id:
+                        auto_name = _next_sticker_name()
+                        ok, result_msg = add_sticker(auto_name, file_id)
+                        if ok:
+                            is_animated = sticker_obj.get("is_animated", False)
+                            is_video = sticker_obj.get("is_video", False)
+                            stype = "מונפש" if is_animated else "וידאו" if is_video else "רגיל"
+                            reply = (
+                                f"סטיקר נקלט ({stype})!\n"
+                                f"שם: {auto_name}\n"
+                                f"file_id: {file_id[:40]}...\n\n"
+                                f"לשינוי שם: /rename_sticker {auto_name} <שם_חדש>\n"
+                                f"לשליחה: /send_sticker {auto_name}"
+                            )
+                        else:
+                            reply = result_msg
+                        await asyncio.to_thread(
+                            send_message, reply,
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
                     continue
 
                 text = (msg.get("text") or "").strip()
@@ -1056,6 +1086,73 @@ async def _telegram_control_loop(
                         _back_to_menu_button(),
                         chat_id=chat_id_int,
                         disable_web_page_preview=True,
+                    )
+                    continue
+
+                # ── ניהול סטיקרים ──────────────────────────────
+                if cmd in ("/stickers",):
+                    stickers = get_stickers()
+                    if stickers:
+                        lines = [f"{i}. {s['name']} — {s['file_id'][:30]}..." for i, s in enumerate(stickers, 1)]
+                        msg_text = f"סטיקרים שמורים ({len(stickers)}):\n\n" + "\n".join(lines)
+                        msg_text += "\n\nפקודות: /send_sticker <שם> | /remove_sticker <שם> | /rename_sticker <ישן> <חדש>"
+                    else:
+                        msg_text = "אין סטיקרים שמורים.\nשלח סטיקר לבוט כדי לשמור אותו."
+                    await asyncio.to_thread(
+                        send_message_with_buttons, msg_text,
+                        _back_to_menu_button(),
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/send_sticker",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /send_sticker <שם>",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    name = parts[1].strip()
+                    file_id = get_sticker_by_name(name)
+                    if not file_id:
+                        await asyncio.to_thread(
+                            send_message, f"סטיקר לא נמצא: {name}",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    await asyncio.to_thread(
+                        send_sticker_tg, file_id, chat_id=chat_id_int,
+                    )
+                    continue
+
+                if cmd in ("/remove_sticker",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /remove_sticker <שם>",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    ok, result_msg = remove_sticker(parts[1].strip())
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/rename_sticker",):
+                    parts = text.split(maxsplit=2)
+                    if len(parts) < 3 or not parts[1].strip() or not parts[2].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /rename_sticker <שם_ישן> <שם_חדש>",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    ok, result_msg = rename_sticker(parts[1].strip(), parts[2].strip())
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
                     )
                     continue
 

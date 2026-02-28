@@ -3006,3 +3006,145 @@ class TestParseDeveloperChatIds:
         assert _parse_developer_chat_ids() == {111, 222}
 
 
+# ──────────────────────────────────────────────────────────────
+# Stickers CRUD
+# ──────────────────────────────────────────────────────────────
+
+
+class TestStickersCRUD:
+    def test_add_sticker(self, tmp_db):
+        ok, msg = database.add_sticker("hello", "CAACAgIAAx0CXK...")
+        assert ok is True
+        assert "נשמר" in msg
+
+    def test_add_sticker_duplicate_name(self, tmp_db):
+        database.add_sticker("hello", "file_id_1")
+        ok, msg = database.add_sticker("hello", "file_id_2")
+        assert ok is False
+        assert "כבר קיים" in msg
+
+    def test_add_sticker_empty_name(self, tmp_db):
+        ok, msg = database.add_sticker("", "file_id_1")
+        assert ok is False
+
+    def test_add_sticker_empty_file_id(self, tmp_db):
+        ok, msg = database.add_sticker("hello", "")
+        assert ok is False
+
+    def test_remove_sticker(self, tmp_db):
+        database.add_sticker("hello", "file_id_1")
+        ok, msg = database.remove_sticker("hello")
+        assert ok is True
+        assert "הוסר" in msg
+
+    def test_remove_sticker_not_found(self, tmp_db):
+        ok, msg = database.remove_sticker("nonexistent")
+        assert ok is False
+        assert "לא נמצא" in msg
+
+    def test_rename_sticker(self, tmp_db):
+        database.add_sticker("old_name", "file_id_1")
+        ok, msg = database.rename_sticker("old_name", "new_name")
+        assert ok is True
+        assert "old_name" in msg and "new_name" in msg
+
+    def test_rename_sticker_not_found(self, tmp_db):
+        ok, msg = database.rename_sticker("nonexistent", "new_name")
+        assert ok is False
+        assert "לא נמצא" in msg
+
+    def test_rename_sticker_duplicate(self, tmp_db):
+        database.add_sticker("a", "file_id_1")
+        database.add_sticker("b", "file_id_2")
+        ok, msg = database.rename_sticker("b", "a")
+        assert ok is False
+        assert "כבר קיים" in msg
+
+    def test_rename_sticker_empty_name(self, tmp_db):
+        database.add_sticker("a", "file_id_1")
+        ok, msg = database.rename_sticker("a", "")
+        assert ok is False
+
+    def test_get_stickers_empty(self, tmp_db):
+        stickers = database.get_stickers()
+        assert stickers == []
+
+    def test_get_stickers(self, tmp_db):
+        database.add_sticker("a", "file_id_1")
+        database.add_sticker("b", "file_id_2")
+        stickers = database.get_stickers()
+        assert len(stickers) == 2
+        assert stickers[0]["name"] == "a"
+        assert stickers[0]["file_id"] == "file_id_1"
+        assert stickers[1]["name"] == "b"
+
+    def test_get_sticker_by_name(self, tmp_db):
+        database.add_sticker("hello", "CAACAgIAAx0CXK...")
+        file_id = database.get_sticker_by_name("hello")
+        assert file_id == "CAACAgIAAx0CXK..."
+
+    def test_get_sticker_by_name_not_found(self, tmp_db):
+        file_id = database.get_sticker_by_name("nonexistent")
+        assert file_id is None
+
+    def test_next_sticker_name(self, tmp_db):
+        name1 = database._next_sticker_name()
+        assert name1 == "sticker_1"
+        database.add_sticker("sticker_1", "file_id_1")
+        name2 = database._next_sticker_name()
+        assert name2 == "sticker_2"
+
+    def test_add_remove_add(self, tmp_db):
+        """הוספה, מחיקה, ושוב הוספה עם אותו שם."""
+        database.add_sticker("x", "file_id_1")
+        database.remove_sticker("x")
+        ok, msg = database.add_sticker("x", "file_id_2")
+        assert ok is True
+        assert database.get_sticker_by_name("x") == "file_id_2"
+
+
+# ──────────────────────────────────────────────────────────────
+# Notifier — send_sticker
+# ──────────────────────────────────────────────────────────────
+
+
+class TestSendSticker:
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "12345")
+    def test_send_sticker_success(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200)
+        from notifier import send_sticker
+        result = send_sticker("CAACAgIAAx0CXK...")
+        assert result is True
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        assert "sendSticker" in call_args[0][0]
+        assert call_args[1]["json"]["sticker"] == "CAACAgIAAx0CXK..."
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "12345")
+    def test_send_sticker_custom_chat_id(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200)
+        from notifier import send_sticker
+        result = send_sticker("file_id_1", chat_id=67890)
+        assert result is True
+        assert mock_post.call_args[1]["json"]["chat_id"] == "67890"
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "12345")
+    def test_send_sticker_failure(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=400, text="Bad Request")
+        from notifier import send_sticker
+        result = send_sticker("file_id_1")
+        assert result is False
+
+    @patch("notifier.BOT_TOKEN", "")
+    def test_send_sticker_no_token(self):
+        from notifier import send_sticker
+        result = send_sticker("file_id_1")
+        assert result is False
+
+
