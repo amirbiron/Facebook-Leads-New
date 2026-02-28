@@ -3006,3 +3006,161 @@ class TestParseDeveloperChatIds:
         assert _parse_developer_chat_ids() == {111, 222}
 
 
+# ──────────────────────────────────────────────────────────────
+# סטיקרים מונפשים
+# ──────────────────────────────────────────────────────────────
+
+from notifier import send_sticker
+from main import (
+    _load_stickers, _save_stickers, set_sticker, remove_sticker,
+    get_sticker, _STICKER_TRIGGER_LABELS, _pending_sticker_set,
+)
+
+
+class TestSendSticker:
+    """בדיקות לפונקציית send_sticker ב-notifier."""
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.CHAT_ID", "123")
+    def test_sends_sticker_successfully(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200)
+        result = send_sticker("CAACAgIAAxkDAAI_file_id_123")
+        assert result is True
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        assert "sendSticker" in call_args[0][0]
+        payload = call_args[1]["json"]
+        assert payload["chat_id"] == "123"
+        assert payload["sticker"] == "CAACAgIAAxkDAAI_file_id_123"
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.CHAT_ID", "123")
+    def test_returns_false_on_failure(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=400, text="Bad request")
+        result = send_sticker("CAACAgIAAxkDAAI_file_id_123")
+        assert result is False
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", None)
+    @patch("notifier.CHAT_ID", "123")
+    def test_returns_false_without_token(self, mock_post):
+        result = send_sticker("CAACAgIAAxkDAAI_file_id_123")
+        assert result is False
+        mock_post.assert_not_called()
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.CHAT_ID", "123")
+    def test_custom_chat_id(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=200)
+        send_sticker("file_id_abc", chat_id=456)
+        payload = mock_post.call_args[1]["json"]
+        assert payload["chat_id"] == "456"
+
+    @patch("notifier.requests.post")
+    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier.CHAT_ID", None)
+    def test_returns_false_without_chat_id(self, mock_post):
+        result = send_sticker("file_id_abc")
+        assert result is False
+        mock_post.assert_not_called()
+
+
+class TestStickerConfig:
+    """בדיקות לניהול סטיקרים — שמירה, טעינה, הקצאה, הסרה."""
+
+    def test_load_empty(self, tmp_db):
+        result = _load_stickers()
+        assert result == {}
+
+    def test_save_and_load(self, tmp_db):
+        stickers = {"scan_start": "file_id_1", "lead_found": "file_id_2"}
+        _save_stickers(stickers)
+        loaded = _load_stickers()
+        assert loaded == stickers
+
+    def test_set_sticker_valid_trigger(self, tmp_db):
+        ok, msg = set_sticker("scan_start", "file_id_abc")
+        assert ok is True
+        assert "scan_start" in msg
+        assert get_sticker("scan_start") == "file_id_abc"
+
+    def test_set_sticker_invalid_trigger(self, tmp_db):
+        ok, msg = set_sticker("invalid_trigger", "file_id_abc")
+        assert ok is False
+        assert "לא מוכר" in msg
+
+    def test_set_sticker_overwrites(self, tmp_db):
+        set_sticker("scan_start", "old_id")
+        set_sticker("scan_start", "new_id")
+        assert get_sticker("scan_start") == "new_id"
+
+    def test_remove_sticker(self, tmp_db):
+        set_sticker("scan_end", "file_id_xyz")
+        ok, msg = remove_sticker("scan_end")
+        assert ok is True
+        assert get_sticker("scan_end") is None
+
+    def test_remove_sticker_not_found(self, tmp_db):
+        ok, msg = remove_sticker("scan_start")
+        assert ok is False
+        assert "אין סטיקר" in msg
+
+    def test_get_sticker_not_set(self, tmp_db):
+        assert get_sticker("scan_start") is None
+
+    def test_all_triggers_have_labels(self):
+        """מוודא שכל טריגר מוגדר עם תיאור בעברית."""
+        for trigger in ("scan_start", "scan_end", "lead_found"):
+            assert trigger in _STICKER_TRIGGER_LABELS
+
+    def test_set_does_not_affect_other_triggers(self, tmp_db):
+        set_sticker("scan_start", "id_1")
+        set_sticker("lead_found", "id_2")
+        assert get_sticker("scan_start") == "id_1"
+        assert get_sticker("lead_found") == "id_2"
+        assert get_sticker("scan_end") is None
+
+
+class TestSendTriggerSticker:
+    """בדיקות ל-_send_trigger_sticker — שליחה לפי טריגר."""
+
+    @pytest.mark.asyncio
+    async def test_sends_when_configured(self, tmp_db):
+        set_sticker("scan_start", "file_id_test")
+        with patch("notifier.send_sticker") as mock_send:
+            mock_send.return_value = True
+            from main import _send_trigger_sticker
+            await _send_trigger_sticker("scan_start")
+            mock_send.assert_called_once_with("file_id_test")
+
+    @pytest.mark.asyncio
+    async def test_silent_when_not_configured(self, tmp_db):
+        with patch("notifier.send_sticker") as mock_send:
+            from main import _send_trigger_sticker
+            await _send_trigger_sticker("scan_start")
+            mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_silent_on_send_failure(self, tmp_db):
+        set_sticker("lead_found", "bad_id")
+        with patch("notifier.send_sticker", side_effect=Exception("network")):
+            from main import _send_trigger_sticker
+            # לא צריך לזרוק exception — שקט
+            await _send_trigger_sticker("lead_found")
+
+
+class TestPendingStickerSet:
+    """בדיקות למנגנון 'ממתין לסטיקר' — _pending_sticker_set."""
+
+    def test_dict_operations(self):
+        _pending_sticker_set.clear()
+        _pending_sticker_set[12345] = "scan_start"
+        assert _pending_sticker_set.get(12345) == "scan_start"
+        popped = _pending_sticker_set.pop(12345, None)
+        assert popped == "scan_start"
+        assert _pending_sticker_set.get(12345) is None
+
+
