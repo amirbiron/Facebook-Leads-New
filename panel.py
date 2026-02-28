@@ -102,7 +102,7 @@ def create_app() -> Flask:
             current_hash = hashlib.md5(
                 _CLASSIFICATION_CRITERIA_DEFAULT.strip().encode()
             ).hexdigest()
-            if saved_hash and saved_hash != current_hash:
+            if not saved_hash or saved_hash != current_hash:
                 criteria_default_changed = True
 
         # quiet_hours — ערך ריק ב-DB = המשתמש ביטל דרך הפאנל → לא לחזור ל-env
