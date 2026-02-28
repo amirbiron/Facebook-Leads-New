@@ -48,6 +48,37 @@ def send_message(
         log.error(f"שגיאה בשליחה לטלגרם: {e}", exc_info=True)
         return False
 
+
+def send_message_returning_id(
+    text: str,
+    *,
+    chat_id: str | int | None = None,
+    entities: list[dict] | None = None,
+) -> int | None:
+    """שולח הודעה ומחזיר message_id (או None אם נכשל).
+
+    entities — רשימת MessageEntity (למשל custom_emoji).
+    """
+    if not BOT_TOKEN or not (chat_id or CHAT_ID):
+        return None
+    target_chat = str(chat_id or CHAT_ID)
+    payload: dict = {"chat_id": target_chat, "text": text}
+    if entities:
+        payload["entities"] = entities
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json=payload,
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return response.json()["result"]["message_id"]
+        log.error(f"send_message_returning_id נכשל: {response.status_code}: {response.text}")
+        return None
+    except Exception as e:
+        log.error(f"שגיאה ב-send_message_returning_id: {e}", exc_info=True)
+        return None
+
 def clean_post_content(text: str) -> str:
     """מנקה תוכן פוסט מ-Unicode פרטי של פייסבוק ורעשי UI."""
     # הסרת תגיות HTML שדלפו (כולל <img src="data:..."> עם base64)
@@ -129,6 +160,7 @@ def edit_message_text(
     buttons: list[list[dict]] | None = None,
     *,
     parse_mode: str | None = None,
+    entities: list[dict] | None = None,
 ) -> bool:
     """עורך הודעה קיימת (טקסט + כפתורים אופציונליים)."""
     if not BOT_TOKEN:
@@ -143,6 +175,8 @@ def edit_message_text(
         payload["reply_markup"] = {"inline_keyboard": buttons}
     if parse_mode:
         payload["parse_mode"] = parse_mode
+    if entities is not None:
+        payload["entities"] = entities
 
     try:
         response = requests.post(

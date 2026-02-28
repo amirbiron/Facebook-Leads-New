@@ -3243,3 +3243,245 @@ class TestPendingEmojiSet:
         assert _pending_emoji_set.get(12345) is None
 
 
+# ──────────────────────────────────────────────────────────────
+# אנימציית סריקה
+# ──────────────────────────────────────────────────────────────
+
+from main import (
+    _build_scan_emoji_entities,
+    _stop_scan_animation,
+    _scan_anim_state,
+    _SCAN_DOTS,
+)
+from notifier import send_message_returning_id
+
+
+class TestSendMessageReturningId:
+    """בדיקות ל-send_message_returning_id — שולח הודעה ומחזיר message_id."""
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "123456")
+    @patch("notifier.requests.post")
+    def test_returns_message_id_on_success(self, mock_post):
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 42}},
+        )
+        result = send_message_returning_id("hello")
+        assert result == 42
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "123456")
+    @patch("notifier.requests.post")
+    def test_returns_none_on_failure(self, mock_post):
+        mock_post.return_value = MagicMock(status_code=400, text="Bad request")
+        result = send_message_returning_id("hello")
+        assert result is None
+
+    @patch("notifier.BOT_TOKEN", None)
+    def test_returns_none_without_token(self):
+        result = send_message_returning_id("hello", chat_id=123)
+        assert result is None
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "123456")
+    @patch("notifier.requests.post")
+    def test_sends_entities(self, mock_post):
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 99}},
+        )
+        entities = [{"type": "custom_emoji", "offset": 0, "length": 2, "custom_emoji_id": "abc"}]
+        send_message_returning_id("⭐ text", entities=entities)
+        payload = mock_post.call_args[1]["json"]
+        assert payload["entities"] == entities
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "123456")
+    @patch("notifier.requests.post")
+    def test_no_entities_by_default(self, mock_post):
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 1}},
+        )
+        send_message_returning_id("hello")
+        payload = mock_post.call_args[1]["json"]
+        assert "entities" not in payload
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.CHAT_ID", "123456")
+    @patch("notifier.requests.post")
+    def test_custom_chat_id(self, mock_post):
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"result": {"message_id": 7}},
+        )
+        send_message_returning_id("hi", chat_id=999)
+        payload = mock_post.call_args[1]["json"]
+        assert payload["chat_id"] == "999"
+
+
+class TestEditMessageEntities:
+    """בדיקות ל-entities חדש ב-edit_message_text."""
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.requests.post")
+    def test_entities_included_in_payload(self, mock_post):
+        from notifier import edit_message_text
+        mock_post.return_value = MagicMock(status_code=200)
+        entities = [{"type": "custom_emoji", "offset": 0, "length": 1, "custom_emoji_id": "xyz"}]
+        edit_message_text(123, 456, "text", entities=entities)
+        payload = mock_post.call_args[1]["json"]
+        assert payload["entities"] == entities
+
+    @patch("notifier.BOT_TOKEN", "test_token")
+    @patch("notifier.requests.post")
+    def test_no_entities_by_default(self, mock_post):
+        from notifier import edit_message_text
+        mock_post.return_value = MagicMock(status_code=200)
+        edit_message_text(123, 456, "text")
+        payload = mock_post.call_args[1]["json"]
+        assert "entities" not in payload
+
+
+class TestBuildScanEmojiEntities:
+    """בדיקות ל-_build_scan_emoji_entities — בניית prefix + entities."""
+
+    def test_no_emoji_configured(self, tmp_db):
+        prefix, entities = _build_scan_emoji_entities()
+        assert prefix == ""
+        assert entities is None
+
+    def test_with_emoji_configured(self, tmp_db):
+        set_emoji("scan_start", "emoji_123", "\U0001f50d")
+        prefix, entities = _build_scan_emoji_entities()
+        assert prefix == "\U0001f50d "
+        assert len(entities) == 1
+        assert entities[0]["type"] == "custom_emoji"
+        assert entities[0]["custom_emoji_id"] == "emoji_123"
+        # 🔍 = non-BMP = 2 UTF-16 code units
+        assert entities[0]["length"] == 2
+
+    def test_bmp_emoji_length(self, tmp_db):
+        set_emoji("scan_start", "emoji_456", "\u2b50")
+        prefix, entities = _build_scan_emoji_entities()
+        assert prefix == "\u2b50 "
+        assert entities[0]["length"] == 1
+
+    def test_default_placeholder(self, tmp_db):
+        """אם אין emoji char ב-data, ברירת מחדל ⭐."""
+        from database import set_config
+        import json as _json
+        set_config("custom_emojis", _json.dumps({"scan_start": {"id": "test_id"}}))
+        prefix, entities = _build_scan_emoji_entities()
+        assert prefix == "\u2b50 "
+        assert entities[0]["custom_emoji_id"] == "test_id"
+
+
+class TestStopScanAnimation:
+    """בדיקות ל-_stop_scan_animation — עצירת אנימציה ועריכת הודעה לסיכום."""
+
+    @pytest.mark.asyncio
+    async def test_edits_message_with_leads(self, tmp_db):
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.edit_message_text") as mock_edit:
+            mock_edit.return_value = True
+            await _stop_scan_animation(leads_found=3)
+            mock_edit.assert_called_once()
+            text_arg = mock_edit.call_args[0][2]
+            assert "3 לידים" in text_arg
+            assert "הושלמה" in text_arg
+
+    @pytest.mark.asyncio
+    async def test_edits_message_no_leads(self, tmp_db):
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.edit_message_text") as mock_edit:
+            mock_edit.return_value = True
+            await _stop_scan_animation(leads_found=0)
+            text_arg = mock_edit.call_args[0][2]
+            assert "ללא לידים" in text_arg
+
+    @pytest.mark.asyncio
+    async def test_edits_message_with_error(self, tmp_db):
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.edit_message_text") as mock_edit:
+            mock_edit.return_value = True
+            await _stop_scan_animation(leads_found=0, error="שגיאת רשת")
+            text_arg = mock_edit.call_args[0][2]
+            assert "נכשלה" in text_arg
+            assert "שגיאת רשת" in text_arg
+
+    @pytest.mark.asyncio
+    async def test_with_scan_end_emoji(self, tmp_db):
+        set_emoji("scan_end", "end_emoji_id", "\U0001f389")
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.edit_message_text") as mock_edit:
+            mock_edit.return_value = True
+            await _stop_scan_animation(leads_found=1)
+            args = mock_edit.call_args
+            text_arg = args[0][2]
+            assert text_arg.startswith("\U0001f389")
+            entities_arg = args[1].get("entities")
+            assert entities_arg is not None
+            assert entities_arg[0]["custom_emoji_id"] == "end_emoji_id"
+
+    @pytest.mark.asyncio
+    async def test_cancels_running_task(self, tmp_db):
+        """אם יש task אנימציה רץ, מבטל אותו."""
+        import asyncio
+        cancelled = False
+        async def fake_animation():
+            nonlocal cancelled
+            try:
+                await asyncio.sleep(999)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+        task = asyncio.create_task(fake_animation())
+        await asyncio.sleep(0.01)  # נותנים ל-task להתחיל
+        _scan_anim_state.clear()
+        _scan_anim_state["task"] = task
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.edit_message_text") as mock_edit:
+            mock_edit.return_value = True
+            await _stop_scan_animation(leads_found=0)
+        assert cancelled is True
+
+    @pytest.mark.asyncio
+    async def test_no_state_does_nothing(self, tmp_db):
+        """אם אין state — לא עושה כלום ולא זורק exception."""
+        _scan_anim_state.clear()
+        with patch("notifier.edit_message_text") as mock_edit:
+            await _stop_scan_animation(leads_found=0)
+            mock_edit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleans_up_state(self, tmp_db):
+        """אחרי עצירה, ה-state נקי."""
+        _scan_anim_state.clear()
+        _scan_anim_state["chat_id"] = 123
+        _scan_anim_state["message_id"] = 456
+        with patch("notifier.edit_message_text"):
+            await _stop_scan_animation(leads_found=0)
+        assert "chat_id" not in _scan_anim_state
+        assert "message_id" not in _scan_anim_state
+        assert "task" not in _scan_anim_state
+
+
+class TestScanDotsConstant:
+    """וידוא שקבועי האנימציה הגיוניים."""
+
+    def test_three_dot_states(self):
+        assert len(_SCAN_DOTS) == 3
+        assert _SCAN_DOTS == [".", "..", "..."]
+
+

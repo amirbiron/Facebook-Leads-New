@@ -197,6 +197,113 @@ def _utf16_slice(text: str, offset: int, length: int) -> str:
 # מילון שמאחסן מצב "ממתין לאימוג'י" — {chat_id: trigger}
 _pending_emoji_set: dict[int, str] = {}
 
+# ── אנימציית "סורק..." — רק כשהלקוח מפעיל /scan או /scan_force ידנית ──
+# שומרים את פרטי ההודעה כדי לערוך אותה בזמן אמת ולסכם בסוף
+_scan_anim_state: dict = {}  # {"chat_id": int, "message_id": int, "task": Task | None}
+
+_SCAN_DOTS = [".", "..", "..."]
+_SCAN_ANIM_INTERVAL = 2.0  # שניות בין עדכוני נקודות
+
+
+def _build_scan_emoji_entities() -> tuple[str, list[dict] | None]:
+    """בונה prefix + entities לאימוג'י scan_start (אם מוגדר).
+
+    מחזיר (prefix_str, entities_list | None).
+    אם אין אימוג'י מותאם — ("", None).
+    """
+    data = get_emoji("scan_start")
+    if not data:
+        return "", None
+    placeholder = data.get("emoji", "\u2b50")
+    prefix = placeholder + " "
+    utf16_len = len(placeholder.encode("utf-16-le")) // 2
+    entities = [{
+        "type": "custom_emoji",
+        "offset": 0,
+        "length": utf16_len,
+        "custom_emoji_id": data["id"],
+    }]
+    return prefix, entities
+
+
+async def _start_scan_animation(chat_id: int):
+    """שולח הודעת 'סורק.' ומתחיל אנימציית נקודות.
+
+    שומר את ה-state ב-_scan_anim_state כדי שאפשר יהיה לעצור ולערוך בסיום.
+    """
+    from notifier import send_message_returning_id, edit_message_text
+
+    prefix, entities = _build_scan_emoji_entities()
+    text = f"{prefix}סורק."
+    msg_id = await asyncio.to_thread(
+        send_message_returning_id, text, chat_id=chat_id, entities=entities,
+    )
+    if not msg_id:
+        log.debug("לא הצלחתי לשלוח הודעת אנימציית סריקה")
+        return
+
+    _scan_anim_state["chat_id"] = chat_id
+    _scan_anim_state["message_id"] = msg_id
+
+    # לולאת אנימציה — רצה עד שהטאסק מבוטל
+    i = 1
+    while True:
+        await asyncio.sleep(_SCAN_ANIM_INTERVAL)
+        dot = _SCAN_DOTS[i % 3]
+        await asyncio.to_thread(
+            edit_message_text, chat_id, msg_id, f"{prefix}סורק{dot}",
+            entities=entities,
+        )
+        i += 1
+
+
+async def _stop_scan_animation(leads_found: int, error: str = ""):
+    """עוצר את האנימציה ועורך את ההודעה לסיכום סריקה."""
+    from notifier import edit_message_text
+
+    task = _scan_anim_state.pop("task", None)
+    chat_id = _scan_anim_state.pop("chat_id", None)
+    msg_id = _scan_anim_state.pop("message_id", None)
+
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    if not chat_id or not msg_id:
+        return
+
+    # בניית סיכום
+    if error:
+        summary = f"סריקה נכשלה — {error[:200]}"
+    elif leads_found > 0:
+        summary = f"סריקה הושלמה — {leads_found} לידים חדשים"
+    else:
+        summary = "סריקה הושלמה — ללא לידים חדשים"
+
+    # אימוג'י scan_end (אם מוגדר)
+    end_data = get_emoji("scan_end")
+    entities = None
+    prefix = ""
+    if end_data:
+        placeholder = end_data.get("emoji", "\u2b50")
+        prefix = placeholder + " "
+        utf16_len = len(placeholder.encode("utf-16-le")) // 2
+        entities = [{
+            "type": "custom_emoji",
+            "offset": 0,
+            "length": utf16_len,
+            "custom_emoji_id": end_data["id"],
+        }]
+
+    await asyncio.to_thread(
+        edit_message_text, chat_id, msg_id, f"{prefix}{summary}",
+        entities=entities,
+    )
+
+
 def _load_block_keywords() -> list[str]:
     """טוען מילים חסומות מ-DB עם fallback למשתנה סביבה.
     None מ-DB = מעולם לא הוגדר → fallback.  [] = המשתמש רוקן הכל → רשימה ריקה.
@@ -723,7 +830,10 @@ async def _telegram_control_loop(
                     _back_to_menu_button(),
                 )
                 return
+            # שומרים chat_id — run_cycle ישלח אנימציית "סורק..."
+            shared_state["scan_triggered_by"] = chat_id_int
             scan_now_event.set()
+            # עורכים את הודעת התפריט ל-"מתזמן..." (האנימציה תהיה בהודעה חדשה)
             await asyncio.to_thread(
                 edit_message_text, chat_id_int, message_id,
                 "מתזמן סריקה עכשיו.",
@@ -938,24 +1048,15 @@ async def _telegram_control_loop(
                         )
                         continue
 
+                    # שומרים chat_id — run_cycle ישלח אנימציית "סורק..." במקום הודעה רגילה
+                    shared_state["scan_triggered_by"] = chat_id_int
                     scan_now_event.set()
-                    await asyncio.to_thread(
-                        send_message,
-                        "מתזמן סריקה עכשיו.",
-                        chat_id=chat_id_int,
-                        disable_web_page_preview=True,
-                    )
                     continue
 
                 if cmd in ("/scan_force",):
+                    shared_state["scan_triggered_by"] = chat_id_int
                     scan_force_event.set()
                     scan_now_event.set()
-                    await asyncio.to_thread(
-                        send_message,
-                        "מתזמן סריקה עכשיו (forced).",
-                        chat_id=chat_id_int,
-                        disable_web_page_preview=True,
-                    )
                     continue
 
                 # ── ניהול קבוצות דינמי ──────────────────────────
@@ -1438,14 +1539,28 @@ def _on_group_scraped(group_name: str, group_index: int, total_groups: int, post
 async def run_cycle():
     _reset_scan_progress()
 
-    # סטיקר תחילת סריקה
-    await _send_trigger_emoji("scan_start")
+    # בדיקה אם הסריקה הופעלה ידנית ע"י הלקוח
+    triggered_by = _scan_anim_state.pop("triggered_by", None)
+    user_triggered = triggered_by is not None
 
-    # try/finally — מבטיח שסטיקר scan_end יישלח גם בשגיאה (סימטריה עם scan_start)
+    if user_triggered:
+        # סריקה ידנית — אנימציית "סורק..." (כולל אימוג'י scan_start אם מוגדר)
+        anim_task = asyncio.create_task(_start_scan_animation(triggered_by))
+        _scan_anim_state["task"] = anim_task
+    else:
+        # סריקה אוטומטית — רק אימוג'י (אם מוגדר)
+        await _send_trigger_emoji("scan_start")
+
     try:
         await _run_cycle_inner()
     finally:
-        await _send_trigger_emoji("scan_end")
+        if user_triggered:
+            # עוצר אנימציה ועורך לסיכום
+            leads = scan_progress.get("leads_sent", 0)
+            error = scan_progress.get("error", "")
+            await _stop_scan_animation(leads, error)
+        else:
+            await _send_trigger_emoji("scan_end")
 
 
 async def _run_cycle_inner():
@@ -1682,6 +1797,10 @@ async def main():
         async with scan_lock:
             shared_state["scan_in_progress"] = True
             shared_state["last_scan_started"] = _now_local()
+            # העברת chat_id מהלקוח שהפעיל סריקה ידנית (אם יש)
+            triggered_by = shared_state.pop("scan_triggered_by", None)
+            if triggered_by is not None:
+                _scan_anim_state["triggered_by"] = triggered_by
             try:
                 await run_cycle()
             finally:
