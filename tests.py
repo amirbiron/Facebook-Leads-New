@@ -503,11 +503,14 @@ class TestStableTextForHash:
         s3 = _stable_text_for_hash(t3)
         assert s1 == s2 == s3
 
-    def test_time_unit_mid_sentence_preserved(self):
-        """מספר + יחידת זמן באמצע משפט לא נמחק — תוכן אמיתי."""
+    def test_time_unit_mid_sentence_stripped_for_stability(self):
+        """מספר + יחידת זמן (inline) מוסר — tradeoff: hash יציב > hash ספציפי.
+        "5 שעות" ו-"3 שעות" נמחקים כי הם בפורמט זהה ל-timestamps של פייסבוק.
+        הסיכון (collision בין "עבודה של 5 שעות" ל-"עבודה של 3 שעות") נמוך מאוד
+        לעומת כפילויות חוזרות שנגרמות מ-hash לא יציב."""
         t1 = "מחפש עבודה של 5 שעות ביום"
         t2 = "מחפש עבודה של 3 שעות ביום"
-        assert _stable_text_for_hash(t1) != _stable_text_for_hash(t2)
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
 
     def test_standalone_words_mid_sentence_preserved(self):
         """'אתמול' באמצע משפט לא נמחק — תוכן אמיתי."""
@@ -667,6 +670,46 @@ class TestStableTextForHash:
         assert _stable_text_for_hash("1,234") == ""
         assert _stable_text_for_hash("5") == ""
         assert _stable_text_for_hash("12.5") == ""
+
+    def test_inline_relative_time_hebrew_stripped(self):
+        """זמנים יחסיים בעברית ('8 שעות') מוסרים גם inline — מטא-דאטה של פייסבוק."""
+        # הפורמט מהלוג: "שם 8 שעות [אייקונים] תוכן..."
+        t1 = "אמיר בירון 8 שעות היי חברים אני מפתח בוט"
+        t2 = "אמיר בירון 12 שעות היי חברים אני מפתח בוט"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_inline_relative_time_variants(self):
+        """וריאנטים שונים של יחידות זמן בעברית מוסרים."""
+        base = "משה כהן %s פוסט חשוב"
+        assert _stable_text_for_hash(base % "3 דקות") == _stable_text_for_hash(base % "15 דקות")
+        assert _stable_text_for_hash(base % "1 שעה") == _stable_text_for_hash(base % "5 שעות")
+        assert _stable_text_for_hash(base % "2 ימים") == _stable_text_for_hash(base % "1 יום")
+        assert _stable_text_for_hash(base % "1 שבוע") == _stable_text_for_hash(base % "3 שבועות")
+
+    def test_inline_relative_time_english_stripped(self):
+        """English relative times stripped inline."""
+        t1 = "john doe 2 hours hey everyone"
+        t2 = "john doe 5 hours hey everyone"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+        t3 = "john doe 30 mins hey everyone"
+        t4 = "john doe 45 mins hey everyone"
+        assert _stable_text_for_hash(t3) == _stable_text_for_hash(t4)
+
+    def test_supplementary_pua_chars_removed(self):
+        """אייקוני פרטיות של פייסבוק (supplementary PUA) מוסרים מה-hash."""
+        # Supplementary PUA-A (U+F0000-U+FFFFD) and PUA-B (U+100000-U+10FFFD)
+        t1 = "אמיר בירון\U000F0001\U00100001 היי חברים"
+        t2 = "אמיר בירון היי חברים"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_yesterday_today_stripped(self):
+        """'אתמול', 'היום' standalone מוסרים."""
+        assert _stable_text_for_hash("אתמול") == ""
+        assert _stable_text_for_hash("היום") == ""
+        # "אתמול ב-15:30" מוסר inline
+        t1 = "משה כהן אתמול ב-15:30 פוסט חשוב"
+        t2 = "משה כהן פוסט חשוב"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
 
 
 class TestContentHashDedup:
