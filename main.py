@@ -843,7 +843,6 @@ async def _telegram_control_loop(
                     pending_trigger = _pending_sticker_set.pop(chat_id_int, None)
                     if pending_trigger:
                         ok, result_msg = set_sticker(pending_trigger, file_id)
-                        label = _STICKER_TRIGGER_LABELS.get(pending_trigger, pending_trigger)
                         await asyncio.to_thread(
                             send_message, result_msg,
                             chat_id=chat_id_int, disable_web_page_preview=True,
