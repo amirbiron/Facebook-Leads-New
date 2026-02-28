@@ -1070,6 +1070,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         "content": text,
                         "url": post_url,
                         "group": group_name,
+                        "group_url": group["url"],
                         "has_real_url": has_real_url,
                     })
 

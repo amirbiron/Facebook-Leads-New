@@ -224,6 +224,56 @@ def create_app() -> Flask:
         ok, msg = remove_force_send_keyword(word)
         return jsonify({"ok": ok, "message": msg})
 
+    # ── מילות "שלח תמיד" לקבוצה ספציפית ──────────────────────
+
+    @app.route("/api/group_force_send", methods=["GET"])
+    @require_auth
+    def list_all_group_force_send():
+        """מחזיר את כל מילות force_send לפי קבוצה."""
+        from main import get_all_group_force_send
+        return jsonify({"groups": get_all_group_force_send()})
+
+    @app.route("/api/group_force_send/keywords", methods=["GET"])
+    @require_auth
+    def list_group_force_send():
+        """מחזיר מילות force_send לקבוצה ספציפית."""
+        group_url = request.args.get("url", "").strip()
+        if not group_url:
+            return jsonify({"ok": False, "message": "URL ריק"}), 400
+        from main import _load_group_force_send_keywords
+        keywords = _load_group_force_send_keywords(group_url)
+        return jsonify({"keywords": keywords})
+
+    @app.route("/api/group_force_send/keywords", methods=["POST"])
+    @require_auth
+    def create_group_force_send():
+        """מוסיף מילת force_send לקבוצה ספציפית."""
+        data = request.get_json(force=True)
+        group_url = data.get("url", "").strip()
+        word = data.get("word", "").strip()
+        if not group_url:
+            return jsonify({"ok": False, "message": "URL ריק"}), 400
+        if not word:
+            return jsonify({"ok": False, "message": "מילה ריקה"}), 400
+        from main import add_group_force_send_keyword
+        ok, msg = add_group_force_send_keyword(group_url, word)
+        return jsonify({"ok": ok, "message": msg})
+
+    @app.route("/api/group_force_send/keywords", methods=["DELETE"])
+    @require_auth
+    def delete_group_force_send():
+        """מסיר מילת force_send מקבוצה ספציפית."""
+        data = request.get_json(force=True)
+        group_url = data.get("url", "").strip()
+        word = data.get("word", "").strip()
+        if not group_url:
+            return jsonify({"ok": False, "message": "URL ריק"}), 400
+        if not word:
+            return jsonify({"ok": False, "message": "מילה ריקה"}), 400
+        from main import remove_group_force_send_keyword
+        ok, msg = remove_group_force_send_keyword(group_url, word)
+        return jsonify({"ok": ok, "message": msg})
+
     # ── סטטוס סריקה בזמן אמת ────────────────────────────────
 
     @app.route("/api/scan-status", methods=["GET"])

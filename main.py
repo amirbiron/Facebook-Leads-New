@@ -110,14 +110,96 @@ def remove_force_send_keyword(word: str) -> tuple[bool, str]:
     _save_force_send_keywords(keywords)
     return True, f"מילה הוסרה: {word}"
 
-def matches_force_send(text: str) -> str | None:
-    """בודק אם הפוסט מכיל מילת 'שלח תמיד'. מחזיר את המילה שנמצאה או None."""
-    if not FORCE_SEND_KEYWORDS:
-        return None
+# ── מילות "שלח תמיד" לקבוצה ספציפית ──────────────────────────
+# נשמרות ב-_config עם מפתח "force_send_group:<url>" — כל קבוצה מקבלת רשימה משלה.
+
+def _force_send_group_key(group_url: str) -> str:
+    """מחזיר מפתח _config עבור מילות force_send של קבוצה."""
+    from database import _normalize_group_url
+    return f"force_send_group:{_normalize_group_url(group_url)}"
+
+def _load_group_force_send_keywords(group_url: str) -> list[str]:
+    """טוען מילות 'שלח תמיד' ספציפיות לקבוצה."""
+    import json as _json
+    try:
+        raw = get_config(_force_send_group_key(group_url))
+        if raw:
+            return _json.loads(raw)
+    except Exception:
+        pass
+    return []
+
+def _save_group_force_send_keywords(group_url: str, keywords: list[str]):
+    """שומר מילות 'שלח תמיד' ספציפיות לקבוצה."""
+    import json as _json
+    set_config(_force_send_group_key(group_url), _json.dumps(keywords))
+
+def add_group_force_send_keyword(group_url: str, word: str) -> tuple[bool, str]:
+    """מוסיף מילת 'שלח תמיד' לקבוצה ספציפית."""
+    word = word.strip().lower()
+    if not word:
+        return False, "מילה ריקה"
+    keywords = _load_group_force_send_keywords(group_url)
+    if word in keywords:
+        return False, f"המילה כבר קיימת: {word}"
+    keywords.append(word)
+    _save_group_force_send_keywords(group_url, keywords)
+    return True, f"מילת 'שלח תמיד' נוספה לקבוצה: {word}"
+
+def remove_group_force_send_keyword(group_url: str, word: str) -> tuple[bool, str]:
+    """מסיר מילת 'שלח תמיד' מקבוצה ספציפית."""
+    word = word.strip().lower()
+    keywords = _load_group_force_send_keywords(group_url)
+    if word not in keywords:
+        return False, f"מילה לא נמצאה: {word}"
+    keywords.remove(word)
+    _save_group_force_send_keywords(group_url, keywords)
+    return True, f"מילה הוסרה מהקבוצה: {word}"
+
+def get_all_group_force_send() -> dict[str, list[str]]:
+    """מחזיר מילון של כל מילות force_send לפי קבוצה.
+    {url: [keyword, ...], ...} — רק קבוצות שיש להן מילים.
+    """
+    import json as _json
+    from database import _get_conn
+    prefix = "force_send_group:"
+    try:
+        rows = _get_conn().execute(
+            "SELECT key, value FROM _config WHERE key LIKE ?",
+            (f"{prefix}%",),
+        ).fetchall()
+    except Exception:
+        return {}
+    result = {}
+    for key, value in rows:
+        url = key[len(prefix):]
+        try:
+            kws = _json.loads(value)
+            if kws:
+                result[url] = kws
+        except Exception:
+            pass
+    return result
+
+def matches_force_send(text: str, group_url: str = "") -> str | None:
+    """בודק אם הפוסט מכיל מילת 'שלח תמיד'.
+    בודק קודם מילות גלובליות, אח"כ מילות קבוצה ספציפית.
+    מחזיר את המילה שנמצאה או None.
+    """
     text_lower = text.lower()
-    for kw in FORCE_SEND_KEYWORDS:
-        if kw in text_lower:
-            return kw
+    # בדיקת מילות גלובליות
+    if FORCE_SEND_KEYWORDS:
+        for kw in FORCE_SEND_KEYWORDS:
+            if kw in text_lower:
+                return kw
+    # בדיקת מילות קבוצה ספציפית
+    if group_url and GROUP_FORCE_SEND_KEYWORDS:
+        from database import _normalize_group_url
+        normalized = _normalize_group_url(group_url)
+        group_kws = GROUP_FORCE_SEND_KEYWORDS.get(normalized, [])
+        for kw in group_kws:
+            if kw in text_lower:
+                return kw
     return None
 
 
@@ -149,13 +231,15 @@ def _load_pre_filter_keywords() -> list[str]:
 BLOCK_KEYWORDS = _load_block_keywords()
 PRE_FILTER_KEYWORDS = _load_pre_filter_keywords()
 FORCE_SEND_KEYWORDS = _load_force_send_keywords()
+GROUP_FORCE_SEND_KEYWORDS: dict[str, list[str]] = get_all_group_force_send()
 
 def reload_keywords():
     """טוען מחדש את מילות המפתח מ-DB (נקרא אחרי שינוי דרך טלגרם)."""
-    global BLOCK_KEYWORDS, PRE_FILTER_KEYWORDS, FORCE_SEND_KEYWORDS
+    global BLOCK_KEYWORDS, PRE_FILTER_KEYWORDS, FORCE_SEND_KEYWORDS, GROUP_FORCE_SEND_KEYWORDS
     BLOCK_KEYWORDS = _load_block_keywords()
     PRE_FILTER_KEYWORDS = _load_pre_filter_keywords()
     FORCE_SEND_KEYWORDS = _load_force_send_keywords()
+    GROUP_FORCE_SEND_KEYWORDS = get_all_group_force_send()
 
 def passes_keyword_filter(text: str) -> bool:
     """בודק אם הפוסט מכיל לפחות מילת מפתח אחת.
@@ -1342,7 +1426,7 @@ async def run_cycle():
         force_send_posts = []
         rest_posts = []
         for post in new_posts:
-            matched_kw = matches_force_send(post["content"])
+            matched_kw = matches_force_send(post["content"], post.get("group_url", ""))
             if matched_kw and not is_lead_sent(post["id"]):
                 c_hash = _content_dedup_hash(post["content"])
                 if is_content_hash_sent(c_hash):

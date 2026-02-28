@@ -881,6 +881,130 @@
         grid-template-columns: repeat(2, 1fr);
       }
     }
+
+    /* ═══ Modal / Dialog ═══ */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: oklch(0 0 0 / 0.5);
+      z-index: 9000;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .modal-overlay.active {
+      display: flex;
+    }
+    .modal {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      width: 100%;
+      max-width: 560px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      animation: modalIn 200ms ease-out;
+    }
+    @keyframes modalIn {
+      from { transform: scale(0.95); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-header h3 {
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .modal-header h3 svg {
+      width: 18px;
+      height: 18px;
+      color: var(--accent);
+      stroke: currentColor;
+    }
+    .modal-body {
+      padding: 20px 24px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .modal-close {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: var(--radius-sm);
+      transition: all var(--transition);
+      display: flex;
+      align-items: center;
+    }
+    .modal-close:hover { color: var(--text); background: var(--bg-hover); }
+    .modal-close svg { width: 20px; height: 20px; stroke: currentColor; }
+
+    /* ═══ Group Accordion (for group-specific force_send) ═══ */
+    .group-accordion {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      margin-bottom: 8px;
+      overflow: hidden;
+    }
+    .group-accordion-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      cursor: pointer;
+      background: var(--bg);
+      transition: background var(--transition);
+      user-select: none;
+    }
+    .group-accordion-header:hover { background: var(--bg-hover); }
+    .group-accordion-header .accordion-arrow {
+      width: 16px;
+      height: 16px;
+      color: var(--text-muted);
+      stroke: currentColor;
+      transition: transform 200ms ease;
+      flex-shrink: 0;
+    }
+    .group-accordion-header.open .accordion-arrow {
+      transform: rotate(90deg);
+    }
+    .group-accordion-header .group-name {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .group-accordion-header .group-badge {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--accent);
+      background: var(--accent-soft);
+      padding: 2px 8px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .group-accordion-body {
+      display: none;
+      padding: 12px 16px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+    .group-accordion-body.open { display: block; }
+    .group-accordion-body .chips { margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -1241,7 +1365,43 @@
         </div>
 
         <div id="force-send-list" class="chips"></div>
+
+        <div class="btn-row" style="margin-top: 16px;">
+          <button class="btn btn-secondary btn-sm" onclick="openGroupForceSendModal()">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            מתקדם — לפי קבוצה
+          </button>
+        </div>
       </section>
+
+      <!-- ═══ מודל "שלח תמיד" לפי קבוצה ═══ -->
+      <div id="group-force-send-modal" class="modal-overlay" onclick="if(event.target===this)closeGroupForceSendModal()">
+        <div class="modal">
+          <div class="modal-header">
+            <h3>
+              <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+              </svg>
+              שלח תמיד — לפי קבוצה
+            </h3>
+            <button class="modal-close" onclick="closeGroupForceSendModal()">
+              <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <p style="color:var(--text-secondary); font-size:13px; margin-bottom:16px;">
+              הגדר מילות "שלח תמיד" ספציפיות לקבוצה — פוסט שמכיל מילה כזו יישלח רק אם הוא מהקבוצה המתאימה.
+            </p>
+            <div id="group-force-send-list">
+              <div style="text-align:center; color:var(--text-muted); padding:24px;">טוען קבוצות...</div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- ═══ פוסטים ישנים ═══ -->
       <section id="post-age" class="card">
@@ -1728,6 +1888,171 @@
         }
       } catch (e) {
         toast('שגיאה: ' + e.message, 'error');
+      }
+    }
+
+    // ═══ Group-Specific Force Send (Advanced Modal) ═══════
+
+    function openGroupForceSendModal() {
+      document.getElementById('group-force-send-modal').classList.add('active');
+      loadGroupForceSendModal();
+    }
+
+    function closeGroupForceSendModal() {
+      document.getElementById('group-force-send-modal').classList.remove('active');
+    }
+
+    async function loadGroupForceSendModal() {
+      const container = document.getElementById('group-force-send-list');
+      container.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:24px;">טוען קבוצות...</div>';
+      try {
+        // טוען קבוצות ומילות force_send לכל קבוצה במקביל
+        const [groupsData, gfsData] = await Promise.all([
+          api('/api/groups'),
+          api('/api/group_force_send'),
+        ]);
+        const groups = groupsData.groups || [];
+        const groupKeywords = gfsData.groups || {}; // {url: [kw, ...]}
+
+        if (groups.length === 0) {
+          container.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:24px;">אין קבוצות מוגדרות</div>';
+          return;
+        }
+
+        container.innerHTML = '';
+        groups.forEach(group => {
+          const kws = groupKeywords[group.url] || [];
+          const acc = buildGroupAccordion(group, kws);
+          container.appendChild(acc);
+        });
+      } catch (e) {
+        container.innerHTML = `<div style="text-align:center; color:var(--destructive); padding:24px;">שגיאה: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function buildGroupAccordion(group, keywords) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'group-accordion';
+
+      // header
+      const header = document.createElement('div');
+      header.className = 'group-accordion-header';
+      header.innerHTML = `
+        <svg class="accordion-arrow" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+        <span class="group-name">${escapeHtml(group.name)}</span>
+        ${keywords.length > 0 ? `<span class="group-badge">${keywords.length}</span>` : ''}
+      `;
+      header.addEventListener('click', () => {
+        header.classList.toggle('open');
+        body.classList.toggle('open');
+      });
+
+      // body
+      const body = document.createElement('div');
+      body.className = 'group-accordion-body';
+
+      // input + button
+      const inputGroup = document.createElement('div');
+      inputGroup.className = 'input-group';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'הוסף מילת "שלח תמיד" לקבוצה...';
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') addGroupForceSend(group.url, input, wrapper, group);
+      });
+      const addBtn = document.createElement('button');
+      addBtn.className = 'btn btn-primary btn-sm';
+      addBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> הוסף`;
+      addBtn.addEventListener('click', () => addGroupForceSend(group.url, input, wrapper, group));
+      inputGroup.appendChild(input);
+      inputGroup.appendChild(addBtn);
+      body.appendChild(inputGroup);
+
+      // chips
+      const chipsDiv = document.createElement('div');
+      chipsDiv.className = 'chips';
+      renderGroupForceSendChips(chipsDiv, keywords, group.url, wrapper, group);
+      body.appendChild(chipsDiv);
+
+      wrapper.appendChild(header);
+      wrapper.appendChild(body);
+      return wrapper;
+    }
+
+    function renderGroupForceSendChips(container, keywords, groupUrl, accordionWrapper, group) {
+      container.innerHTML = '';
+      if (!keywords || keywords.length === 0) {
+        container.innerHTML = '<span class="chips-empty">אין מילים ספציפיות לקבוצה</span>';
+        return;
+      }
+      keywords.forEach(w => {
+        const span = document.createElement('span');
+        span.className = 'chip';
+        span.appendChild(document.createTextNode(w + ' '));
+        const btn = document.createElement('button');
+        btn.className = 'chip-remove';
+        btn.title = 'הסר';
+        btn.innerHTML = '&times;';
+        btn.addEventListener('click', () => removeGroupForceSend(groupUrl, w, container, accordionWrapper, group));
+        span.appendChild(btn);
+        container.appendChild(span);
+      });
+    }
+
+    async function addGroupForceSend(groupUrl, inputEl, accordionWrapper, group) {
+      const word = inputEl.value.trim();
+      if (!word) return;
+      try {
+        const data = await api('/api/group_force_send/keywords', {
+          method: 'POST',
+          body: { url: groupUrl, word },
+        });
+        if (data.ok) {
+          toast(data.message);
+          inputEl.value = '';
+          // רענון — טוען מחדש את המילים של הקבוצה
+          await refreshGroupAccordion(groupUrl, accordionWrapper, group);
+        } else {
+          toast(data.message, 'error');
+        }
+      } catch (e) {
+        toast('שגיאה: ' + e.message, 'error');
+      }
+    }
+
+    async function removeGroupForceSend(groupUrl, word, chipsContainer, accordionWrapper, group) {
+      try {
+        const data = await api('/api/group_force_send/keywords', {
+          method: 'DELETE',
+          body: { url: groupUrl, word },
+        });
+        if (data.ok) {
+          toast(data.message);
+          await refreshGroupAccordion(groupUrl, accordionWrapper, group);
+        } else {
+          toast(data.message, 'error');
+        }
+      } catch (e) {
+        toast('שגיאה: ' + e.message, 'error');
+      }
+    }
+
+    async function refreshGroupAccordion(groupUrl, accordionWrapper, group) {
+      try {
+        const data = await api(`/api/group_force_send/keywords?url=${encodeURIComponent(groupUrl)}`);
+        const keywords = data.keywords || [];
+        // שומר על מצב פתוח/סגור
+        const wasOpen = accordionWrapper.querySelector('.group-accordion-body')?.classList.contains('open');
+        const newAcc = buildGroupAccordion(group, keywords);
+        if (wasOpen) {
+          newAcc.querySelector('.group-accordion-header').classList.add('open');
+          newAcc.querySelector('.group-accordion-body').classList.add('open');
+        }
+        accordionWrapper.replaceWith(newAcc);
+      } catch (e) {
+        toast('שגיאה ברענון: ' + e.message, 'error');
       }
     }
 
