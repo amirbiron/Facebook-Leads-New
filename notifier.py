@@ -213,12 +213,17 @@ def send_document(
         return False
 
 
-def send_sticker(
-    sticker_file_id: str,
+def send_custom_emoji(
+    custom_emoji_id: str,
+    emoji_placeholder: str = "\u2b50",
     *,
     chat_id: str | int | None = None,
 ) -> bool:
-    """שולח סטיקר לטלגרם לפי file_id."""
+    """שולח אימוג'י מותאם (Custom Emoji) כהודעה בטלגרם.
+
+    custom_emoji_id — מזהה האימוג'י (נשלף מ-entities של הודעה נכנסת).
+    emoji_placeholder — אימוג'י רגיל שמשמש כ-fallback לקליינטים שלא תומכים.
+    """
     if not BOT_TOKEN or not (chat_id or CHAT_ID):
         log.error("חסרים TELEGRAM_BOT_TOKEN או TELEGRAM_CHAT_ID")
         return False
@@ -227,17 +232,26 @@ def send_sticker(
 
     try:
         response = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendSticker",
-            json={"chat_id": target_chat, "sticker": sticker_file_id},
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": target_chat,
+                "text": emoji_placeholder,
+                "entities": [{
+                    "type": "custom_emoji",
+                    "offset": 0,
+                    "length": len(emoji_placeholder),
+                    "custom_emoji_id": custom_emoji_id,
+                }],
+            },
             timeout=10,
         )
         if response.status_code == 200:
-            log.debug(f"סטיקר נשלח בהצלחה (chat_id={target_chat})")
+            log.debug(f"אימוג'י מותאם נשלח בהצלחה (chat_id={target_chat})")
             return True
-        log.error(f"sendSticker נכשל: {response.status_code}: {response.text}")
+        log.error(f"sendMessage (custom emoji) נכשל: {response.status_code}: {response.text}")
         return False
     except Exception as e:
-        log.error(f"שגיאה בשליחת סטיקר: {e}", exc_info=True)
+        log.error(f"שגיאה בשליחת אימוג'י מותאם: {e}", exc_info=True)
         return False
 
 
