@@ -79,6 +79,18 @@ def init_db():
                 value TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model TEXT NOT NULL,
+                prompt_tokens INTEGER NOT NULL,
+                completion_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL,
+                estimated_cost_usd REAL NOT NULL,
+                call_type TEXT NOT NULL DEFAULT 'single',
+                created_at TEXT NOT NULL
+            )
+        """)
 
 # ── CRUD ──────────────────────────────────────────────────────
 def is_seen(post_id: str) -> bool:
@@ -316,6 +328,90 @@ def set_config(key: str, value: str):
             "INSERT OR REPLACE INTO _config (key, value) VALUES (?, ?)",
             (key, value),
         )
+
+# ── API Usage Tracking ────────────────────────────────────────
+
+# עלויות לכל 1M טוקנים (USD) — לפי מחירון OpenAI
+_MODEL_COSTS = {
+    "gpt-4.1-mini":  {"input": 0.40, "output": 1.60},
+    "gpt-4o-mini":   {"input": 0.15, "output": 0.60},
+}
+_DEFAULT_COST = {"input": 0.40, "output": 1.60}  # fallback למודל לא מוכר
+
+
+def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    """מחשב עלות משוערת ב-USD לפי מודל וטוקנים."""
+    costs = _MODEL_COSTS.get(model, _DEFAULT_COST)
+    return (prompt_tokens * costs["input"] + completion_tokens * costs["output"]) / 1_000_000
+
+
+def save_api_usage(model: str, prompt_tokens: int, completion_tokens: int,
+                   total_tokens: int, call_type: str = "single"):
+    """שומר רשומת שימוש ב-API."""
+    cost = _estimate_cost(model, prompt_tokens, completion_tokens)
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO api_usage (model, prompt_tokens, completion_tokens, total_tokens, estimated_cost_usd, call_type, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (model, prompt_tokens, completion_tokens, total_tokens, cost, call_type, _now().isoformat()),
+        )
+
+
+def get_usage_stats() -> dict:
+    """מחזיר סטטיסטיקות שימוש מצטברות."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), "
+        "COALESCE(SUM(total_tokens),0), COALESCE(SUM(estimated_cost_usd),0), COUNT(*) "
+        "FROM api_usage"
+    ).fetchone()
+    return {
+        "prompt_tokens": row[0],
+        "completion_tokens": row[1],
+        "total_tokens": row[2],
+        "total_cost_usd": row[3],
+        "total_calls": row[4],
+    }
+
+
+def get_daily_usage_stats(today_prefix: str) -> dict:
+    """מחזיר סטטיסטיקות שימוש של היום בלבד."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), "
+        "COALESCE(SUM(total_tokens),0), COALESCE(SUM(estimated_cost_usd),0), COUNT(*) "
+        "FROM api_usage WHERE created_at LIKE ?",
+        (f"{today_prefix}%",),
+    ).fetchone()
+    return {
+        "prompt_tokens": row[0],
+        "completion_tokens": row[1],
+        "total_tokens": row[2],
+        "total_cost_usd": row[3],
+        "total_calls": row[4],
+    }
+
+
+def get_usage_by_model() -> list[dict]:
+    """מחזיר פירוט שימוש לפי מודל."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT model, SUM(prompt_tokens), SUM(completion_tokens), "
+        "SUM(total_tokens), SUM(estimated_cost_usd), COUNT(*) "
+        "FROM api_usage GROUP BY model ORDER BY SUM(estimated_cost_usd) DESC"
+    ).fetchall()
+    return [
+        {
+            "model": r[0],
+            "prompt_tokens": r[1],
+            "completion_tokens": r[2],
+            "total_tokens": r[3],
+            "total_cost_usd": r[4],
+            "total_calls": r[5],
+        }
+        for r in rows
+    ]
+
 
 # ── Cleanup ───────────────────────────────────────────────────
 def cleanup_old_posts(days: int = 30) -> int:

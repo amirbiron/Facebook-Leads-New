@@ -125,7 +125,8 @@ def _build_batch_system_prompt() -> str:
 [{"relevant": true/false, "reason": "משפט קצר בעברית"}, ...]"""
 
 
-def _chat_completion(system: str, user: str, max_tokens: int) -> str:
+def _chat_completion(system: str, user: str, max_tokens: int,
+                     call_type: str = "single") -> str:
     """קריאת Chat Completion עם auto-fallback למודל הבא אם הנוכחי deprecated."""
     model = _get_active_model()
     tried: set[str] = set()
@@ -139,6 +140,8 @@ def _chat_completion(system: str, user: str, max_tokens: int) -> str:
                     {"role": "user", "content": user},
                 ],
             )
+            # שמירת נתוני שימוש (טוקנים ועלות)
+            _track_usage(response, model, call_type)
             return (response.choices[0].message.content or "") if response.choices else ""
         except openai.APIError as e:
             if _is_model_deprecated_error(e):
@@ -151,6 +154,22 @@ def _chat_completion(system: str, user: str, max_tokens: int) -> str:
             raise  # שגיאה אחרת (rate limit, server error) — מעלים
 
 
+def _track_usage(response, model: str, call_type: str):
+    """שומר נתוני שימוש מתשובת API ל-DB."""
+    try:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+        total_tokens = getattr(usage, "total_tokens", 0) or 0
+        from database import save_api_usage
+        save_api_usage(model, prompt_tokens, completion_tokens, total_tokens, call_type)
+        log.debug(f"[USAGE] {model}: {prompt_tokens}+{completion_tokens}={total_tokens} tokens ({call_type})")
+    except Exception as e:
+        log.warning(f"שגיאה בשמירת נתוני שימוש: {e}")
+
+
 def classify_post(content: str, group_name: str) -> dict:
     try:
         log.debug(f"שולח לסיווג: {content[:80]}...")
@@ -158,6 +177,7 @@ def classify_post(content: str, group_name: str) -> dict:
             system=_build_system_prompt(),
             user=f"קבוצה: {group_name}\n\nפוסט:\n{content[:1000]}",
             max_tokens=1024,
+            call_type="single",
         )
 
         log.debug(f"תשובה גולמית מ-API: {raw_text[:200]}")
@@ -221,6 +241,7 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
                 system=_build_batch_system_prompt(),
                 user=user_message,
                 max_tokens=max(1024, 500 * len(batch)),
+                call_type="batch",
             )
 
             log.debug(f"תשובה באצ': {raw_text[:300]}")
