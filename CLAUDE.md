@@ -111,7 +111,7 @@
 ```bash
 python -m pytest tests.py -v
 ```
-377 טסטים ב-`tests.py` מכסים:
+339 טסטים ב-`tests.py` מכסים:
 - `passes_keyword_filter()` — סינון לפי מילות מפתח (כולל רשימה ריקה)
 - `is_blocked()` — חסימת מילים אסורות
 - `extract_post_id()` — חילוץ ID מ-URLs בפורמטים שונים
