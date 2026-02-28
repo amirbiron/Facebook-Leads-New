@@ -15,8 +15,6 @@ from database import (
     add_keyword, remove_keyword, get_db_keywords, ensure_keywords_migrated,
     get_config, set_config,
     get_usage_stats, get_daily_usage_stats, get_usage_by_model,
-    add_sticker, remove_sticker, rename_sticker, get_stickers, get_sticker_by_name,
-    _next_sticker_name,
 )
 from logger import get_logger
 
@@ -29,6 +27,34 @@ TELEGRAM_CONTROL = os.environ.get("TELEGRAM_CONTROL", "1").strip().lower() not i
 
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", os.environ.get("PORT", "8080")))
 DEVELOPER_CHAT_ID = os.environ.get("DEVELOPER_CHAT_ID", "").strip()
+
+# ── סטיקרים לפי טריגרים ───────────────────────────────────────
+# כל טריגר שומר file_id ב-_config בפורמט "sticker_<trigger>".
+# שליחת סטיקר לבוט → מחזיר file_id → /set_sticker <trigger> <file_id>
+STICKER_TRIGGERS = {
+    "scan_start": "סריקה התחילה",
+    "lead_found": "ליד חדש נמצא",
+    "scan_done":  "סריקה הסתיימה",
+}
+
+
+def _get_sticker(trigger: str) -> str | None:
+    """מחזיר file_id של סטיקר לפי שם טריגר, או None אם לא מוגדר."""
+    val = get_config(f"sticker_{trigger}")
+    return val if val else None
+
+
+async def _send_trigger_sticker(trigger: str):
+    """שולח סטיקר לפי טריגר — אם מוגדר. שקט אם לא מוגדר."""
+    file_id = _get_sticker(trigger)
+    if not file_id:
+        return
+    try:
+        from notifier import send_sticker
+        await asyncio.to_thread(send_sticker, file_id)
+    except Exception as e:
+        log.debug(f"שליחת סטיקר {trigger} נכשלה: {e}")
+
 
 # ── סטטוס סריקה בזמן אמת — נגיש מהפאנל דרך /api/scan-status ──
 # מילון שמתעדכן לאורך כל שלבי הסריקה. Flask קורא אותו (thread-safe לקריאה).
@@ -565,7 +591,6 @@ async def _telegram_control_loop(
     from notifier import (
         send_message, send_message_with_buttons,
         edit_message_text, answer_callback_query,
-        send_sticker as send_sticker_tg,
     )
     import requests
     import json
@@ -720,7 +745,7 @@ async def _telegram_control_loop(
                 {"command": "keywords", "description": "מילות מפתח"},
                 {"command": "force_send", "description": "מילות 'שלח תמיד' (עוקף AI)"},
                 {"command": "max_age", "description": "סינון פוסטים ישנים (לפי ימים)"},
-                {"command": "stickers", "description": "סטיקרים שמורים"},
+                {"command": "stickers", "description": "סטיקרים לפי טריגרים"},
             ]},
             timeout=10,
         )
@@ -767,29 +792,28 @@ async def _telegram_control_loop(
                 if chat_id_int not in allowed_chat_ids:
                     continue
 
-                # ── לכידת סטיקרים — שמירת file_id אוטומטית ──
+                # ── לכידת סטיקרים — חילוץ file_id ──
                 sticker_obj = msg.get("sticker")
                 if sticker_obj:
                     file_id = sticker_obj.get("file_id", "")
                     if file_id:
-                        auto_name = _next_sticker_name()
-                        ok, result_msg = add_sticker(auto_name, file_id)
-                        if ok:
-                            is_animated = sticker_obj.get("is_animated", False)
-                            is_video = sticker_obj.get("is_video", False)
-                            stype = "מונפש" if is_animated else "וידאו" if is_video else "רגיל"
-                            reply = (
-                                f"סטיקר נקלט ({stype})!\n"
-                                f"שם: {auto_name}\n"
-                                f"file_id: {file_id[:40]}...\n\n"
-                                f"לשינוי שם: /rename_sticker {auto_name} <שם_חדש>\n"
-                                f"לשליחה: /send_sticker {auto_name}"
-                            )
-                        else:
-                            reply = result_msg
+                        is_animated = sticker_obj.get("is_animated", False)
+                        is_video = sticker_obj.get("is_video", False)
+                        stype = "מונפש" if is_animated else "וידאו" if is_video else "רגיל"
+                        triggers_text = "\n".join(
+                            f"  {t} — {desc}" for t, desc in STICKER_TRIGGERS.items()
+                        )
+                        reply = (
+                            f"סטיקר ({stype}) — file_id:\n"
+                            f"`{file_id}`\n\n"
+                            f"להגדרה כטריגר:\n"
+                            f"/set_sticker <טריגר> <file_id>\n\n"
+                            f"טריגרים זמינים:\n{triggers_text}"
+                        )
                         await asyncio.to_thread(
                             send_message, reply,
-                            chat_id=chat_id_int, disable_web_page_preview=True,
+                            chat_id=chat_id_int, parse_mode="Markdown",
+                            disable_web_page_preview=True,
                         )
                     continue
 
@@ -1089,69 +1113,78 @@ async def _telegram_control_loop(
                     )
                     continue
 
-                # ── ניהול סטיקרים ──────────────────────────────
+                # ── סטיקרים לפי טריגרים ────────────────────────
                 if cmd in ("/stickers",):
-                    stickers = get_stickers()
-                    if stickers:
-                        lines = [f"{i}. {s['name']} — {s['file_id'][:30]}..." for i, s in enumerate(stickers, 1)]
-                        msg_text = f"סטיקרים שמורים ({len(stickers)}):\n\n" + "\n".join(lines)
-                        msg_text += "\n\nפקודות: /send_sticker <שם> | /remove_sticker <שם> | /rename_sticker <ישן> <חדש>"
-                    else:
-                        msg_text = "אין סטיקרים שמורים.\nשלח סטיקר לבוט כדי לשמור אותו."
+                    lines = []
+                    for trigger, desc in STICKER_TRIGGERS.items():
+                        fid = _get_sticker(trigger)
+                        status = f"`{fid[:30]}...`" if fid else "(לא מוגדר)"
+                        lines.append(f"  {trigger} — {desc}: {status}")
+                    msg_text = (
+                        "סטיקרים לפי טריגרים:\n\n"
+                        + "\n".join(lines)
+                        + "\n\nפקודות:\n"
+                        "/set_sticker <טריגר> <file_id>\n"
+                        "/clear_sticker <טריגר>\n\n"
+                        "לחילוץ file_id — שלח סטיקר לבוט."
+                    )
                     await asyncio.to_thread(
-                        send_message_with_buttons, msg_text,
-                        _back_to_menu_button(),
-                        chat_id=chat_id_int, disable_web_page_preview=True,
+                        send_message, msg_text,
+                        chat_id=chat_id_int, parse_mode="Markdown",
+                        disable_web_page_preview=True,
                     )
                     continue
 
-                if cmd in ("/send_sticker",):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) < 2 or not parts[1].strip():
-                        await asyncio.to_thread(
-                            send_message, "שימוש: /send_sticker <שם>",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                        continue
-                    name = parts[1].strip()
-                    file_id = get_sticker_by_name(name)
-                    if not file_id:
-                        await asyncio.to_thread(
-                            send_message, f"סטיקר לא נמצא: {name}",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                        continue
-                    await asyncio.to_thread(
-                        send_sticker_tg, file_id, chat_id=chat_id_int,
-                    )
-                    continue
-
-                if cmd in ("/remove_sticker",):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) < 2 or not parts[1].strip():
-                        await asyncio.to_thread(
-                            send_message, "שימוש: /remove_sticker <שם>",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                        continue
-                    ok, result_msg = remove_sticker(parts[1].strip())
-                    await asyncio.to_thread(
-                        send_message, result_msg,
-                        chat_id=chat_id_int, disable_web_page_preview=True,
-                    )
-                    continue
-
-                if cmd in ("/rename_sticker",):
+                if cmd in ("/set_sticker",):
                     parts = text.split(maxsplit=2)
                     if len(parts) < 3 or not parts[1].strip() or not parts[2].strip():
+                        triggers_list = ", ".join(STICKER_TRIGGERS.keys())
                         await asyncio.to_thread(
-                            send_message, "שימוש: /rename_sticker <שם_ישן> <שם_חדש>",
+                            send_message,
+                            f"שימוש: /set_sticker <טריגר> <file_id>\n"
+                            f"טריגרים: {triggers_list}",
                             chat_id=chat_id_int, disable_web_page_preview=True,
                         )
                         continue
-                    ok, result_msg = rename_sticker(parts[1].strip(), parts[2].strip())
+                    trigger = parts[1].strip()
+                    fid = parts[2].strip()
+                    if trigger not in STICKER_TRIGGERS:
+                        triggers_list = ", ".join(STICKER_TRIGGERS.keys())
+                        await asyncio.to_thread(
+                            send_message,
+                            f"טריגר לא מוכר: {trigger}\nטריגרים: {triggers_list}",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    set_config(f"sticker_{trigger}", fid)
                     await asyncio.to_thread(
-                        send_message, result_msg,
+                        send_message,
+                        f"סטיקר הוגדר לטריגר: {trigger} ({STICKER_TRIGGERS[trigger]})",
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/clear_sticker",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message, "שימוש: /clear_sticker <טריגר>",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    trigger = parts[1].strip()
+                    if trigger not in STICKER_TRIGGERS:
+                        triggers_list = ", ".join(STICKER_TRIGGERS.keys())
+                        await asyncio.to_thread(
+                            send_message,
+                            f"טריגר לא מוכר: {trigger}\nטריגרים: {triggers_list}",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    set_config(f"sticker_{trigger}", "")
+                    await asyncio.to_thread(
+                        send_message,
+                        f"סטיקר הוסר מטריגר: {trigger}",
                         chat_id=chat_id_int, disable_web_page_preview=True,
                     )
                     continue
@@ -1342,6 +1375,7 @@ async def run_cycle():
     from notifier import send_lead, send_error_alert
 
     _reset_scan_progress()
+    await _send_trigger_sticker("scan_start")
 
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
 
@@ -1452,6 +1486,7 @@ async def run_cycle():
                 leads_found += 1
                 scan_progress["leads_sent"] = leads_found
                 _dedup_debug(post["id"], post["content"], c_hash, "force_send")
+                await _send_trigger_sticker("lead_found")
                 force_send_posts.append(post)
             else:
                 rest_posts.append(post)
@@ -1521,6 +1556,7 @@ async def run_cycle():
                     leads_found += 1
                     scan_progress["leads_sent"] = leads_found
                     _dedup_debug(post["id"], post["content"], post.get("_content_hash", ""), "ai_classified")
+                    await _send_trigger_sticker("lead_found")
                 else:
                     log.debug(f"לא רלוונטי: {result.get('reason', '')}")
 
@@ -1532,6 +1568,7 @@ async def run_cycle():
 
     stats = get_stats()
     log.info(f"סבב הסתיים | לידים בסבב: {leads_found} | סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}")
+    await _send_trigger_sticker("scan_done")
 
 async def main():
     log.info("מאתחל מסד נתונים...")

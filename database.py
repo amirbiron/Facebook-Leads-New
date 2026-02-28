@@ -91,6 +91,7 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        # טבלת stickers ישנה — נשארת למיגרציה חלקה (לא נמחקת DB קיים)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS stickers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -420,76 +421,6 @@ def get_usage_by_model() -> list[dict]:
         for r in rows
     ]
 
-
-# ── Stickers CRUD ─────────────────────────────────────────────
-
-def add_sticker(name: str, file_id: str) -> tuple[bool, str]:
-    """שומר סטיקר ב-DB. מחזיר (success, message)."""
-    name = name.strip()
-    if not name or not file_id:
-        return False, "שם או file_id ריק"
-    try:
-        with _get_conn() as conn:
-            conn.execute(
-                "INSERT INTO stickers (name, file_id, created_at) VALUES (?, ?, ?)",
-                (name, file_id, _now().isoformat()),
-            )
-        return True, f"סטיקר נשמר: {name}"
-    except sqlite3.IntegrityError:
-        return False, f"סטיקר עם השם '{name}' כבר קיים"
-
-
-def remove_sticker(name: str) -> tuple[bool, str]:
-    """מסיר סטיקר מה-DB. מחזיר (success, message)."""
-    name = name.strip()
-    with _get_conn() as conn:
-        deleted = conn.execute("DELETE FROM stickers WHERE name = ?", (name,)).rowcount
-    if deleted:
-        return True, f"סטיקר הוסר: {name}"
-    return False, f"סטיקר לא נמצא: {name}"
-
-
-def rename_sticker(old_name: str, new_name: str) -> tuple[bool, str]:
-    """משנה שם של סטיקר. מחזיר (success, message)."""
-    old_name = old_name.strip()
-    new_name = new_name.strip()
-    if not new_name:
-        return False, "שם חדש ריק"
-    try:
-        with _get_conn() as conn:
-            updated = conn.execute(
-                "UPDATE stickers SET name = ? WHERE name = ?", (new_name, old_name)
-            ).rowcount
-        if updated:
-            return True, f"סטיקר שונה: {old_name} → {new_name}"
-        return False, f"סטיקר לא נמצא: {old_name}"
-    except sqlite3.IntegrityError:
-        return False, f"סטיקר עם השם '{new_name}' כבר קיים"
-
-
-def get_stickers() -> list[dict]:
-    """מחזיר את כל הסטיקרים השמורים."""
-    rows = _get_conn().execute(
-        "SELECT name, file_id FROM stickers ORDER BY id"
-    ).fetchall()
-    return [{"name": r[0], "file_id": r[1]} for r in rows]
-
-
-def get_sticker_by_name(name: str) -> str | None:
-    """מחזיר file_id לפי שם סטיקר, או None אם לא נמצא."""
-    row = _get_conn().execute(
-        "SELECT file_id FROM stickers WHERE name = ?", (name.strip(),)
-    ).fetchone()
-    return row[0] if row else None
-
-
-def _next_sticker_name() -> str:
-    """מייצר שם אוטומטי לסטיקר חדש (sticker_1, sticker_2, ...)."""
-    row = _get_conn().execute(
-        "SELECT MAX(id) FROM stickers"
-    ).fetchone()
-    next_id = (row[0] or 0) + 1
-    return f"sticker_{next_id}"
 
 
 # ── Cleanup ───────────────────────────────────────────────────

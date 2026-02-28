@@ -3007,100 +3007,42 @@ class TestParseDeveloperChatIds:
 
 
 # ──────────────────────────────────────────────────────────────
-# Stickers CRUD
+# Sticker triggers (config-based)
 # ──────────────────────────────────────────────────────────────
 
 
-class TestStickersCRUD:
-    def test_add_sticker(self, tmp_db):
-        ok, msg = database.add_sticker("hello", "CAACAgIAAx0CXK...")
-        assert ok is True
-        assert "נשמר" in msg
+class TestStickerTriggers:
+    def test_set_and_get_sticker_trigger(self, tmp_db):
+        """הגדרת סטיקר לטריגר ושליפה."""
+        database.set_config("sticker_scan_start", "CAACAgIAAx0CXK...")
+        from main import _get_sticker
+        assert _get_sticker("scan_start") == "CAACAgIAAx0CXK..."
 
-    def test_add_sticker_duplicate_name(self, tmp_db):
-        database.add_sticker("hello", "file_id_1")
-        ok, msg = database.add_sticker("hello", "file_id_2")
-        assert ok is False
-        assert "כבר קיים" in msg
+    def test_get_sticker_trigger_not_set(self, tmp_db):
+        """טריגר לא מוגדר מחזיר None."""
+        from main import _get_sticker
+        assert _get_sticker("scan_start") is None
 
-    def test_add_sticker_empty_name(self, tmp_db):
-        ok, msg = database.add_sticker("", "file_id_1")
-        assert ok is False
+    def test_clear_sticker_trigger(self, tmp_db):
+        """ניקוי טריגר — ערך ריק לא נחשב כמוגדר."""
+        database.set_config("sticker_lead_found", "file_id_1")
+        database.set_config("sticker_lead_found", "")
+        from main import _get_sticker
+        assert _get_sticker("lead_found") is None
 
-    def test_add_sticker_empty_file_id(self, tmp_db):
-        ok, msg = database.add_sticker("hello", "")
-        assert ok is False
+    def test_sticker_triggers_dict_exists(self):
+        """וידוא שמילון הטריגרים מוגדר עם הטריגרים הבסיסיים."""
+        from main import STICKER_TRIGGERS
+        assert "scan_start" in STICKER_TRIGGERS
+        assert "lead_found" in STICKER_TRIGGERS
+        assert "scan_done" in STICKER_TRIGGERS
 
-    def test_remove_sticker(self, tmp_db):
-        database.add_sticker("hello", "file_id_1")
-        ok, msg = database.remove_sticker("hello")
-        assert ok is True
-        assert "הוסר" in msg
-
-    def test_remove_sticker_not_found(self, tmp_db):
-        ok, msg = database.remove_sticker("nonexistent")
-        assert ok is False
-        assert "לא נמצא" in msg
-
-    def test_rename_sticker(self, tmp_db):
-        database.add_sticker("old_name", "file_id_1")
-        ok, msg = database.rename_sticker("old_name", "new_name")
-        assert ok is True
-        assert "old_name" in msg and "new_name" in msg
-
-    def test_rename_sticker_not_found(self, tmp_db):
-        ok, msg = database.rename_sticker("nonexistent", "new_name")
-        assert ok is False
-        assert "לא נמצא" in msg
-
-    def test_rename_sticker_duplicate(self, tmp_db):
-        database.add_sticker("a", "file_id_1")
-        database.add_sticker("b", "file_id_2")
-        ok, msg = database.rename_sticker("b", "a")
-        assert ok is False
-        assert "כבר קיים" in msg
-
-    def test_rename_sticker_empty_name(self, tmp_db):
-        database.add_sticker("a", "file_id_1")
-        ok, msg = database.rename_sticker("a", "")
-        assert ok is False
-
-    def test_get_stickers_empty(self, tmp_db):
-        stickers = database.get_stickers()
-        assert stickers == []
-
-    def test_get_stickers(self, tmp_db):
-        database.add_sticker("a", "file_id_1")
-        database.add_sticker("b", "file_id_2")
-        stickers = database.get_stickers()
-        assert len(stickers) == 2
-        assert stickers[0]["name"] == "a"
-        assert stickers[0]["file_id"] == "file_id_1"
-        assert stickers[1]["name"] == "b"
-
-    def test_get_sticker_by_name(self, tmp_db):
-        database.add_sticker("hello", "CAACAgIAAx0CXK...")
-        file_id = database.get_sticker_by_name("hello")
-        assert file_id == "CAACAgIAAx0CXK..."
-
-    def test_get_sticker_by_name_not_found(self, tmp_db):
-        file_id = database.get_sticker_by_name("nonexistent")
-        assert file_id is None
-
-    def test_next_sticker_name(self, tmp_db):
-        name1 = database._next_sticker_name()
-        assert name1 == "sticker_1"
-        database.add_sticker("sticker_1", "file_id_1")
-        name2 = database._next_sticker_name()
-        assert name2 == "sticker_2"
-
-    def test_add_remove_add(self, tmp_db):
-        """הוספה, מחיקה, ושוב הוספה עם אותו שם."""
-        database.add_sticker("x", "file_id_1")
-        database.remove_sticker("x")
-        ok, msg = database.add_sticker("x", "file_id_2")
-        assert ok is True
-        assert database.get_sticker_by_name("x") == "file_id_2"
+    def test_overwrite_sticker_trigger(self, tmp_db):
+        """החלפת file_id של טריגר קיים."""
+        database.set_config("sticker_scan_done", "old_id")
+        database.set_config("sticker_scan_done", "new_id")
+        from main import _get_sticker
+        assert _get_sticker("scan_done") == "new_id"
 
 
 # ──────────────────────────────────────────────────────────────
