@@ -1425,15 +1425,9 @@
         renderSourceBadge('criteria-source',
           currentSettings.criteria_is_default ? 'default' : 'custom');
 
-        // באנר — ברירת מחדל עודכנה בזמן שיש פרומפט מותאם אישית
+        // באנר — ברירת מחדל עודכנה מאז שהמשתמש שמר פרומפט מותאם
         const banner = document.getElementById('criteria-updated-banner');
-        if (!currentSettings.criteria_is_default) {
-          const customText = (currentSettings.classification_criteria || '').trim();
-          const defaultText = criteriaDefault.trim();
-          banner.style.display = (customText !== defaultText) ? '' : 'none';
-        } else {
-          banner.style.display = 'none';
-        }
+        banner.style.display = currentSettings.criteria_default_changed ? '' : 'none';
 
         // גיל מקסימלי לפוסטים
         const maxAge = currentSettings.max_post_age_days || 0;
