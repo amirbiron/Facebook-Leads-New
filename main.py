@@ -291,8 +291,10 @@ async def _stop_scan_animation(leads_found: int, error: str = ""):
     if not chat_id or not msg_id:
         return
 
-    # כשיש לידים — הם כבר נשלחו כהודעות, לא צריך סיכום נוסף
+    # כשיש לידים — הם כבר נשלחו כהודעות, מוחקים את הודעת "סורק..."
     if leads_found > 0 and not error:
+        from notifier import delete_message
+        await asyncio.to_thread(delete_message, chat_id, msg_id)
         return
 
     # סיכום רק כשאין לידים או שיש שגיאה

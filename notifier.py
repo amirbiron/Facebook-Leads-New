@@ -193,6 +193,25 @@ def edit_message_text(
         return False
 
 
+def delete_message(chat_id: int | str, message_id: int) -> bool:
+    """מוחק הודעה בטלגרם."""
+    if not BOT_TOKEN:
+        return False
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage",
+            json={"chat_id": str(chat_id), "message_id": message_id},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return True
+        log.error(f"deleteMessage נכשל: {response.status_code}: {response.text}")
+        return False
+    except Exception as e:
+        log.error(f"שגיאה במחיקת הודעה: {e}", exc_info=True)
+        return False
+
+
 def answer_callback_query(callback_query_id: str, text: str = "") -> bool:
     """עונה ל-callback query (מסיר את אנימציית הטעינה מהכפתור)."""
     if not BOT_TOKEN:

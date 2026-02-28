@@ -3382,13 +3382,15 @@ class TestStopScanAnimation:
     """בדיקות ל-_stop_scan_animation — עצירת אנימציה ועריכת הודעה לסיכום."""
 
     @pytest.mark.asyncio
-    async def test_no_edit_when_leads_found(self, tmp_db):
-        """כשיש לידים — לא עורכים הודעה (הלידים כבר נשלחו כהודעות נפרדות)."""
+    async def test_deletes_message_when_leads_found(self, tmp_db):
+        """כשיש לידים — מוחקים את הודעת 'סורק...' (הלידים כבר נשלחו כהודעות נפרדות)."""
         _scan_anim_state.clear()
         _scan_anim_state["chat_id"] = 123
         _scan_anim_state["message_id"] = 456
-        with patch("notifier.edit_message_text") as mock_edit:
+        with patch("notifier.delete_message") as mock_del, \
+             patch("notifier.edit_message_text") as mock_edit:
             await _stop_scan_animation(leads_found=3)
+            mock_del.assert_called_once_with(123, 456)
             mock_edit.assert_not_called()
 
     @pytest.mark.asyncio
