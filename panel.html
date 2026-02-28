@@ -557,6 +557,17 @@
       margin-bottom: 12px;
     }
 
+    .alert-banner {
+      background: #fef3cd;
+      border: 1px solid #ffc107;
+      border-radius: var(--radius-md);
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: #856404;
+      line-height: 1.5;
+    }
+
     /* ═══ Toast Notifications ═══ */
     #toast-container {
       position: fixed;
@@ -1134,6 +1145,9 @@
         </p>
 
         <div id="criteria-source" class="source-badge"></div>
+        <div id="criteria-updated-banner" class="alert-banner" style="display:none">
+          ⚠️ ברירת המחדל עודכנה מאז שהתאמת את הפרומפט. לחץ <strong>אפס לברירת מחדל</strong> לקבל את הגרסה החדשה, או השאר את הפרומפט שלך.
+        </div>
 
         <div class="form-group">
           <textarea id="criteria-text" rows="14"
@@ -1411,6 +1425,16 @@
         renderSourceBadge('criteria-source',
           currentSettings.criteria_is_default ? 'default' : 'custom');
 
+        // באנר — ברירת מחדל עודכנה בזמן שיש פרומפט מותאם אישית
+        const banner = document.getElementById('criteria-updated-banner');
+        if (!currentSettings.criteria_is_default) {
+          const customText = (currentSettings.classification_criteria || '').trim();
+          const defaultText = criteriaDefault.trim();
+          banner.style.display = (customText !== defaultText) ? '' : 'none';
+        } else {
+          banner.style.display = 'none';
+        }
+
         // גיל מקסימלי לפוסטים
         const maxAge = currentSettings.max_post_age_days || 0;
         document.getElementById('max-post-age').value = String(maxAge);
@@ -1462,6 +1486,7 @@
         });
         toast('קריטריונים אופסו לברירת מחדל');
         renderSourceBadge('criteria-source', 'default');
+        document.getElementById('criteria-updated-banner').style.display = 'none';
       } catch (e) {
         toast('שגיאה: ' + e.message, 'error');
       }
