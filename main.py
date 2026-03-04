@@ -1437,6 +1437,7 @@ async def run_cycle():
                 skipped_early_hash += 1
                 snippet = p["content"].replace('\n', ' ')[:60]
                 log.info(f"[DEDUP-EARLY] content_hash caught dup at seen-filter stage | id={p['id'][:20]} | hash={c_hash[:12]} | \"{snippet}...\"")
+                mark_seen(p["id"], p["group"])
                 continue
             new_posts.append(p)
         if skipped_early_hash:
