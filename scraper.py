@@ -1196,6 +1196,10 @@ async def scrape_all(email: str, password: str, seen_checker=None,
     """
     all_posts = []
 
+    if not GROUPS:
+        log.warning("אין קבוצות מוגדרות — מדלג על סריקה. הוסף קבוצות דרך הפאנל, טלגרם, או FB_GROUPS")
+        return all_posts
+
     log.info(f"מתחיל סריקה של {len(GROUPS)} קבוצות (מובייל)")
 
     async with async_playwright() as p:
