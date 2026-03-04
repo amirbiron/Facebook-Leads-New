@@ -98,7 +98,14 @@ _TIMESTAMP_RE = re.compile(
     # [ \t]* במקום \s* — מונע התאמה בין שורות (50\nשעות לא יימחק)
     r'|\d+[ \t]*(?:שעות|שעה|דקות|דקה|ימים|יום|שבועות|שבוע|חודשים|חודש|שניות|שנייה|שנים|שנה)\b'
     # זמנים יחסיים באנגלית: "5 hours", "2 days", "30 mins"
-    r'|\d+[ \t]*(?:hours?|minutes?|seconds?|days?|weeks?|months?|hrs?|mins?|secs?|wks?)\b',
+    r'|\d+[ \t]*(?:hours?|minutes?|seconds?|days?|weeks?|months?|hrs?|mins?|secs?|wks?)\b'
+    # --- תאריכים עבריים: "4 במרץ", "15 בינואר בשעה 10:30" ---
+    # פייסבוק עובר מזמן יחסי ("8 שעות") לתאריך מלא אחרי ~24 שעות
+    r'|\d{1,2}[ \t]+ב(?:ינואר|פברואר|מרץ|מרס|אפריל|מאי|יוני|יולי|אוגוסט|ספטמבר|אוקטובר|נובמבר|דצמבר)'
+    r'(?:[ \t]+בשעה[ \t]+\d{1,2}:\d{2})?'
+    # --- תאריכים אנגליים: "March 4", "Jan 15 at 10:30 AM" ---
+    r'|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[ \t]+\d{1,2}'
+    r'(?:[ \t]+at[ \t]+\d{1,2}:\d{2}(?:[ \t]*[ap]m)?)?',
     re.MULTILINE | re.IGNORECASE
 )
 
@@ -110,7 +117,8 @@ _ENGAGEMENT_WORDS_PATTERN = (
     r'|comments?|shares?|likes?|reactions?|views?)'
 )
 _ENGAGEMENT_LINE_RE = re.compile(
-    r'^\d[\d,.]*\s*' + _ENGAGEMENT_WORDS_PATTERN
+    # תומך גם בשורות שמתחילות באמוג'י ריאקציה (👍❤️) לפני המספר
+    r'^(?:[^\w\s]*\s*)?\d[\d,.]*\s*' + _ENGAGEMENT_WORDS_PATTERN
     + r'(?:\s*[·•|,]\s*\d[\d,.]*\s*' + _ENGAGEMENT_WORDS_PATTERN + r')*\s*$',
     re.IGNORECASE
 )
@@ -137,9 +145,43 @@ _NOISE_WORDS = frozenset({
 _DYNAMIC_LINE_RE = re.compile(
     r'^\+\d+$'
     r'|^ו-עוד\s+\d+\s*(?:אחרי[םם]?)?$'
-    r'|^and\s+\d+\s+(?:more|others?)$',
+    r'|^and\s+\d+\s+(?:more|others?)$'
+    # "פלוני, אלמוני ו-3 אחרים" — רשימת מגיבים/ריאקציות (כולל שם + ו-N)
+    r'|^.{1,40}\s+ו-?\s*\d+\s*(?:אחרי[םם]?|נוספי[םם]?)\s*$'
+    # "John, Jane and 3 others" — English variant
+    r'|^.{1,40}\s+and\s+\d+\s+(?:more|others?)\s*$',
     re.IGNORECASE
 )
+
+# שורות עם אמוג'י ללא אותיות — כמו "👍 5", "👍❤️ 12", "😂🔥".
+# שורות כאלה הן ריאקציות/ספירות דינמיות שמשתנות בין סריקות.
+# דורשים נוכחות אמוג'י כדי לא לתפוס מספרי טלפון (054-1234567).
+_EMOJI_RE = re.compile(
+    r'[\U0001F600-\U0001F64F'   # Emoticons
+    r'\U0001F300-\U0001F5FF'    # Misc Symbols and Pictographs
+    r'\U0001F680-\U0001F6FF'    # Transport and Map
+    r'\U0001F1E0-\U0001F1FF'    # Flags
+    r'\U0001F900-\U0001F9FF'    # Supplemental Symbols
+    r'\U0001FA00-\U0001FA6F'    # Chess Symbols
+    r'\U0001FA70-\U0001FAFF'    # Symbols Extended-A
+    r'\u2600-\u27BF'            # Misc Symbols
+    r'\u2702-\u27B0'            # Dingbats
+    r'\uFE0F]'                  # Variation Selector
+)
+
+# בר פעולות משולב — "אהבתי · תגובה · שיתוף" וכו'.
+# מופיע כשורה שלמה עם מילות UI מופרדות ב-· או |.
+_ACTION_BAR_WORDS = frozenset({
+    'like', 'comment', 'share', 'send', 'reply',
+    'אהבתי', 'תגובה', 'שיתוף', 'שיתו', 'שתף', 'שתפ',
+    'הגב', 'שלח', 'שלח הודעה', 'הגב/י', 'שתף/י',
+})
+def _is_action_bar(line: str) -> bool:
+    """בודק אם שורה היא בר פעולות UI (כמו 'אהבתי · תגובה · שיתוף')."""
+    parts = re.split(r'\s*[·•|]\s*', line)
+    if len(parts) < 2:
+        return False
+    return all(p.strip() in _ACTION_BAR_WORDS for p in parts if p.strip())
 
 # רגקס להסרת URLs (עם פרמטרי מעקב דינמיים כמו fbclid שמשתנים בין טעינות)
 _URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
@@ -181,14 +223,22 @@ def _stable_text_for_hash(text: str) -> str:
         # זהירות: לא לכלול מקף (-) או פלוס (+) — הם חלק ממספרי טלפון ישראליים
         if re.match(r'^\d[\d,. ]*$', s):
             continue
+        # דילוג על שורות אמוג'י ללא אותיות — "👍 5", "👍❤️ 12", "😂🔥".
+        # דורשים אמוג'י כדי לא לתפוס מספרי טלפון (054-1234567, +972-52-...).
+        if _EMOJI_RE.search(s) and not re.search(r'[a-zA-Zא-ת]', s):
+            continue
         # דילוג על מילות רעש UI
         if s in _NOISE_WORDS:
             continue
         # דילוג על שורות engagement שמשתנות בין סריקות ("5 תגובות", "3 שיתופים")
+        # תומך גם באמוג'י ריאקציה לפני המספר ("👍 5 תגובות")
         if _ENGAGEMENT_LINE_RE.match(s):
             continue
-        # דילוג על שורות דינמיות נוספות ("+3", "ו-עוד 5 אחרים")
+        # דילוג על שורות דינמיות נוספות ("+3", "ו-עוד 5 אחרים", "פלוני ו-3 אחרים")
         if _DYNAMIC_LINE_RE.match(s):
+            continue
+        # דילוג על בר פעולות משולב ("אהבתי · תגובה · שיתוף")
+        if _is_action_bar(s):
             continue
         stable.append(s)
     joined = '\n'.join(stable)

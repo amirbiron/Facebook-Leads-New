@@ -56,6 +56,10 @@ def init_db():
             conn.execute("ALTER TABLE sent_leads ADD COLUMN content_hash TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass  # העמודה כבר קיימת
+        # אינדקס על content_hash — מאיץ חיפוש כפילויות לפי תוכן
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sent_leads_content_hash ON sent_leads(content_hash)")
+        # אינדקס על seen_posts.seen_at — מאיץ cleanup של פוסטים ישנים
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_posts_seen_at ON seen_posts(seen_at)")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
