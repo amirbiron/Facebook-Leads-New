@@ -146,10 +146,14 @@ _DYNAMIC_LINE_RE = re.compile(
     r'^\+\d+$'
     r'|^ו-עוד\s+\d+\s*(?:אחרי[םם]?)?$'
     r'|^and\s+\d+\s+(?:more|others?)$'
-    # "פלוני, אלמוני ו-3 אחרים" — רשימת מגיבים/ריאקציות (כולל שם + ו-N)
-    r'|^.{1,40}\s+ו-?\s*\d+\s*(?:אחרי[םם]?|נוספי[םם]?)\s*$'
-    # "John, Jane and 3 others" — English variant
-    r'|^.{1,40}\s+and\s+\d+\s+(?:more|others?)\s*$',
+    # "פלוני ו-3 אחרים" / "פלוני, אלמוני ו-3 אחרים" — רשימת מגיבים/ריאקציות
+    # שם = עד 2 מילים ללא פסיק. רשימת שמות = שמות מופרדים בפסיקים.
+    # מגביל ל-2 מילים כדי לא לתפוס משפטי תוכן אמיתיים.
+    r'|^\S+(?:\s+\S+)?\s+ו-?\s*\d+\s*(?:אחרי[םם]?|נוספי[םם]?)\s*$'
+    r'|^\S+(?:\s+\S+)?,(?:\s*\S+(?:\s+\S+)?,)*\s*\S+(?:\s+\S+)?\s+ו-?\s*\d+\s*(?:אחרי[םם]?|נוספי[םם]?)\s*$'
+    # "John and 3 others" / "John, Jane and 3 others" — English variant
+    r'|^\S+(?:\s+\S+)?\s+and\s+\d+\s+(?:more|others?)\s*$'
+    r'|^\S+(?:\s+\S+)?,(?:\s*\S+(?:\s+\S+)?,)*\s*\S+(?:\s+\S+)?\s+and\s+\d+\s+(?:more|others?)\s*$',
     re.IGNORECASE
 )
 
@@ -181,7 +185,10 @@ def _is_action_bar(line: str) -> bool:
     parts = re.split(r'\s*[·•|]\s*', line)
     if len(parts) < 2:
         return False
-    return all(p.strip() in _ACTION_BAR_WORDS for p in parts if p.strip())
+    non_empty = [p.strip() for p in parts if p.strip()]
+    if not non_empty:
+        return False
+    return all(p in _ACTION_BAR_WORDS for p in non_empty)
 
 # רגקס להסרת URLs (עם פרמטרי מעקב דינמיים כמו fbclid שמשתנים בין טעינות)
 _URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
