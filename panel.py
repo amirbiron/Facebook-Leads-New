@@ -13,7 +13,6 @@ from database import (
     add_group,
     remove_group,
     get_db_groups,
-    ensure_groups_migrated,
     add_keyword,
     remove_keyword,
     get_db_keywords,
@@ -166,8 +165,7 @@ def create_app() -> Flask:
     def list_groups():
         groups = get_db_groups()
         if groups is None:
-            from scraper import DEFAULT_GROUPS
-            return jsonify({"groups": DEFAULT_GROUPS, "source": "default"})
+            return jsonify({"groups": [], "source": "none"})
         return jsonify({"groups": groups, "source": "custom"})
 
     @app.route("/api/groups", methods=["POST"])
@@ -177,9 +175,6 @@ def create_app() -> Flask:
         url = data.get("url", "").strip()
         if not url:
             return jsonify({"ok": False, "message": "URL ריק"}), 400
-        # מיגרציית ברירות מחדל — אם זו ההוספה הראשונה, מעביר defaults ל-DB
-        from scraper import DEFAULT_GROUPS
-        ensure_groups_migrated(DEFAULT_GROUPS)
         ok, msg = add_group(url)
         return jsonify({"ok": ok, "message": msg})
 

@@ -276,21 +276,12 @@ def _extract_name_from_title(page_title: str) -> str | None:
     return None
 
 
-# שימוש ב-m.facebook.com — אתר מובייל קל בהרבה בזיכרון
-DEFAULT_GROUPS = [
-    {"name": "הכול על אוטומציות בינה מלאכותית AI - IL ישראל", "url": "https://m.facebook.com/groups/640894321475593"},
-    {"name": "דרושים מתכנתים ואנשי פיתוח", "url": "https://m.facebook.com/groups/1920854911477422"},
-    {"name": "AI ISRAEL – בינה מלאכותית כלים ושימושים", "url": "https://m.facebook.com/groups/1934524236895744"},
-    {"name": "בינה מלאכותית AI ISRAEL", "url": "https://m.facebook.com/groups/2055437551629206"},
-    {"name": "Vibe Coding - Israel", "url": "https://m.facebook.com/groups/1684554685829832"},
-]
-
 def load_groups() -> list[dict]:
-    """טוען קבוצות מ-DB, עם fallback ל-FB_GROUPS / ברירת מחדל.
-    סדר עדיפות: DB → FB_GROUPS → DEFAULT_GROUPS
+    """טוען קבוצות מ-DB או ממשתנה סביבה FB_GROUPS.
+    סדר עדיפות: DB → FB_GROUPS → רשימה ריקה.
+    אין ברירות מחדל — חובה להגדיר קבוצות דרך הפאנל, טלגרם, או FB_GROUPS.
     """
     # ניסיון ראשון — טעינה מ-DB
-    # None = מעולם לא הוגדר → fallback.  [] = המשתמש רוקן הכל → רשימה ריקה.
     try:
         from database import get_db_groups
         db_groups = get_db_groups()
@@ -317,8 +308,11 @@ def load_groups() -> list[dict]:
         if groups:
             log.info(f"נטענו {len(groups)} קבוצות ממשתנה סביבה FB_GROUPS")
             return groups
-        log.warning("FB_GROUPS מוגדר אבל ריק — משתמש ברשימת ברירת מחדל")
-    return DEFAULT_GROUPS
+        log.warning("FB_GROUPS מוגדר אבל ריק")
+
+    # אין קבוצות מוגדרות — מחזיר רשימה ריקה
+    log.warning("לא הוגדרו קבוצות — יש להוסיף דרך הפאנל, טלגרם, או FB_GROUPS")
+    return []
 
 def reload_groups():
     """טוען מחדש את רשימת הקבוצות (נקרא אחרי שינוי דרך טלגרם)."""
