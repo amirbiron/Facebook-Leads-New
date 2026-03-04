@@ -851,6 +851,118 @@ class TestStableTextForHash:
         assert _content_dedup_hash(t1) != _content_dedup_hash(t2)
 
 
+    # ── emoji engagement lines ────────────────────────────────
+
+    def test_emoji_reaction_line_removed(self):
+        """שורות ריאקציה עם אמוג'י (👍 5) מוסרות — משתנות בין סריקות."""
+        t1 = "פוסט על עבודה\n👍 5"
+        t2 = "פוסט על עבודה\n👍❤️ 15"
+        t3 = "פוסט על עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    def test_emoji_only_line_removed(self):
+        """שורות שהן רק אמוג'י ומספרים (ללא אותיות) מוסרות."""
+        t1 = "פוסט על עבודה\n😂🔥\n👍 12"
+        t2 = "פוסט על עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_emoji_engagement_with_words_removed(self):
+        """'👍 5 תגובות' — engagement עם אמוג'י מוסר."""
+        t1 = "פוסט על עבודה\n👍 5 תגובות"
+        t2 = "פוסט על עבודה\n👍❤️ 12 תגובות · 3 שיתופים"
+        t3 = "פוסט על עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    def test_emoji_in_post_content_preserved(self):
+        """אמוג'י בתוך תוכן פוסט (עם אותיות) נשמר."""
+        text = "🏠 מחפש דירה 3 חדרים בתל אביב"
+        result = _stable_text_for_hash(text)
+        assert "מחפש דירה" in result
+
+    # ── action bar ────────────────────────────────────────────
+
+    def test_action_bar_combined_removed(self):
+        """בר פעולות משולב ('אהבתי · תגובה · שיתוף') מוסר."""
+        t1 = "תוכן הפוסט\nאהבתי · תגובה · שיתוף"
+        t2 = "תוכן הפוסט"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_action_bar_english_removed(self):
+        """English action bar ('Like · Comment · Share') removed."""
+        t1 = "post content\nLike · Comment · Share"
+        t2 = "post content"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    # ── Hebrew dates ──────────────────────────────────────────
+
+    def test_hebrew_date_removed(self):
+        """תאריכים עבריים ('4 במרץ') מוסרים — פייסבוק מחליף זמן יחסי בתאריך."""
+        t1 = "ניב הראל\n8 שעות\nמחפש שותף טכנולוגי"
+        t2 = "ניב הראל\n4 במרץ\nמחפש שותף טכנולוגי"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_hebrew_date_with_time_removed(self):
+        """'4 במרץ בשעה 10:30' מוסר."""
+        t1 = "ניב הראל\n4 במרץ בשעה 10:30\nמחפש שותף"
+        t2 = "ניב הראל\nמחפש שותף"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_english_date_removed(self):
+        """English dates ('March 4', 'Jan 15 at 10:30 AM') removed."""
+        t1 = "Niv Harel\nMarch 4\nLooking for a tech partner"
+        t2 = "Niv Harel\n8 hours\nLooking for a tech partner"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    def test_english_date_with_time_removed(self):
+        """'Jan 15 at 10:30 AM' removed."""
+        t1 = "Author\nJan 15 at 10:30 AM\npost content here"
+        t2 = "Author\npost content here"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t2)
+
+    # ── name-based reaction patterns ──────────────────────────
+
+    def test_name_and_others_hebrew_removed(self):
+        """'אמיר ו-3 אחרים' — רשימת מגיבים מוסרת."""
+        t1 = "פוסט על עבודה\nאמיר ו-3 אחרים"
+        t2 = "פוסט על עבודה\nדני, שרה ו-8 אחרים"
+        t3 = "פוסט על עבודה"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    def test_name_and_others_english_removed(self):
+        """'John and 3 others' — English reactors list removed."""
+        t1 = "post content\nJohn and 3 others"
+        t2 = "post content\nJohn, Jane and 5 others"
+        t3 = "post content"
+        assert _stable_text_for_hash(t1) == _stable_text_for_hash(t3)
+        assert _stable_text_for_hash(t2) == _stable_text_for_hash(t3)
+
+    # ── cross-session duplicate scenario (issue #115) ─────────
+
+    def test_cross_session_same_post_different_timestamp_format(self):
+        """תרחיש issue #115: אותו פוסט, סשן ראשון עם זמן יחסי, סשן שני עם תאריך."""
+        from main import _content_dedup_hash
+        # סשן 1: פוסט חדש עם זמן יחסי
+        t1 = ("ניב הראל\n7 שעות\n"
+              "מחפש שותף טכנולוגי לפרויקט SaaS שמבוסס על AI.\n"
+              "אנחנו כבר בשלב MVP ומחפשים מישהו שיוביל את הפיתוח.\n"
+              "👍 3\n2 תגובות\nאהבתי · תגובה · שיתוף")
+        # סשן 2: אותו פוסט, 12 שעות אחרי, תאריך במקום זמן יחסי, יותר ריאקציות
+        t2 = ("ניב הראל\n4 במרץ\n"
+              "מחפש שותף טכנולוגי לפרויקט SaaS שמבוסס על AI.\n"
+              "אנחנו כבר בשלב MVP ומחפשים מישהו שיוביל את הפיתוח.\n"
+              "👍❤️ 15\n8 תגובות · 2 שיתופים\nאהבתי · תגובה · שיתוף\n"
+              "דני כהן\nנשמע מעולה, שלח לי הודעה\nאהבתי\nהגב")
+        h1 = _content_dedup_hash(t1)
+        h2 = _content_dedup_hash(t2)
+        assert h1 == h2, (
+            f"content_hash חייב להיות זהה בין סשנים לאותו פוסט: "
+            f"{h1} != {h2}"
+        )
+
+
 class TestContentHashDedup:
     """בדיקות ל-content_hash dedup — מניעת כפילויות כשה-post_id משתנה בין סשנים."""
 

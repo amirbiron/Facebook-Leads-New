@@ -1272,20 +1272,26 @@ if threading.current_thread() is threading.main_thread():
 def _content_dedup_hash(text: str) -> str:
     """מחשב hash תוכן לזיהוי כפילויות — מבוסס על ליבת הטקסט בלבד.
 
-    משתמש ב-150 התווים הראשונים של הטקסט המנורמל (אחרי _stable_text_for_hash).
+    משתמש ב-12 המילים הראשונות של הטקסט המנורמל (אחרי _stable_text_for_hash).
     הסיבה: innerText של אלמנט פוסט כולל גם תגובות/תשובות שמופיעים בסוף הטקסט.
     בין סריקות, תגובות חדשות מתווספות → ה-hash של הטקסט המלא משתנה → כפילות.
     ליבת הפוסט (שם הכותב + תחילת הגוף) מופיעה תמיד בהתחלה ולא משתנה.
+
+    למה 12 מילים ולא 150 תווים: בפוסטים קצרים (~19 מילים / ~100 תווים) חיתוך
+    לפי תווים כולל חלק מתגובות — שמשתנות בין סריקות. 12 מילים = ~60-80 תווים
+    של ליבת הפוסט (שם + משפט ראשון), וספירת מילים לא מושפעת מאורך הפוסט.
     """
     import hashlib
     from scraper import _stable_text_for_hash
     stable = _stable_text_for_hash(text)
     if not stable:
         return ""
-    # חותכים ל-150 תווים — ליבת הפוסט (שם + תחילת הגוף) יציבה בין סריקות,
-    # תוכן דינמי (תגובות, engagement) מופיע בסוף ונחתך.
-    # 150 ולא 200 כי בפוסטים קצרים (~180 תווים) חיתוך ל-200 כולל חלק מתגובות.
-    core = stable[:150]
+    # 12 מילים ראשונות — ליבת הפוסט (שם + משפט ראשון) יציבה בין סריקות.
+    # מילים עדיפות על תווים כי תוכן דינמי (תגובות) מתחיל אחרי גוף הפוסט,
+    # וספירת מילים לא מושפעת מאורכי שורות או שינויי רווחים.
+    # 12 ולא 20 כי בפוסטים קצרים (~19 מילים) חיתוך ל-20 כולל חלק מתגובות.
+    words = stable.split()[:12]
+    core = ' '.join(words)
     return hashlib.md5(core.encode()).hexdigest()
 
 def _dedup_debug(post_id: str, content: str, c_hash: str, label: str):
@@ -1419,7 +1425,23 @@ async def run_cycle():
         # לפוסטים עם URL אמיתי — בודקים לפי post_id ב-DB.
         # לפוסטים ללא URL אמיתי — ה-ID מבוסס hash תוכן (ייחודי לכל פוסט),
         # כך שגם הם נבדקים כראוי מול seen_posts.
-        new_posts = [p for p in posts if not is_seen(p["id"])]
+        # בנוסף, בודקים content_hash מול sent_leads — תופס כפילויות כש-post_id
+        # השתנה בין סשנים (URL extraction לא עקבי) אבל התוכן זהה.
+        skipped_early_hash = 0
+        new_posts = []
+        for p in posts:
+            if is_seen(p["id"]):
+                continue
+            c_hash = _content_dedup_hash(p["content"])
+            if c_hash and is_content_hash_sent(c_hash):
+                skipped_early_hash += 1
+                snippet = p["content"].replace('\n', ' ')[:60]
+                log.info(f"[DEDUP-EARLY] content_hash caught dup at seen-filter stage | id={p['id'][:20]} | hash={c_hash[:12]} | \"{snippet}...\"")
+                mark_seen(p["id"], p["group"])
+                continue
+            new_posts.append(p)
+        if skipped_early_hash:
+            log.info(f"סינון כפילויות מוקדם: {skipped_early_hash} לפי content_hash (post_id השתנה בין סשנים)")
         log.info(f"פוסטים חדשים (לא נראו קודם): {len(new_posts)}")
         scan_progress["new_posts"] = len(new_posts)
 
