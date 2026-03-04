@@ -101,10 +101,11 @@ _TIMESTAMP_RE = re.compile(
     r'|\d+[ \t]*(?:hours?|minutes?|seconds?|days?|weeks?|months?|hrs?|mins?|secs?|wks?)\b'
     # --- תאריכים עבריים: "4 במרץ", "15 בינואר בשעה 10:30" ---
     # פייסבוק עובר מזמן יחסי ("8 שעות") לתאריך מלא אחרי ~24 שעות
-    r'|\d{1,2}[ \t]+ב(?:ינואר|פברואר|מרץ|מרס|אפריל|מאי|יוני|יולי|אוגוסט|ספטמבר|אוקטובר|נובמבר|דצמבר)'
+    r'|\d{1,2}(?!\d)[ \t]+ב(?:ינואר|פברואר|מרץ|מרס|אפריל|מאי|יוני|יולי|אוגוסט|ספטמבר|אוקטובר|נובמבר|דצמבר)'
     r'(?:[ \t]+בשעה[ \t]+\d{1,2}:\d{2})?'
     # --- תאריכים אנגליים: "March 4", "Jan 15 at 10:30 AM" ---
-    r'|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[ \t]+\d{1,2}'
+    # (?!\d) מונע התאמה חלקית למספרי שנה: "March 2024" לא יתפס כ-"March 20"
+    r'|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[ \t]+\d{1,2}(?!\d)'
     r'(?:[ \t]+at[ \t]+\d{1,2}:\d{2}(?:[ \t]*[ap]m)?)?',
     re.MULTILINE | re.IGNORECASE
 )
