@@ -1173,7 +1173,6 @@ _HEALTH_MAX_SCAN_AGE_MINUTES = int(os.environ.get("HEALTH_MAX_SCAN_AGE_MINUTES",
 
 def _deep_health_check() -> tuple[int, dict]:
     """בודק תקינות מעמיקה. מחזיר (status_code, details_dict)."""
-    import json as _json
     import shutil
     from scraper import SESSION_FILE
     from database import DB_PATH
@@ -1190,8 +1189,9 @@ def _deep_health_check() -> tuple[int, dict]:
         healthy = False
 
     # 2. בדיקת session file
-    checks["session_file"] = "ok" if SESSION_FILE.exists() else "missing"
-    if not SESSION_FILE.exists():
+    session_exists = SESSION_FILE.exists()
+    checks["session_file"] = "ok" if session_exists else "missing"
+    if not session_exists:
         healthy = False
 
     # 3. זמן מאז סריקה אחרונה
