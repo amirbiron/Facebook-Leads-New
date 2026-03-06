@@ -3379,3 +3379,147 @@ class TestGroupForceSendPanelAPI:
         assert resp.status_code == 400
 
 
+# ──────────────────────────────────────────────────────────────
+# get_config_by_prefix (database.py)
+# ──────────────────────────────────────────────────────────────
+
+from database import get_config_by_prefix, set_config
+
+
+class TestGetConfigByPrefix:
+    """בדיקת get_config_by_prefix — שמשמש את get_all_group_force_send."""
+
+    def test_returns_matching_rows(self, tmp_db):
+        set_config("force_send_group:aaa", '["w1"]')
+        set_config("force_send_group:bbb", '["w2"]')
+        set_config("other_key", "val")
+        rows = get_config_by_prefix("force_send_group:")
+        assert len(rows) == 2
+        keys = [r[0] for r in rows]
+        assert "force_send_group:aaa" in keys
+        assert "force_send_group:bbb" in keys
+
+    def test_no_matches(self, tmp_db):
+        set_config("other_key", "val")
+        rows = get_config_by_prefix("force_send_group:")
+        assert rows == []
+
+    def test_underscore_in_prefix_not_wildcard(self, tmp_db):
+        """_ ב-prefix לא פועל כ-wildcard — רק התאמה מדויקת."""
+        set_config("test_key", "exact")
+        set_config("testXkey", "wrong")
+        rows = get_config_by_prefix("test_key")
+        keys = [r[0] for r in rows]
+        assert "test_key" in keys
+        assert "testXkey" not in keys
+
+
+# ──────────────────────────────────────────────────────────────
+# JSON Logging
+# ──────────────────────────────────────────────────────────────
+
+class TestJsonLogging:
+    """בדיקת פורמט JSON logging."""
+
+    def test_json_formatter_output(self):
+        import logging
+        from logger import _JsonFormatter
+        fmt = _JsonFormatter()
+        record = logging.LogRecord(
+            name="test", level=logging.INFO, pathname="", lineno=0,
+            msg="hello world", args=(), exc_info=None,
+        )
+        output = fmt.format(record)
+        parsed = json.loads(output)
+        assert parsed["level"] == "INFO"
+        assert parsed["message"] == "hello world"
+        assert parsed["logger"] == "test"
+        assert "time" in parsed
+
+    def test_json_formatter_with_exception(self):
+        import logging
+        from logger import _JsonFormatter
+        fmt = _JsonFormatter()
+        try:
+            raise ValueError("test error")
+        except ValueError:
+            import sys
+            exc_info = sys.exc_info()
+        record = logging.LogRecord(
+            name="test", level=logging.ERROR, pathname="", lineno=0,
+            msg="boom", args=(), exc_info=exc_info,
+        )
+        output = fmt.format(record)
+        parsed = json.loads(output)
+        assert "exception" in parsed
+        assert "ValueError" in parsed["exception"]
+
+
+# ──────────────────────────────────────────────────────────────
+# Deep Health Check
+# ──────────────────────────────────────────────────────────────
+
+class TestDeepHealthCheck:
+    """בדיקת _deep_health_check."""
+
+    def test_healthy_with_recent_scan(self, tmp_db, monkeypatch):
+        from datetime import timezone
+        import main
+        now = datetime.now(tz=timezone.utc)
+        monkeypatch.setattr(main, "_health_shared_state", {
+            "scan_in_progress": False,
+            "last_scan_started": now,
+            "last_scan_finished": now,
+        })
+        monkeypatch.setattr(main, "_HEALTH_MAX_SCAN_AGE_MINUTES", 60)
+        # mock SESSION_FILE exists
+        from unittest.mock import PropertyMock
+        with patch("scraper.SESSION_FILE") as mock_sf:
+            mock_sf.exists.return_value = True
+            status, details = main._deep_health_check()
+        assert status == 200
+        assert details["status"] == "healthy"
+        assert details["db"] == "ok"
+
+    def test_unhealthy_missing_session(self, tmp_db, monkeypatch):
+        from datetime import timezone
+        import main
+        now = datetime.now(tz=timezone.utc)
+        monkeypatch.setattr(main, "_health_shared_state", {
+            "scan_in_progress": False,
+            "last_scan_started": now,
+            "last_scan_finished": now,
+        })
+        monkeypatch.setattr(main, "_HEALTH_MAX_SCAN_AGE_MINUTES", 60)
+        with patch("scraper.SESSION_FILE") as mock_sf:
+            mock_sf.exists.return_value = False
+            status, details = main._deep_health_check()
+        assert status == 503
+        assert details["session_file"] == "missing"
+
+    def test_no_shared_state(self, tmp_db, monkeypatch):
+        import main
+        monkeypatch.setattr(main, "_health_shared_state", None)
+        with patch("scraper.SESSION_FILE") as mock_sf:
+            mock_sf.exists.return_value = True
+            status, details = main._deep_health_check()
+        assert details["last_scan"] == "not_initialized"
+
+    def test_disk_error_marks_unhealthy(self, tmp_db, monkeypatch):
+        """שגיאת disk_usage מסמנת unhealthy."""
+        from datetime import timezone
+        import shutil
+        import main
+        now = datetime.now(tz=timezone.utc)
+        monkeypatch.setattr(main, "_health_shared_state", {
+            "scan_in_progress": False,
+            "last_scan_started": now,
+            "last_scan_finished": now,
+        })
+        monkeypatch.setattr(main, "_HEALTH_MAX_SCAN_AGE_MINUTES", 60)
+        monkeypatch.setattr(shutil, "disk_usage", lambda _: (_ for _ in ()).throw(OSError("disk err")))
+        with patch("scraper.SESSION_FILE") as mock_sf:
+            mock_sf.exists.return_value = True
+            status, details = main._deep_health_check()
+        assert status == 503
+        assert "error" in details["disk"]

@@ -327,6 +327,20 @@ def get_config(key: str, default=None):
         return row[0]
     return default
 
+
+def get_config_by_prefix(prefix: str) -> list[tuple[str, str]]:
+    """מחזיר כל הרשומות מטבלת _config שה-key מתחיל ב-prefix.
+    מחזיר רשימת tuples של (key, value).
+    """
+    try:
+        rows = _get_conn().execute(
+            "SELECT key, value FROM _config WHERE substr(key, 1, ?) = ?",
+            (len(prefix), prefix),
+        ).fetchall()
+    except Exception:
+        return []
+    return rows
+
 def set_config(key: str, value: str):
     """שומר ערך בטבלת _config (מחליף אם קיים)."""
     with _get_conn() as conn:
