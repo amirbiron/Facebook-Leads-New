@@ -1,3 +1,4 @@
+import atexit
 import os
 import re
 import sqlite3
@@ -24,11 +25,29 @@ def _now() -> datetime:
 
 # ── Connection Pool (thread-local) ────────────────────────────
 _local = threading.local()
+_all_connections: list[sqlite3.Connection] = []
+_conn_lock = threading.Lock()
 
 def _get_conn() -> sqlite3.Connection:
     if not hasattr(_local, "conn"):
         _local.conn = sqlite3.connect(DB_PATH)
+        with _conn_lock:
+            _all_connections.append(_local.conn)
     return _local.conn
+
+
+def _close_all_connections():
+    """סוגר את כל ה-connections הפתוחים — נקרא ב-atexit."""
+    with _conn_lock:
+        for conn in _all_connections:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        _all_connections.clear()
+
+
+atexit.register(_close_all_connections)
 
 # ── Init ──────────────────────────────────────────────────────
 def init_db():

@@ -634,6 +634,42 @@ def _parse_developer_chat_ids() -> set[int]:
     return _parse_allowed_chat_ids(DEVELOPER_CHAT_ID)
 
 
+async def _handle_crud_command(
+    text: str,
+    chat_id: int,
+    action_fn,
+    usage_msg: str,
+    *,
+    reload_fn=None,
+    pre_fn=None,
+):
+    """Helper לפקודות CRUD בטלגרם — מפרסר ארגומנט, מבצע פעולה, ושולח תשובה.
+
+    action_fn: callable שמקבל מחרוזת ומחזיר (ok, msg).
+    reload_fn: callable אופציונלי שייקרא אחרי הצלחה.
+    pre_fn: callable אופציונלי שייקרא לפני הפעולה (למשל ensure_keywords_migrated).
+    """
+    from notifier import send_message
+
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await asyncio.to_thread(
+            send_message, usage_msg,
+            chat_id=chat_id, disable_web_page_preview=True,
+        )
+        return
+    arg = parts[1].strip()
+    if pre_fn:
+        pre_fn()
+    ok, result_msg = action_fn(arg)
+    if ok and reload_fn:
+        reload_fn()
+    await asyncio.to_thread(
+        send_message, result_msg,
+        chat_id=chat_id, disable_web_page_preview=True,
+    )
+
+
 async def _telegram_control_loop(
     *,
     scan_now_event: asyncio.Event,
@@ -935,38 +971,20 @@ async def _telegram_control_loop(
                     continue
 
                 if cmd in ("/add_group",):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) < 2 or not parts[1].strip():
-                        await asyncio.to_thread(
-                            send_message, "שימוש: /add_group <url>",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                        continue
-                    ok, result_msg = add_group(parts[1].strip())
-                    if ok:
-                        from scraper import reload_groups
-                        reload_groups()
-                    await asyncio.to_thread(
-                        send_message, result_msg,
-                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    from scraper import reload_groups
+                    await _handle_crud_command(
+                        text, chat_id_int, add_group,
+                        "שימוש: /add_group <url>",
+                        reload_fn=reload_groups,
                     )
                     continue
 
                 if cmd in ("/remove_group",):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) < 2 or not parts[1].strip():
-                        await asyncio.to_thread(
-                            send_message, "שימוש: /remove_group <url>",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                        continue
-                    ok, result_msg = remove_group(parts[1].strip())
-                    if ok:
-                        from scraper import reload_groups
-                        reload_groups()
-                    await asyncio.to_thread(
-                        send_message, result_msg,
-                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    from scraper import reload_groups
+                    await _handle_crud_command(
+                        text, chat_id_int, remove_group,
+                        "שימוש: /remove_group <url>",
+                        reload_fn=reload_groups,
                     )
                     continue
 
@@ -982,72 +1000,40 @@ async def _telegram_control_loop(
                     continue
 
                 if cmd in ("/add_keyword",):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) < 2 or not parts[1].strip():
-                        await asyncio.to_thread(
-                            send_message, "שימוש: /add_keyword <מילה>",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                        continue
-                    ensure_keywords_migrated("pre_filter", _PRE_FILTER_KEYWORDS_DEFAULT)
-                    ok, result_msg = add_keyword(parts[1].strip(), "pre_filter")
-                    if ok:
-                        reload_keywords()
-                    await asyncio.to_thread(
-                        send_message, result_msg,
-                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    await _handle_crud_command(
+                        text, chat_id_int,
+                        lambda w: add_keyword(w, "pre_filter"),
+                        "שימוש: /add_keyword <מילה>",
+                        reload_fn=reload_keywords,
+                        pre_fn=lambda: ensure_keywords_migrated("pre_filter", _PRE_FILTER_KEYWORDS_DEFAULT),
                     )
                     continue
 
                 if cmd in ("/remove_keyword",):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) < 2 or not parts[1].strip():
-                        await asyncio.to_thread(
-                            send_message, "שימוש: /remove_keyword <מילה>",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                        continue
-                    ok, result_msg = remove_keyword(parts[1].strip(), "pre_filter")
-                    if ok:
-                        reload_keywords()
-                    await asyncio.to_thread(
-                        send_message, result_msg,
-                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    await _handle_crud_command(
+                        text, chat_id_int,
+                        lambda w: remove_keyword(w, "pre_filter"),
+                        "שימוש: /remove_keyword <מילה>",
+                        reload_fn=reload_keywords,
                     )
                     continue
 
                 if cmd in ("/block",):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) < 2 or not parts[1].strip():
-                        await asyncio.to_thread(
-                            send_message, "שימוש: /block <מילה>",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                        continue
-                    ensure_keywords_migrated("block", _BLOCK_KEYWORDS_ENV)
-                    ok, result_msg = add_keyword(parts[1].strip(), "block")
-                    if ok:
-                        reload_keywords()
-                    await asyncio.to_thread(
-                        send_message, result_msg,
-                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    await _handle_crud_command(
+                        text, chat_id_int,
+                        lambda w: add_keyword(w, "block"),
+                        "שימוש: /block <מילה>",
+                        reload_fn=reload_keywords,
+                        pre_fn=lambda: ensure_keywords_migrated("block", _BLOCK_KEYWORDS_ENV),
                     )
                     continue
 
                 if cmd in ("/unblock",):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) < 2 or not parts[1].strip():
-                        await asyncio.to_thread(
-                            send_message, "שימוש: /unblock <מילה>",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                        continue
-                    ok, result_msg = remove_keyword(parts[1].strip(), "block")
-                    if ok:
-                        reload_keywords()
-                    await asyncio.to_thread(
-                        send_message, result_msg,
-                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    await _handle_crud_command(
+                        text, chat_id_int,
+                        lambda w: remove_keyword(w, "block"),
+                        "שימוש: /unblock <מילה>",
+                        reload_fn=reload_keywords,
                     )
                     continue
 
@@ -1074,19 +1060,11 @@ async def _telegram_control_loop(
                     continue
 
                 if cmd in ("/unforce",):
-                    parts = text.split(maxsplit=1)
-                    if len(parts) < 2 or not parts[1].strip():
-                        await asyncio.to_thread(
-                            send_message, "שימוש: /unforce <מילה>",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                        continue
-                    ok, result_msg = remove_force_send_keyword(parts[1].strip())
-                    if ok:
-                        reload_keywords()
-                    await asyncio.to_thread(
-                        send_message, result_msg,
-                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    await _handle_crud_command(
+                        text, chat_id_int,
+                        remove_force_send_keyword,
+                        "שימוש: /unforce <מילה>",
+                        reload_fn=reload_keywords,
                     )
                     continue
 
@@ -1468,7 +1446,8 @@ async def run_cycle():
                     log.debug(f"דילוג על force_send — תוכן זהה כבר נשלח (content_hash)")
                     continue
                 reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
-                send_lead(
+                await asyncio.to_thread(
+                    send_lead,
                     group_name=post["group"],
                     content=post["content"],
                     post_url=post["url"],
@@ -1532,12 +1511,14 @@ async def run_cycle():
             scan_progress.update({"phase": "classifying", "phase_label": "מסווג עם AI"})
 
             # סיווג באצ'ים — שליחת מספר פוסטים ל-AI בבקשה אחת
-            results = classify_batch(to_classify)
+            # עוטף ב-asyncio.to_thread כי classify_batch משתמש ב-openai סינכרוני
+            results = await asyncio.to_thread(classify_batch, to_classify)
 
             for post, result in zip(to_classify, results):
                 if result.get("relevant"):
                     reason = result.get("reason", "")
-                    send_lead(
+                    await asyncio.to_thread(
+                        send_lead,
                         group_name=post["group"],
                         content=post["content"],
                         post_url=post["url"],
