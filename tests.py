@@ -3495,3 +3495,22 @@ class TestDeepHealthCheck:
             mock_sf.exists.return_value = True
             status, details = main._deep_health_check()
         assert details["last_scan"] == "not_initialized"
+
+    def test_disk_error_marks_unhealthy(self, tmp_db, monkeypatch):
+        """שגיאת disk_usage מסמנת unhealthy."""
+        from datetime import timezone
+        import shutil
+        import main
+        now = datetime.now(tz=timezone.utc)
+        monkeypatch.setattr(main, "_health_shared_state", {
+            "scan_in_progress": False,
+            "last_scan_started": now,
+            "last_scan_finished": now,
+        })
+        monkeypatch.setattr(main, "_HEALTH_MAX_SCAN_AGE_MINUTES", 60)
+        monkeypatch.setattr(shutil, "disk_usage", lambda _: (_ for _ in ()).throw(OSError("disk err")))
+        with patch("scraper.SESSION_FILE") as mock_sf:
+            mock_sf.exists.return_value = True
+            status, details = main._deep_health_check()
+        assert status == 503
+        assert "error" in details["disk"]

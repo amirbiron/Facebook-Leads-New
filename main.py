@@ -1226,6 +1226,7 @@ def _deep_health_check() -> tuple[int, dict]:
             checks["disk"] = "ok"
     except Exception as e:
         checks["disk"] = f"error: {e}"
+        healthy = False
 
     status_code = 200 if healthy else 503
     checks["status"] = "healthy" if healthy else "unhealthy"
