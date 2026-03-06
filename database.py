@@ -30,7 +30,8 @@ _conn_lock = threading.Lock()
 
 def _get_conn() -> sqlite3.Connection:
     if not hasattr(_local, "conn"):
-        _local.conn = sqlite3.connect(DB_PATH)
+        _local.conn = sqlite3.connect(DB_PATH, timeout=10)
+        _local.conn.execute("PRAGMA journal_mode=WAL")
         with _conn_lock:
             _all_connections.append(_local.conn)
     return _local.conn
@@ -331,6 +332,51 @@ def set_config(key: str, value: str):
             "INSERT OR REPLACE INTO _config (key, value) VALUES (?, ?)",
             (key, value),
         )
+
+# ── Encrypted Config (credentials) ──────────────────────────
+
+def _get_fernet():
+    """מחזיר Fernet instance. המפתח נגזר מ-ENCRYPTION_KEY env var.
+    אם המשתנה לא מוגדר — חוזר None (ללא הצפנה, backward-compatible).
+    """
+    key = os.environ.get("ENCRYPTION_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        import base64
+        import hashlib
+        from cryptography.fernet import Fernet
+        # גוזר מפתח 32 בתים מהסיסמה (SHA-256) ומקודד ל-base64 urlsafe
+        derived = hashlib.sha256(key.encode()).digest()
+        fernet_key = base64.urlsafe_b64encode(derived)
+        return Fernet(fernet_key)
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+def set_config_encrypted(key: str, value: str):
+    """שומר ערך מוצפן בטבלת _config. אם אין ENCRYPTION_KEY — שומר רגיל."""
+    f = _get_fernet()
+    if f and value:
+        encrypted = f.encrypt(value.encode()).decode()
+        set_config(key, f"enc:{encrypted}")
+    else:
+        set_config(key, value)
+
+def get_config_encrypted(key: str, default=None):
+    """קורא ערך מוצפן מטבלת _config. אם הערך לא מוצפן — מחזיר כמו שהוא."""
+    raw = get_config(key, default)
+    if raw is None or raw is default:
+        return raw
+    if isinstance(raw, str) and raw.startswith("enc:"):
+        f = _get_fernet()
+        if f:
+            try:
+                return f.decrypt(raw[4:].encode()).decode()
+            except Exception:
+                return None  # מפתח הצפנה השתנה — None כדי שה-caller ייפול ל-env var
+    return raw
 
 # ── API Usage Tracking ────────────────────────────────────────
 

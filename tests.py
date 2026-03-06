@@ -38,7 +38,7 @@ class TestPassesKeywordFilter:
 
     def test_empty_list_passes_all(self):
         """רשימת מילות מפתח ריקה = אין סינון מוקדם, הכל עובר."""
-        with patch("main.PRE_FILTER_KEYWORDS", []):
+        with patch.dict("main._keywords_state", {"pre_filter": []}):
             assert passes_keyword_filter("כל טקסט שהוא") is True
 
 
@@ -51,19 +51,19 @@ from main import is_blocked
 
 class TestIsBlocked:
     def test_no_block_keywords(self):
-        with patch("main.BLOCK_KEYWORDS", []):
+        with patch.dict("main._keywords_state", {"block": []}):
             assert is_blocked("כל טקסט שהוא") is False
 
     def test_blocked_word_present(self):
-        with patch("main.BLOCK_KEYWORDS", ["ספאם", "פרסום"]):
+        with patch.dict("main._keywords_state", {"block": ["ספאם", "פרסום"]}):
             assert is_blocked("זה ספאם מלא") is True
 
     def test_blocked_word_absent(self):
-        with patch("main.BLOCK_KEYWORDS", ["ספאם"]):
+        with patch.dict("main._keywords_state", {"block": ["ספאם"]}):
             assert is_blocked("פוסט רגיל לגמרי") is False
 
     def test_case_insensitive(self):
-        with patch("main.BLOCK_KEYWORDS", ["spam"]):
+        with patch.dict("main._keywords_state", {"block": ["spam"]}):
             assert is_blocked("This is SPAM") is True
 
 
@@ -76,23 +76,23 @@ from main import matches_force_send
 
 class TestForceSend:
     def test_no_force_keywords(self):
-        with patch("main.FORCE_SEND_KEYWORDS", []):
+        with patch.dict("main._keywords_state", {"force_send": [], "group_force_send": {}}):
             assert matches_force_send("כל טקסט שהוא") is None
 
     def test_match_returns_keyword(self):
-        with patch("main.FORCE_SEND_KEYWORDS", ["skill", "getdrip"]):
+        with patch.dict("main._keywords_state", {"force_send": ["skill", "getdrip"], "group_force_send": {}}):
             assert matches_force_send("פוסט על Skill כלשהו") == "skill"
 
     def test_no_match_returns_none(self):
-        with patch("main.FORCE_SEND_KEYWORDS", ["skill"]):
+        with patch.dict("main._keywords_state", {"force_send": ["skill"], "group_force_send": {}}):
             assert matches_force_send("פוסט רגיל") is None
 
     def test_case_insensitive(self):
-        with patch("main.FORCE_SEND_KEYWORDS", ["skill"]):
+        with patch.dict("main._keywords_state", {"force_send": ["skill"], "group_force_send": {}}):
             assert matches_force_send("SKILL is great") == "skill"
 
     def test_multiple_keywords_first_match(self):
-        with patch("main.FORCE_SEND_KEYWORDS", ["skill", "getdrip"]):
+        with patch.dict("main._keywords_state", {"force_send": ["skill", "getdrip"], "group_force_send": {}}):
             result = matches_force_send("GetDRIP הוא כלי מעולה")
             assert result == "getdrip"
 
@@ -327,8 +327,8 @@ class TestSendErrorAlert:
 
 class TestSendDocument:
     @patch("notifier.requests.post")
-    @patch("notifier.BOT_TOKEN", "fake-token")
-    @patch("notifier.CHAT_ID", "123")
+    @patch("notifier._get_bot_token", new=lambda: "fake-token")
+    @patch("notifier._get_chat_id", new=lambda: "123")
     def test_sends_file_successfully(self, mock_post):
         mock_post.return_value = MagicMock(status_code=200)
         result = send_document(b"<html>test</html>", "dump.html", "caption")
@@ -340,24 +340,24 @@ class TestSendDocument:
         assert call_kwargs[1]["data"]["caption"] == "caption"
 
     @patch("notifier.requests.post")
-    @patch("notifier.BOT_TOKEN", "fake-token")
-    @patch("notifier.CHAT_ID", "123")
+    @patch("notifier._get_bot_token", new=lambda: "fake-token")
+    @patch("notifier._get_chat_id", new=lambda: "123")
     def test_returns_false_on_failure(self, mock_post):
         mock_post.return_value = MagicMock(status_code=400, text="Bad request")
         result = send_document(b"<html>test</html>", "dump.html")
         assert result is False
 
     @patch("notifier.requests.post")
-    @patch("notifier.BOT_TOKEN", None)
-    @patch("notifier.CHAT_ID", "123")
+    @patch("notifier._get_bot_token", new=lambda: None)
+    @patch("notifier._get_chat_id", new=lambda: "123")
     def test_returns_false_without_token(self, mock_post):
         result = send_document(b"<html>test</html>", "dump.html")
         assert result is False
         mock_post.assert_not_called()
 
     @patch("notifier.requests.post")
-    @patch("notifier.BOT_TOKEN", "fake-token")
-    @patch("notifier.CHAT_ID", "123")
+    @patch("notifier._get_bot_token", new=lambda: "fake-token")
+    @patch("notifier._get_chat_id", new=lambda: "123")
     def test_truncates_caption_to_1024(self, mock_post):
         mock_post.return_value = MagicMock(status_code=200)
         long_caption = "x" * 2000
@@ -366,8 +366,8 @@ class TestSendDocument:
         assert len(call_kwargs[1]["data"]["caption"]) == 1024
 
     @patch("notifier.requests.post")
-    @patch("notifier.BOT_TOKEN", "fake-token")
-    @patch("notifier.CHAT_ID", "123")
+    @patch("notifier._get_bot_token", new=lambda: "fake-token")
+    @patch("notifier._get_chat_id", new=lambda: "123")
     def test_custom_chat_id(self, mock_post):
         mock_post.return_value = MagicMock(status_code=200)
         send_document(b"data", "file.html", chat_id="999")
@@ -1984,12 +1984,12 @@ class TestBuildGroupsText:
 
 class TestBuildKeywordsText:
     def test_empty_keywords(self):
-        with patch("main.PRE_FILTER_KEYWORDS", []), patch("main.BLOCK_KEYWORDS", []):
+        with patch.dict("main._keywords_state", {"pre_filter": [], "block": []}):
             text = _build_keywords_text()
             assert "(ריק)" in text
 
     def test_with_keywords(self):
-        with patch("main.PRE_FILTER_KEYWORDS", ["בוט", "אוטומציה"]), patch("main.BLOCK_KEYWORDS", ["ספאם"]):
+        with patch.dict("main._keywords_state", {"pre_filter": ["בוט", "אוטומציה"], "block": ["ספאם"]}):
             text = _build_keywords_text()
             assert "בוט" in text
             assert "אוטומציה" in text
@@ -1999,13 +1999,13 @@ class TestBuildKeywordsText:
 
 class TestBuildBlockedText:
     def test_empty_blocked(self):
-        with patch("main.BLOCK_KEYWORDS", []):
+        with patch.dict("main._keywords_state", {"block": []}):
             from main import _build_blocked_text
             text = _build_blocked_text()
             assert "(ריק)" in text
 
     def test_with_blocked(self):
-        with patch("main.BLOCK_KEYWORDS", ["ספאם"]):
+        with patch.dict("main._keywords_state", {"block": ["ספאם"]}):
             from main import _build_blocked_text
             text = _build_blocked_text()
             assert "ספאם" in text
@@ -2019,7 +2019,7 @@ from notifier import send_message_with_buttons, edit_message_text, answer_callba
 
 
 class TestSendMessageWithButtons:
-    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier._get_bot_token", new=lambda: "fake-token")
     @patch("notifier.requests.post")
     def test_sends_with_reply_markup(self, mock_post):
         mock_resp = MagicMock()
@@ -2036,7 +2036,7 @@ class TestSendMessageWithButtons:
         assert "reply_markup" in call_payload
         assert call_payload["reply_markup"]["inline_keyboard"] == buttons
 
-    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier._get_bot_token", new=lambda: "fake-token")
     @patch("notifier.requests.post")
     def test_returns_none_on_error(self, mock_post):
         mock_resp = MagicMock()
@@ -2048,13 +2048,13 @@ class TestSendMessageWithButtons:
         assert result is None
 
     def test_no_token_returns_none(self, monkeypatch):
-        monkeypatch.setattr("notifier.BOT_TOKEN", None)
+        monkeypatch.setattr("notifier._get_bot_token", lambda: None)
         result = send_message_with_buttons("טקסט", [[]], chat_id=123)
         assert result is None
 
 
 class TestEditMessageText:
-    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier._get_bot_token", new=lambda: "fake-token")
     @patch("notifier.requests.post")
     def test_edits_message(self, mock_post):
         mock_resp = MagicMock()
@@ -2070,7 +2070,7 @@ class TestEditMessageText:
         assert call_payload["text"] == "טקסט חדש"
         assert "reply_markup" in call_payload
 
-    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier._get_bot_token", new=lambda: "fake-token")
     @patch("notifier.requests.post")
     def test_edit_without_buttons(self, mock_post):
         mock_resp = MagicMock()
@@ -2083,7 +2083,7 @@ class TestEditMessageText:
         call_payload = mock_post.call_args[1]["json"]
         assert "reply_markup" not in call_payload
 
-    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier._get_bot_token", new=lambda: "fake-token")
     @patch("notifier.requests.post")
     def test_returns_false_on_error(self, mock_post):
         mock_resp = MagicMock()
@@ -2096,7 +2096,7 @@ class TestEditMessageText:
 
 
 class TestAnswerCallbackQuery:
-    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier._get_bot_token", new=lambda: "fake-token")
     @patch("notifier.requests.post")
     def test_answers_query(self, mock_post):
         mock_resp = MagicMock()
@@ -2110,7 +2110,7 @@ class TestAnswerCallbackQuery:
         assert call_payload["callback_query_id"] == "cb_123"
         assert call_payload["text"] == "הודעה"
 
-    @patch("notifier.BOT_TOKEN", "fake-token")
+    @patch("notifier._get_bot_token", new=lambda: "fake-token")
     @patch("notifier.requests.post")
     def test_answers_without_text(self, mock_post):
         mock_resp = MagicMock()
@@ -2122,7 +2122,7 @@ class TestAnswerCallbackQuery:
         assert "text" not in call_payload
 
     def test_no_token_returns_false(self, monkeypatch):
-        monkeypatch.setattr("notifier.BOT_TOKEN", None)
+        monkeypatch.setattr("notifier._get_bot_token", lambda: None)
         result = answer_callback_query("cb_123")
         assert result is False
 
@@ -3268,16 +3268,14 @@ class TestMatchesForceSendWithGroup:
 
     def test_global_match(self):
         """מילה גלובלית תואמת ללא group_url."""
-        with patch("main.FORCE_SEND_KEYWORDS", ["skill"]), \
-             patch("main.GROUP_FORCE_SEND_KEYWORDS", {}):
+        with patch.dict("main._keywords_state", {"force_send": ["skill"], "group_force_send": {}}):
             assert matches_force_send("I have a Skill") == "skill"
 
     def test_group_match(self):
         """מילה ספציפית לקבוצה תואמת כשמועבר group_url מתאים."""
-        with patch("main.FORCE_SEND_KEYWORDS", []), \
-             patch("main.GROUP_FORCE_SEND_KEYWORDS", {
+        with patch.dict("main._keywords_state", {"force_send": [], "group_force_send": {
                  "https://m.facebook.com/groups/123": ["getdrip"]
-             }):
+             }}):
             result = matches_force_send(
                 "GetDRIP is great",
                 group_url="https://m.facebook.com/groups/123",
@@ -3286,10 +3284,9 @@ class TestMatchesForceSendWithGroup:
 
     def test_group_match_wrong_group(self):
         """מילה ספציפית לקבוצה לא תואמת כשה-group_url שונה."""
-        with patch("main.FORCE_SEND_KEYWORDS", []), \
-             patch("main.GROUP_FORCE_SEND_KEYWORDS", {
+        with patch.dict("main._keywords_state", {"force_send": [], "group_force_send": {
                  "https://m.facebook.com/groups/123": ["getdrip"]
-             }):
+             }}):
             result = matches_force_send(
                 "GetDRIP is great",
                 group_url="https://m.facebook.com/groups/999",
@@ -3298,10 +3295,9 @@ class TestMatchesForceSendWithGroup:
 
     def test_global_before_group(self):
         """מילה גלובלית קודמת למילת קבוצה."""
-        with patch("main.FORCE_SEND_KEYWORDS", ["global_word"]), \
-             patch("main.GROUP_FORCE_SEND_KEYWORDS", {
+        with patch.dict("main._keywords_state", {"force_send": ["global_word"], "group_force_send": {
                  "https://m.facebook.com/groups/123": ["group_word"]
-             }):
+             }}):
             result = matches_force_send(
                 "text with global_word and group_word",
                 group_url="https://m.facebook.com/groups/123",
@@ -3310,10 +3306,9 @@ class TestMatchesForceSendWithGroup:
 
     def test_no_match_anywhere(self):
         """אין התאמה לא גלובלית ולא לקבוצה."""
-        with patch("main.FORCE_SEND_KEYWORDS", ["skill"]), \
-             patch("main.GROUP_FORCE_SEND_KEYWORDS", {
+        with patch.dict("main._keywords_state", {"force_send": ["skill"], "group_force_send": {
                  "https://m.facebook.com/groups/123": ["getdrip"]
-             }):
+             }}):
             result = matches_force_send(
                 "just a regular post",
                 group_url="https://m.facebook.com/groups/123",
@@ -3322,10 +3317,9 @@ class TestMatchesForceSendWithGroup:
 
     def test_no_group_url_skips_group_check(self):
         """ללא group_url — בודק רק גלובליות."""
-        with patch("main.FORCE_SEND_KEYWORDS", []), \
-             patch("main.GROUP_FORCE_SEND_KEYWORDS", {
+        with patch.dict("main._keywords_state", {"force_send": [], "group_force_send": {
                  "https://m.facebook.com/groups/123": ["getdrip"]
-             }):
+             }}):
             result = matches_force_send("GetDRIP is great")
             assert result is None
 

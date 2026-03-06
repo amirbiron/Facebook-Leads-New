@@ -5,8 +5,15 @@ from logger import get_logger
 
 log = get_logger("Notifier")
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+def _get_bot_token() -> str | None:
+    return os.environ.get("TELEGRAM_BOT_TOKEN")
+
+def _get_chat_id() -> str | None:
+    return os.environ.get("TELEGRAM_CHAT_ID")
+
+# backward compat — שומרים את השמות הישנים למי שקורא אותם ישירות
+BOT_TOKEN = _get_bot_token()
+CHAT_ID = _get_chat_id()
 # chat ID נפרד להתראות שגיאה — אם מוגדר, שגיאות ילכו למפתח במקום ללקוח
 ERROR_CHAT_ID = os.environ.get("ERROR_CHAT_ID")
 
@@ -17,11 +24,13 @@ def send_message(
     parse_mode: str | None = None,
     disable_web_page_preview: bool = False,
 ) -> bool:
-    if not BOT_TOKEN or not (chat_id or CHAT_ID):
+    bot_token = _get_bot_token()
+    default_chat = _get_chat_id()
+    if not bot_token or not (chat_id or default_chat):
         log.error("חסרים TELEGRAM_BOT_TOKEN או TELEGRAM_CHAT_ID")
         return False
 
-    target_chat = str(chat_id or CHAT_ID)
+    target_chat = str(chat_id or default_chat)
 
     payload: dict = {
         "chat_id": target_chat,
@@ -34,7 +43,7 @@ def send_message(
     try:
         log.debug(f"שולח הודעה לטלגרם (chat_id={target_chat})...")
         response = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
             json=payload,
             timeout=10,
         )
@@ -91,11 +100,13 @@ def send_message_with_buttons(
     buttons — מערך דו-ממדי של כפתורים, כל dict: {"text": "...", "callback_data": "..."}.
     מחזיר dict של ההודעה שנשלחה (כולל message_id) או None בשגיאה.
     """
-    if not BOT_TOKEN or not (chat_id or CHAT_ID):
+    bot_token = _get_bot_token()
+    default_chat = _get_chat_id()
+    if not bot_token or not (chat_id or default_chat):
         log.error("חסרים TELEGRAM_BOT_TOKEN או TELEGRAM_CHAT_ID")
         return None
 
-    target_chat = str(chat_id or CHAT_ID)
+    target_chat = str(chat_id or default_chat)
 
     payload: dict = {
         "chat_id": target_chat,
@@ -108,7 +119,7 @@ def send_message_with_buttons(
 
     try:
         response = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            f"https://api.telegram.org/bot{bot_token}/sendMessage",
             json=payload,
             timeout=10,
         )
@@ -131,7 +142,8 @@ def edit_message_text(
     parse_mode: str | None = None,
 ) -> bool:
     """עורך הודעה קיימת (טקסט + כפתורים אופציונליים)."""
-    if not BOT_TOKEN:
+    bot_token = _get_bot_token()
+    if not bot_token:
         return False
 
     payload: dict = {
@@ -146,7 +158,7 @@ def edit_message_text(
 
     try:
         response = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
+            f"https://api.telegram.org/bot{bot_token}/editMessageText",
             json=payload,
             timeout=10,
         )
@@ -161,14 +173,15 @@ def edit_message_text(
 
 def answer_callback_query(callback_query_id: str, text: str = "") -> bool:
     """עונה ל-callback query (מסיר את אנימציית הטעינה מהכפתור)."""
-    if not BOT_TOKEN:
+    bot_token = _get_bot_token()
+    if not bot_token:
         return False
     payload: dict = {"callback_query_id": callback_query_id}
     if text:
         payload["text"] = text
     try:
         response = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
+            f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery",
             json=payload,
             timeout=10,
         )
@@ -190,15 +203,17 @@ def send_document(
     filename — שם הקובץ שיוצג בטלגרם.
     caption — כיתוב אופציונלי (עד 1024 תווים).
     """
-    if not BOT_TOKEN or not (chat_id or CHAT_ID):
+    bot_token = _get_bot_token()
+    default_chat = _get_chat_id()
+    if not bot_token or not (chat_id or default_chat):
         log.error("חסרים TELEGRAM_BOT_TOKEN או TELEGRAM_CHAT_ID")
         return False
 
-    target_chat = str(chat_id or CHAT_ID)
+    target_chat = str(chat_id or default_chat)
 
     try:
         response = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
+            f"https://api.telegram.org/bot{bot_token}/sendDocument",
             data={"chat_id": target_chat, "caption": caption[:1024]},
             files={"document": (filename, file_bytes)},
             timeout=15,
@@ -230,7 +245,7 @@ def _to_desktop_url(url: str) -> str:
     return url.replace("://m.facebook.com", "://www.facebook.com")
 
 def send_lead(group_name: str, content: str, post_url: str, reason: str, has_real_url: bool = True):
-    if not BOT_TOKEN or not CHAT_ID:
+    if not _get_bot_token() or not _get_chat_id():
         log.error("חסרים משתני סביבה של טלגרם (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
         return False
 

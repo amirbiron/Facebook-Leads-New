@@ -1,15 +1,20 @@
 """פאנל הגדרות — שרת Flask לניהול הגדרות הבוט דרך ממשק ווב."""
 
+import hmac
 import os
 from functools import wraps
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from database import (
     init_db,
     get_config,
     set_config,
+    get_config_encrypted,
+    set_config_encrypted,
     add_group,
     remove_group,
     get_db_groups,
@@ -41,6 +46,14 @@ class _QuietRequestFilter:
 def create_app() -> Flask:
     app = Flask(__name__)
 
+    # הגבלת קצב בקשות — מונע brute-force על PANEL_TOKEN והצפת שרת
+    limiter = Limiter(
+        get_remote_address,
+        app=app,
+        default_limits=["60 per minute"],
+        storage_uri="memory://",
+    )
+
     # השתקת לוגי werkzeug לבקשות polling תכופות (scan-status כל 3 שניות)
     import logging as _logging
     werkzeug_log = _logging.getLogger("werkzeug")
@@ -54,13 +67,15 @@ def create_app() -> Flask:
     if not panel_token:
         log.warning("PANEL_TOKEN לא מוגדר — הפאנל פתוח ללא אימות!")
 
+    _expected_auth = f"Bearer {panel_token}" if panel_token else ""
+
     def require_auth(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
             if not panel_token:
                 return f(*args, **kwargs)
             auth = request.headers.get("Authorization", "")
-            if auth == f"Bearer {panel_token}":
+            if hmac.compare_digest(auth, _expected_auth):
                 return f(*args, **kwargs)
             return jsonify({"ok": False, "message": "אימות נדרש"}), 401
         return wrapper
@@ -71,12 +86,13 @@ def create_app() -> Flask:
         return send_file(Path(__file__).parent / "panel.html")
 
     @app.route("/api/auth", methods=["POST"])
+    @limiter.limit("10 per minute")
     def check_auth():
         """בדיקת תקינות טוקן. מחזיר ok=true אם הטוקן נכון או אם אין צורך באימות."""
         if not panel_token:
             return jsonify({"ok": True, "auth_required": False})
         auth = request.headers.get("Authorization", "")
-        if auth == f"Bearer {panel_token}":
+        if hmac.compare_digest(auth, _expected_auth):
             return jsonify({"ok": True, "auth_required": True})
         return jsonify({"ok": False, "auth_required": True}), 401
 
@@ -120,9 +136,11 @@ def create_app() -> Flask:
             except (ValueError, TypeError):
                 pass
 
+        # סיסמה — לא חושפים את הערך, רק מצב set/unset (#12)
+        fb_password_raw = get_config_encrypted("fb_password") or os.environ.get("FB_PASSWORD", "")
         return jsonify({
             "fb_email": get_config("fb_email") or os.environ.get("FB_EMAIL", ""),
-            "fb_password": get_config("fb_password") or os.environ.get("FB_PASSWORD", ""),
+            "fb_password_set": bool(fb_password_raw),
             "classification_criteria": criteria_db or _CLASSIFICATION_CRITERIA_DEFAULT,
             "classification_criteria_default": _CLASSIFICATION_CRITERIA_DEFAULT,
             "criteria_is_default": is_default,
@@ -140,7 +158,13 @@ def create_app() -> Flask:
                     "quiet_hours", "max_post_age_days")
         for key in allowed:
             if key in data:
-                set_config(key, str(data[key]).strip())
+                value = str(data[key]).strip()
+                # סיסמה ריקה = הפאנל לא שינה אותה (השדה מוחזר ריק ב-GET) — לא לדרוס
+                if key == "fb_password":
+                    if value:
+                        set_config_encrypted(key, value)
+                else:
+                    set_config(key, value)
 
         # שמירת hash של ברירת המחדל בזמן שמירת פרומפט מותאם
         if "classification_criteria" in data:

@@ -13,7 +13,7 @@ from database import (
     get_stats, get_daily_stats,
     cleanup_old_posts, add_group, remove_group, get_db_groups,
     add_keyword, remove_keyword, get_db_keywords, ensure_keywords_migrated,
-    get_config, set_config,
+    get_config, set_config, get_config_encrypted,
     get_usage_stats, get_daily_usage_stats, get_usage_by_model,
 )
 from logger import get_logger
@@ -186,17 +186,20 @@ def matches_force_send(text: str, group_url: str = "") -> str | None:
     בודק קודם מילות גלובליות, אח"כ מילות קבוצה ספציפית.
     מחזיר את המילה שנמצאה או None.
     """
+    with _kw_lock:
+        force_kws = _keywords_state["force_send"]
+        group_force_kws = _keywords_state["group_force_send"]
     text_lower = text.lower()
     # בדיקת מילות גלובליות
-    if FORCE_SEND_KEYWORDS:
-        for kw in FORCE_SEND_KEYWORDS:
+    if force_kws:
+        for kw in force_kws:
             if kw in text_lower:
                 return kw
     # בדיקת מילות קבוצה ספציפית
-    if group_url and GROUP_FORCE_SEND_KEYWORDS:
+    if group_url and group_force_kws:
         from database import _normalize_group_url
         normalized = _normalize_group_url(group_url)
-        group_kws = GROUP_FORCE_SEND_KEYWORDS.get(normalized, [])
+        group_kws = group_force_kws.get(normalized, [])
         for kw in group_kws:
             if kw in text_lower:
                 return kw
@@ -227,35 +230,59 @@ def _load_pre_filter_keywords() -> list[str]:
         pass
     return _PRE_FILTER_KEYWORDS_DEFAULT
 
-# טעינה ראשונית — יתעדכנו דינמית בכל סבב
-BLOCK_KEYWORDS = _load_block_keywords()
-PRE_FILTER_KEYWORDS = _load_pre_filter_keywords()
-FORCE_SEND_KEYWORDS = _load_force_send_keywords()
-GROUP_FORCE_SEND_KEYWORDS: dict[str, list[str]] = get_all_group_force_send()
+# טעינה ראשונית — יתעדכנו דינמית בכל סבב.
+# כל הגישה דרך _kw_lock כדי למנוע race condition בין Flask thread ל-main loop.
+_kw_lock = threading.Lock()
+_keywords_state: dict = {
+    "block": _load_block_keywords(),
+    "pre_filter": _load_pre_filter_keywords(),
+    "force_send": _load_force_send_keywords(),
+    "group_force_send": get_all_group_force_send(),
+}
+# aliases — backward-compatible read-only access (שומרים את השמות הישנים לקריאה בלבד)
+BLOCK_KEYWORDS = _keywords_state["block"]
+PRE_FILTER_KEYWORDS = _keywords_state["pre_filter"]
+FORCE_SEND_KEYWORDS = _keywords_state["force_send"]
+GROUP_FORCE_SEND_KEYWORDS: dict[str, list[str]] = _keywords_state["group_force_send"]
 
 def reload_keywords():
-    """טוען מחדש את מילות המפתח מ-DB (נקרא אחרי שינוי דרך טלגרם)."""
+    """טוען מחדש את מילות המפתח מ-DB (נקרא אחרי שינוי דרך טלגרם).
+    עדכון אטומי — כל הרשימות מתחלפות תחת lock אחד.
+    """
     global BLOCK_KEYWORDS, PRE_FILTER_KEYWORDS, FORCE_SEND_KEYWORDS, GROUP_FORCE_SEND_KEYWORDS
-    BLOCK_KEYWORDS = _load_block_keywords()
-    PRE_FILTER_KEYWORDS = _load_pre_filter_keywords()
-    FORCE_SEND_KEYWORDS = _load_force_send_keywords()
-    GROUP_FORCE_SEND_KEYWORDS = get_all_group_force_send()
+    new_block = _load_block_keywords()
+    new_pre = _load_pre_filter_keywords()
+    new_force = _load_force_send_keywords()
+    new_group_force = get_all_group_force_send()
+    with _kw_lock:
+        _keywords_state["block"] = new_block
+        _keywords_state["pre_filter"] = new_pre
+        _keywords_state["force_send"] = new_force
+        _keywords_state["group_force_send"] = new_group_force
+        BLOCK_KEYWORDS = new_block
+        PRE_FILTER_KEYWORDS = new_pre
+        FORCE_SEND_KEYWORDS = new_force
+        GROUP_FORCE_SEND_KEYWORDS = new_group_force
 
 def passes_keyword_filter(text: str) -> bool:
     """בודק אם הפוסט מכיל לפחות מילת מפתח אחת.
     אם הרשימה ריקה — מעביר הכל (אין סינון מוקדם).
     """
-    if not PRE_FILTER_KEYWORDS:
+    with _kw_lock:
+        kws = _keywords_state["pre_filter"]
+    if not kws:
         return True
     text_lower = text.lower()
-    return any(kw in text_lower for kw in PRE_FILTER_KEYWORDS)
+    return any(kw in text_lower for kw in kws)
 
 def is_blocked(text: str) -> bool:
     """בודק אם הפוסט מכיל מילה חסומה — אם כן, לא יישלח ל-AI."""
-    if not BLOCK_KEYWORDS:
+    with _kw_lock:
+        kws = _keywords_state["block"]
+    if not kws:
         return False
     text_lower = text.lower()
-    return any(kw in text_lower for kw in BLOCK_KEYWORDS)
+    return any(kw in text_lower for kw in kws)
 
 # ── סינון לפי גיל פוסט ──────────────────────────────────────
 
@@ -532,10 +559,13 @@ def _build_status_text(shared_state: dict) -> str:
     last_started = shared_state.get("last_scan_started")
     last_finished = shared_state.get("last_scan_finished")
     in_progress = bool(shared_state.get("scan_in_progress"))
-    block_desc = ", ".join(BLOCK_KEYWORDS) if BLOCK_KEYWORDS else "(ריק)"
+    with _kw_lock:
+        _bl = _keywords_state["block"]
+        _pf = _keywords_state["pre_filter"]
+    block_desc = ", ".join(_bl) if _bl else "(ריק)"
     from scraper import GROUPS
     groups_count = len(GROUPS)
-    pf_count = len(PRE_FILTER_KEYWORDS)
+    pf_count = len(_pf)
     return (
         "סטטוס בוט:\n"
         f"- שעה מקומית: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
@@ -580,8 +610,9 @@ def _build_groups_text() -> str:
 
 def _build_keywords_text() -> str:
     """בונה טקסט מילות מפתח לסינון + מילים חסומות."""
-    pf = PRE_FILTER_KEYWORDS
-    bl = BLOCK_KEYWORDS
+    with _kw_lock:
+        pf = _keywords_state["pre_filter"]
+        bl = _keywords_state["block"]
     pf_text = ", ".join(pf) if pf else "(ריק)"
     bl_text = ", ".join(bl) if bl else "(ריק)"
     return (
@@ -593,7 +624,8 @@ def _build_keywords_text() -> str:
 
 def _build_blocked_text() -> str:
     """בונה טקסט מילים חסומות."""
-    bl = BLOCK_KEYWORDS
+    with _kw_lock:
+        bl = _keywords_state["block"]
     bl_text = ", ".join(bl) if bl else "(ריק)"
     return (
         f"מילים חסומות ({len(bl)}):\n{bl_text}\n\n"
@@ -1041,7 +1073,8 @@ async def _telegram_control_loop(
                 if cmd in ("/force_send",):
                     parts = text.split(maxsplit=1)
                     if len(parts) < 2 or not parts[1].strip():
-                        fs = FORCE_SEND_KEYWORDS
+                        with _kw_lock:
+                            fs = _keywords_state["force_send"]
                         fs_text = ", ".join(fs) if fs else "(ריק)"
                         await asyncio.to_thread(
                             send_message,
@@ -1359,7 +1392,7 @@ async def run_cycle():
 
     # טעינת credentials מ-DB עם fallback למשתני סביבה
     fb_email = get_config("fb_email") or FB_EMAIL
-    fb_password = get_config("fb_password") or FB_PASSWORD
+    fb_password = get_config_encrypted("fb_password") or FB_PASSWORD
 
     if not fb_email or not fb_password:
         log.error("חסרים FB_EMAIL או FB_PASSWORD — לא ניתן לסרוק")
@@ -1409,6 +1442,7 @@ async def run_cycle():
             if is_seen(p["id"]):
                 continue
             c_hash = _content_dedup_hash(p["content"])
+            p["_content_hash"] = c_hash  # שמירה — חוסך חישוב חוזר בשלבים הבאים
             if c_hash and is_content_hash_sent(c_hash):
                 skipped_early_hash += 1
                 snippet = p["content"].replace('\n', ' ')[:60]
@@ -1441,12 +1475,12 @@ async def run_cycle():
         for post in new_posts:
             matched_kw = matches_force_send(post["content"], post.get("group_url", ""))
             if matched_kw and not is_lead_sent(post["id"]):
-                c_hash = _content_dedup_hash(post["content"])
+                c_hash = post.get("_content_hash") or _content_dedup_hash(post["content"])
                 if is_content_hash_sent(c_hash):
                     log.debug(f"דילוג על force_send — תוכן זהה כבר נשלח (content_hash)")
                     continue
                 reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
-                await asyncio.to_thread(
+                sent_ok = await asyncio.to_thread(
                     send_lead,
                     group_name=post["group"],
                     content=post["content"],
@@ -1454,6 +1488,10 @@ async def run_cycle():
                     reason=reason,
                     has_real_url=post.get("has_real_url", True),
                 )
+                if not sent_ok:
+                    log.warning(f"שליחת force_send נכשלה — הליד לא יישמר ב-DB (id={post['id'][:20]})")
+                    rest_posts.append(post)
+                    continue
                 save_lead(post["id"], post["group"], post["content"], reason,
                           content_hash=c_hash)
                 leads_found += 1
@@ -1467,7 +1505,9 @@ async def run_cycle():
             log.info(f"נשלחו {len(force_send_posts)} לידים ישירות (force_send)")
 
         # שלב 4א — סינון מילים חסומות (BLOCK_KEYWORDS)
-        if BLOCK_KEYWORDS:
+        with _kw_lock:
+            _has_block = bool(_keywords_state["block"])
+        if _has_block:
             before_block = len(rest_posts)
             rest_posts = [p for p in rest_posts if not is_blocked(p["content"])]
             blocked_count = before_block - len(rest_posts)
@@ -1492,7 +1532,7 @@ async def run_cycle():
             if is_lead_sent(p["id"]):
                 skipped_by_id += 1
                 continue
-            c_hash = _content_dedup_hash(p["content"])
+            c_hash = p.get("_content_hash") or _content_dedup_hash(p["content"])
             if is_content_hash_sent(c_hash):
                 skipped_by_hash += 1
                 snippet = p["content"].replace('\n', ' ')[:60]
@@ -1517,7 +1557,7 @@ async def run_cycle():
             for post, result in zip(to_classify, results):
                 if result.get("relevant"):
                     reason = result.get("reason", "")
-                    await asyncio.to_thread(
+                    sent_ok = await asyncio.to_thread(
                         send_lead,
                         group_name=post["group"],
                         content=post["content"],
@@ -1525,6 +1565,9 @@ async def run_cycle():
                         reason=reason,
                         has_real_url=post.get("has_real_url", True),
                     )
+                    if not sent_ok:
+                        log.warning(f"שליחת ליד AI נכשלה — הליד לא יישמר ב-DB (id={post['id'][:20]})")
+                        continue
                     save_lead(post["id"], post["group"], post["content"], reason,
                               content_hash=post.get("_content_hash", ""))
                     leads_found += 1
@@ -1552,11 +1595,13 @@ async def main():
         log.info(f"הפאנל רץ על פורט {HEALTH_PORT} — שרת health נפרד לא נדרש")
     else:
         start_health_server()
+    with _kw_lock:
+        _startup_block = list(_keywords_state['block'])
     log.info(
         f"מתחיל. סבב כל {INTERVAL_MINUTES} דקות. "
         f"LOG_LEVEL={os.environ.get('LOG_LEVEL', 'DEBUG')} "
         f"TIMEZONE={TIMEZONE_NAME} QUIET_HOURS={QUIET_HOURS or '(disabled)'} "
-        f"BLOCK_KEYWORDS={', '.join(BLOCK_KEYWORDS) if BLOCK_KEYWORDS else '(disabled)'}"
+        f"BLOCK_KEYWORDS={', '.join(_startup_block) if _startup_block else '(disabled)'}"
     )
 
     # shared_state — מילון משותף בין הלולאה הראשית לטלגרם.
