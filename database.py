@@ -334,8 +334,8 @@ def get_config_by_prefix(prefix: str) -> list[tuple[str, str]]:
     """
     try:
         rows = _get_conn().execute(
-            "SELECT key, value FROM _config WHERE key LIKE ?",
-            (f"{prefix}%",),
+            "SELECT key, value FROM _config WHERE substr(key, 1, ?) = ?",
+            (len(prefix), prefix),
         ).fetchall()
     except Exception:
         return []

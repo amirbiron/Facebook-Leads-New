@@ -3404,6 +3404,15 @@ class TestGetConfigByPrefix:
         rows = get_config_by_prefix("force_send_group:")
         assert rows == []
 
+    def test_underscore_in_prefix_not_wildcard(self, tmp_db):
+        """_ ב-prefix לא פועל כ-wildcard — רק התאמה מדויקת."""
+        set_config("test_key", "exact")
+        set_config("testXkey", "wrong")
+        rows = get_config_by_prefix("test_key")
+        keys = [r[0] for r in rows]
+        assert "test_key" in keys
+        assert "testXkey" not in keys
+
 
 # ──────────────────────────────────────────────────────────────
 # JSON Logging
