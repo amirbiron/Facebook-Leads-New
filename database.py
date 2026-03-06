@@ -163,15 +163,17 @@ def get_stats() -> dict:
 def get_daily_stats(today_prefix: str) -> dict:
     """מחזיר סטטיסטיקות של היום בלבד.
     today_prefix — מחרוזת בפורמט 'YYYY-MM-DD' לסינון לפי seen_at/sent_at.
+    משתמש ב-BETWEEN במקום LIKE לביצועים טובים יותר ככל שהטבלה גדלה.
     """
     conn = _get_conn()
+    next_day = (datetime.fromisoformat(today_prefix) + timedelta(days=1)).strftime('%Y-%m-%d')
     seen = conn.execute(
-        "SELECT COUNT(*) FROM seen_posts WHERE seen_at LIKE ?",
-        (f"{today_prefix}%",),
+        "SELECT COUNT(*) FROM seen_posts WHERE seen_at >= ? AND seen_at < ?",
+        (today_prefix, next_day),
     ).fetchone()[0]
     sent = conn.execute(
-        "SELECT COUNT(*) FROM sent_leads WHERE sent_at LIKE ?",
-        (f"{today_prefix}%",),
+        "SELECT COUNT(*) FROM sent_leads WHERE sent_at >= ? AND sent_at < ?",
+        (today_prefix, next_day),
     ).fetchone()[0]
     return {"seen": seen, "sent": sent}
 
@@ -464,10 +466,13 @@ def get_usage_by_model() -> list[dict]:
 
 # ── Cleanup ───────────────────────────────────────────────────
 def cleanup_old_posts(days: int = 30) -> int:
-    """מוחק רשומות ישנות מטבלת seen_posts (ברירת מחדל: מעל 30 יום)."""
+    """מוחק רשומות ישנות מטבלת seen_posts (ברירת מחדל: מעל 30 יום).
+    מריץ VACUUM כשנמחקו מעל 1000 רשומות — מקטין את גודל קובץ ה-DB."""
     cutoff = (_now() - timedelta(days=days)).isoformat()
     with _get_conn() as conn:
         deleted = conn.execute(
             "DELETE FROM seen_posts WHERE seen_at < ?", (cutoff,)
         ).rowcount
+    if deleted > 1000:
+        _get_conn().execute("VACUUM")
     return deleted
