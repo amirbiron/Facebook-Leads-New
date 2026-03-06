@@ -159,8 +159,10 @@ def create_app() -> Flask:
         for key in allowed:
             if key in data:
                 value = str(data[key]).strip()
+                # סיסמה ריקה = הפאנל לא שינה אותה (השדה מוחזר ריק ב-GET) — לא לדרוס
                 if key == "fb_password":
-                    set_config_encrypted(key, value)
+                    if value:
+                        set_config_encrypted(key, value)
                 else:
                     set_config(key, value)
 

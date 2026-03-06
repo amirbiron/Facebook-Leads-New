@@ -1595,11 +1595,13 @@ async def main():
         log.info(f"הפאנל רץ על פורט {HEALTH_PORT} — שרת health נפרד לא נדרש")
     else:
         start_health_server()
+    with _kw_lock:
+        _startup_block = list(_keywords_state['block'])
     log.info(
         f"מתחיל. סבב כל {INTERVAL_MINUTES} דקות. "
         f"LOG_LEVEL={os.environ.get('LOG_LEVEL', 'DEBUG')} "
         f"TIMEZONE={TIMEZONE_NAME} QUIET_HOURS={QUIET_HOURS or '(disabled)'} "
-        f"BLOCK_KEYWORDS={', '.join(_keywords_state['block']) if _keywords_state['block'] else '(disabled)'}"
+        f"BLOCK_KEYWORDS={', '.join(_startup_block) if _startup_block else '(disabled)'}"
     )
 
     # shared_state — מילון משותף בין הלולאה הראשית לטלגרם.
