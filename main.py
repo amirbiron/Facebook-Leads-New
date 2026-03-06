@@ -13,7 +13,7 @@ from database import (
     get_stats, get_daily_stats,
     cleanup_old_posts, add_group, remove_group, get_db_groups,
     add_keyword, remove_keyword, get_db_keywords, ensure_keywords_migrated,
-    get_config, set_config, get_config_encrypted,
+    get_config, set_config, get_config_encrypted, get_config_by_prefix,
     get_usage_stats, get_daily_usage_stats, get_usage_by_model,
 )
 from logger import get_logger
@@ -161,15 +161,8 @@ def get_all_group_force_send() -> dict[str, list[str]]:
     {url: [keyword, ...], ...} — רק קבוצות שיש להן מילים.
     """
     import json as _json
-    from database import _get_conn
     prefix = "force_send_group:"
-    try:
-        rows = _get_conn().execute(
-            "SELECT key, value FROM _config WHERE key LIKE ?",
-            (f"{prefix}%",),
-        ).fetchall()
-    except Exception:
-        return {}
+    rows = get_config_by_prefix(prefix)
     result = {}
     for key, value in rows:
         url = key[len(prefix):]
@@ -1171,14 +1164,91 @@ async def _telegram_control_loop(
             log.error(f"שגיאה בלולאת בקרת טלגרם: {e}", exc_info=True)
             await asyncio.sleep(5)
 
+# רפרנס ל-shared_state — מאותחל ב-main() כדי ש-health check יוכל לגשת למצב הסריקה
+_health_shared_state: dict | None = None
+# סף מקסימלי (בדקות) מאז סריקה אחרונה לפני שה-health check מדווח על בעיה
+_HEALTH_MAX_SCAN_AGE_MINUTES = int(os.environ.get("HEALTH_MAX_SCAN_AGE_MINUTES",
+                                                   str(INTERVAL_MINUTES * 3 + 5)))
+
+
+def _deep_health_check() -> tuple[int, dict]:
+    """בודק תקינות מעמיקה. מחזיר (status_code, details_dict)."""
+    import json as _json
+    import shutil
+    from scraper import SESSION_FILE
+    from database import DB_PATH
+
+    checks = {}
+    healthy = True
+
+    # 1. בדיקת DB
+    try:
+        get_stats()
+        checks["db"] = "ok"
+    except Exception as e:
+        checks["db"] = f"error: {e}"
+        healthy = False
+
+    # 2. בדיקת session file
+    checks["session_file"] = "ok" if SESSION_FILE.exists() else "missing"
+    if not SESSION_FILE.exists():
+        healthy = False
+
+    # 3. זמן מאז סריקה אחרונה
+    state = _health_shared_state
+    if state is not None:
+        last_finished = state.get("last_scan_finished")
+        in_progress = state.get("scan_in_progress", False)
+        if last_finished:
+            age = (_now_local() - last_finished).total_seconds() / 60
+            checks["last_scan_age_minutes"] = round(age, 1)
+            if age > _HEALTH_MAX_SCAN_AGE_MINUTES and not in_progress:
+                checks["last_scan"] = "stale"
+                healthy = False
+            else:
+                checks["last_scan"] = "ok"
+        elif in_progress:
+            checks["last_scan"] = "first_scan_running"
+        else:
+            checks["last_scan"] = "no_scan_yet"
+    else:
+        checks["last_scan"] = "not_initialized"
+
+    # 4. בדיקת מקום בדיסק
+    try:
+        usage = shutil.disk_usage(DB_PATH.parent)
+        free_mb = usage.free / (1024 * 1024)
+        checks["disk_free_mb"] = round(free_mb, 1)
+        if free_mb < 50:
+            checks["disk"] = "low"
+            healthy = False
+        else:
+            checks["disk"] = "ok"
+    except Exception as e:
+        checks["disk"] = f"error: {e}"
+
+    status_code = 200 if healthy else 503
+    checks["status"] = "healthy" if healthy else "unhealthy"
+    return status_code, checks
+
+
 class _HealthHandler(BaseHTTPRequestHandler):
-    """Healthcheck endpoint — מחזיר 200 OK לכל בקשת GET."""
+    """Healthcheck endpoint — GET / מחזיר 200 OK, GET /health מחזיר בדיקה מעמיקה."""
 
     def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"ok")
+        if self.path == "/health":
+            status_code, details = _deep_health_check()
+            import json as _json
+            body = _json.dumps(details, ensure_ascii=False).encode()
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"ok")
 
     def log_message(self, format, *args):
         # השתקת לוג של http.server כדי לא להציף את הלוגים
@@ -1612,6 +1682,9 @@ async def main():
         "last_scan_started": None,
         "last_scan_finished": None,
     }
+    # חשיפת shared_state ל-health check endpoint
+    global _health_shared_state
+    _health_shared_state = shared_state
 
     scan_now_event = asyncio.Event()
     scan_force_event = asyncio.Event()
