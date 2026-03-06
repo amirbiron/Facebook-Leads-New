@@ -375,7 +375,7 @@ def get_config_encrypted(key: str, default=None):
             try:
                 return f.decrypt(raw[4:].encode()).decode()
             except Exception:
-                return raw  # fallback — אם ה-key השתנה, מחזיר כמו שהוא
+                return None  # מפתח הצפנה השתנה — None כדי שה-caller ייפול ל-env var
     return raw
 
 # ── API Usage Tracking ────────────────────────────────────────
