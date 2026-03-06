@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import hashlib
 import html as html_mod
 import json
@@ -205,11 +206,45 @@ _INVISIBLE_CHARS_RE = re.compile(
 _PUA_RE = re.compile(r'[\uE000-\uF8FF\U000F0000-\U000FFFFD\U00100000-\U0010FFFD]')
 
 
+# רגקס משולב לבדיקת שורות שצריך לדלג עליהן — מאחד digits-only + engagement + dynamic
+# במקום 3 בדיקות regex נפרדות לכל שורה
+_SKIP_LINE_RE = re.compile(
+    # שורות שהן רק מספרים וסימני פיסוק (לייקים, ספירות)
+    r'^\d[\d,. ]*$'
+    # שורות engagement ("5 תגובות", "👍 5 תגובות · 3 שיתופים")
+    r'|^(?:[^\w\s]*\s*)?\d[\d,.]*\s*' + _ENGAGEMENT_WORDS_PATTERN
+    + r'(?:\s*[·•|,]\s*\d[\d,.]*\s*' + _ENGAGEMENT_WORDS_PATTERN + r')*\s*$'
+    # שורות דינמיות ("+3", "ו-עוד 5 אחרים", "פלוני ו-3 אחרים")
+    r'|^\+\d+$'
+    r'|^ו-עוד\s+\d+\s*(?:אחרי[םם]?)?$'
+    r'|^and\s+\d+\s+(?:more|others?)$'
+    r'|^\S+(?:\s+\S+)?\s+ו-?\s*\d+\s*(?:אחרי[םם]?|נוספי[םם]?)\s*$'
+    r'|^\S+(?:\s+\S+)?,(?:\s*\S+(?:\s+\S+)?,)*\s*\S+(?:\s+\S+)?\s+ו-?\s*\d+\s*(?:אחרי[םם]?|נוספי[םם]?)\s*$'
+    r'|^\S+(?:\s+\S+)?\s+and\s+\d+\s+(?:more|others?)\s*$'
+    r'|^\S+(?:\s+\S+)?,(?:\s*\S+(?:\s+\S+)?,)*\s*\S+(?:\s+\S+)?\s+and\s+\d+\s+(?:more|others?)\s*$',
+    re.IGNORECASE
+)
+
+# רגקס לבדיקת נוכחות אותיות — pre-compiled במקום re.search בכל שורה
+_HAS_LETTER_RE = re.compile(r'[a-zA-Zא-ת]')
+
+# רגקס לכיווץ רווחים — pre-compiled במקום re.sub בכל קריאה
+_WHITESPACE_RE = re.compile(r'\s+')
+
+# רגקס משולב להסרת תווים בלתי-נראים ו-PUA בפעולה אחת
+_INVISIBLE_AND_PUA_RE = re.compile(
+    r'[\u200e\u200f\u200b\u200c\u200d\u2060\u2066\u2067\u2068\u2069\ufeff\xad'
+    r'\uE000-\uF8FF\U000F0000-\U000FFFFD\U00100000-\U0010FFFD]'
+)
+
+
+@functools.lru_cache(maxsize=512)
 def _stable_text_for_hash(text: str) -> str:
     """מנרמל טקסט לחישוב hash יציב — מסיר timestamps, מספרים בודדים, ורעשי UI.
 
     נרמול עמוק: lowercase, הסרת URLs, תווים בלתי-נראים, מילות רעש UI,
     engagement ו-timestamps. המטרה: אותו פוסט ← אותו hash בין סריקות שונות.
+    תוצאות נשמרות ב-cache (lru_cache) — אותו טקסט לא מעובד פעמיים.
     """
     # 1. lowercase — מונע הבדלי case בין רינדורים
     text = text.lower()
@@ -217,9 +252,8 @@ def _stable_text_for_hash(text: str) -> str:
     # 2. הסרת URLs — פרמטרי מעקב (fbclid, tracking) משתנים בין טעינות
     text = _URL_RE.sub('', text)
 
-    # 3. הסרת תווים בלתי-נראים (כיווניות, zero-width) ו-PUA
-    text = _INVISIBLE_CHARS_RE.sub('', text)
-    text = _PUA_RE.sub('', text)
+    # 3. הסרת תווים בלתי-נראים (כיווניות, zero-width) ו-PUA — regex משולב אחד
+    text = _INVISIBLE_AND_PUA_RE.sub('', text)
 
     lines = text.split('\n')
     stable = []
@@ -227,23 +261,15 @@ def _stable_text_for_hash(text: str) -> str:
         s = line.strip()
         if not s:
             continue
-        # דילוג על שורות שהן רק מספרים וסימני פיסוק (לייקים, תגובות)
-        # זהירות: לא לכלול מקף (-) או פלוס (+) — הם חלק ממספרי טלפון ישראליים
-        if re.match(r'^\d[\d,. ]*$', s):
+        # בדיקת regex משולבת — digits-only, engagement, dynamic lines בבדיקה אחת
+        if _SKIP_LINE_RE.match(s):
             continue
         # דילוג על שורות אמוג'י ללא אותיות — "👍 5", "👍❤️ 12", "😂🔥".
         # דורשים אמוג'י כדי לא לתפוס מספרי טלפון (054-1234567, +972-52-...).
-        if _EMOJI_RE.search(s) and not re.search(r'[a-zA-Zא-ת]', s):
+        if _EMOJI_RE.search(s) and not _HAS_LETTER_RE.search(s):
             continue
         # דילוג על מילות רעש UI
         if s in _NOISE_WORDS:
-            continue
-        # דילוג על שורות engagement שמשתנות בין סריקות ("5 תגובות", "3 שיתופים")
-        # תומך גם באמוג'י ריאקציה לפני המספר ("👍 5 תגובות")
-        if _ENGAGEMENT_LINE_RE.match(s):
-            continue
-        # דילוג על שורות דינמיות נוספות ("+3", "ו-עוד 5 אחרים", "פלוני ו-3 אחרים")
-        if _DYNAMIC_LINE_RE.match(s):
             continue
         # דילוג על בר פעולות משולב ("אהבתי · תגובה · שיתוף")
         if _is_action_bar(s):
@@ -253,7 +279,7 @@ def _stable_text_for_hash(text: str) -> str:
     # הסרת timestamps דינאמיים
     joined = _TIMESTAMP_RE.sub('', joined)
     # כיווץ רווחים מיותרים
-    joined = re.sub(r'\s+', ' ', joined).strip()
+    joined = _WHITESPACE_RE.sub(' ', joined).strip()
     return joined
 
 
