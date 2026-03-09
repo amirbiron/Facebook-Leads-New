@@ -1414,6 +1414,17 @@ class TestGroupsCRUD:
         groups = database.get_db_groups()
         assert groups[0]["url"] == "https://m.facebook.com/groups/99999"
 
+    def test_url_normalization_strips_query_params_and_fragment(self, tmp_db):
+        """לינקי שיתוף עם ?ref=share&rdid=...# — צריך לנקות query ו-fragment."""
+        database.add_group(
+            "https://www.facebook.com/groups/189086514880040/"
+            "?ref=share&rdid=qRJqlLa0GqkkzELG"
+            "&share_url=https%3A%2F%2Fwww.facebook.com%2Fshare%2Fg%2F1QpBMPu2J2%2F#"
+        )
+        groups = database.get_db_groups()
+        assert groups[0]["url"] == "https://m.facebook.com/groups/189086514880040"
+        assert groups[0]["name"] == "189086514880040"
+
     def test_never_configured_returns_none(self, tmp_db):
         assert database.get_db_groups() is None
 
