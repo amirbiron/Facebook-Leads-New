@@ -1643,7 +1643,7 @@ async def run_cycle():
                     dup_url = p.get("group_url", "")
                     if dup_url:
                         primary["_also_in_urls"].append(dup_url)
-                cross_group_merged += 1
+                    cross_group_merged += 1
                 # מסמן גם את הכפילות כנראית כדי שלא תופיע שוב בסבב הבא
                 mark_seen(p["id"], p["group"])
             else:
