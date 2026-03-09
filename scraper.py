@@ -1120,6 +1120,22 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         skipped_short += 1
                         continue
 
+                    # חילוץ שם המפרסם — בד"כ ב-<strong> או <h3> ראשון בפוסט
+                    author = ""
+                    try:
+                        author = await asyncio.wait_for(
+                            el.evaluate("""(el) => {
+                                const s = el.querySelector('strong');
+                                if (s) return (s.innerText || '').trim();
+                                const h = el.querySelector('h3');
+                                if (h) return (h.innerText || '').trim();
+                                return '';
+                            }"""),
+                            timeout=3,
+                        )
+                    except Exception:
+                        pass
+
                     post_url = group["url"]
                     try:
                         post_url = await _extract_post_url(
@@ -1166,6 +1182,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         "group": group_name,
                         "group_url": group["url"],
                         "has_real_url": has_real_url,
+                        "author": author,
                     })
 
                     if len(posts) >= MAX_POSTS:

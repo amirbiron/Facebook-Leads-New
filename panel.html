@@ -1107,6 +1107,13 @@
           <span>פוסטים ישנים</span>
         </a>
 
+        <a href="#blocked-users" class="nav-item" data-section="blocked-users">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="18" y1="8" x2="23" y2="13"/><line x1="23" y1="8" x2="18" y2="13"/>
+          </svg>
+          <span>מפרסמים חסומים</span>
+        </a>
+
         <a href="#schedule" class="nav-item" data-section="schedule">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
@@ -1439,6 +1446,32 @@
         <div class="btn-row" style="margin-top: 16px;">
           <button class="btn btn-primary" onclick="savePostAge()">שמור</button>
         </div>
+      </section>
+
+      <!-- ═══ מפרסמים חסומים ═══ -->
+      <section id="blocked-users" class="card">
+        <h3 class="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="18" y1="8" x2="23" y2="13"/><line x1="23" y1="8" x2="18" y2="13"/>
+          </svg>
+          מפרסמים חסומים
+        </h3>
+        <p class="card-desc">
+          פוסטים מאותו מפרסם נחסמים אוטומטית — שימושי כשיש ספאמרים חוזרים בקבוצות.
+        </p>
+
+        <div class="input-group">
+          <input type="text" id="new-blocked-user" placeholder="הוסף שם מפרסם..."
+                 onkeydown="if(event.key==='Enter')addBlockedUser()">
+          <button class="btn btn-destructive btn-sm" onclick="addBlockedUser()">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+            הוסף
+          </button>
+        </div>
+
+        <div id="blocked-users-list" class="chips"></div>
       </section>
 
       <!-- ═══ לוח זמנים ═══ -->
@@ -1783,7 +1816,7 @@
         el.innerHTML = '<span class="chips-empty">אין מילים ברשימה</span>';
         return;
       }
-      const chipClass = type === 'block' ? 'chip chip-block' : 'chip';
+      const chipClass = (type === 'block' || type === 'blocked_user') ? 'chip chip-block' : 'chip';
       el.innerHTML = '';
       words.forEach(w => {
         const span = document.createElement('span');
@@ -1793,7 +1826,11 @@
         btn.className = 'chip-remove';
         btn.title = 'הסר';
         btn.innerHTML = '&times;';
-        btn.addEventListener('click', () => type === 'force_send' ? removeForceSend(w) : removeKeyword(w, type));
+        btn.addEventListener('click', () => {
+          if (type === 'force_send') removeForceSend(w);
+          else if (type === 'blocked_user') removeBlockedUser(w);
+          else removeKeyword(w, type);
+        });
         span.appendChild(btn);
         el.appendChild(span);
       });
@@ -1891,6 +1928,55 @@
         if (data.ok) {
           toast(data.message);
           await loadForceSend();
+        } else {
+          toast(data.message, 'error');
+        }
+      } catch (e) {
+        toast('שגיאה: ' + e.message, 'error');
+      }
+    }
+
+    // ═══ Blocked Users ══════════════════════════════════
+
+    async function loadBlockedUsers() {
+      try {
+        const data = await api('/api/blocked_users');
+        renderChips('blocked-users-list', data.users, 'blocked_user');
+      } catch (e) {
+        toast('שגיאה בטעינת מפרסמים חסומים: ' + e.message, 'error');
+      }
+    }
+
+    async function addBlockedUser() {
+      const input = document.getElementById('new-blocked-user');
+      const name = input.value.trim();
+      if (!name) return;
+      try {
+        const data = await api('/api/blocked_users', {
+          method: 'POST',
+          body: { name },
+        });
+        if (data.ok) {
+          toast(data.message);
+          input.value = '';
+          await loadBlockedUsers();
+        } else {
+          toast(data.message, 'error');
+        }
+      } catch (e) {
+        toast('שגיאה: ' + e.message, 'error');
+      }
+    }
+
+    async function removeBlockedUser(name) {
+      try {
+        const data = await api('/api/blocked_users', {
+          method: 'DELETE',
+          body: { name },
+        });
+        if (data.ok) {
+          toast(data.message);
+          await loadBlockedUsers();
         } else {
           toast(data.message, 'error');
         }
@@ -2257,6 +2343,7 @@
         loadKeywords('pre_filter'),
         loadKeywords('block'),
         loadForceSend(),
+        loadBlockedUsers(),
       ]);
       // startScanPolling כבר קורא ל-loadScanStatus כפעולה ראשונה
       startScanPolling();

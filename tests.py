@@ -1910,15 +1910,16 @@ class TestMenuButtons:
                 assert len(btn["text"]) > 0
 
     def test_settings_menu_structure(self):
-        """תפריט הגדרות — 2 שורות, 2 כפתורים בכל שורה."""
+        """תפריט הגדרות — 3 שורות."""
         buttons = _settings_menu_buttons()
-        assert len(buttons) == 2
+        assert len(buttons) == 3
         assert len(buttons[0]) == 2
         assert len(buttons[1]) == 2
+        assert len(buttons[2]) == 1
 
     def test_settings_menu_callback_data(self):
         buttons = _settings_menu_buttons()
-        expected = {"groups", "keywords", "blocked", "menu"}
+        expected = {"groups", "keywords", "blocked", "blocked_users", "menu"}
         actual = {btn["callback_data"] for row in buttons for btn in row}
         assert actual == expected
 
@@ -3523,3 +3524,102 @@ class TestDeepHealthCheck:
             status, details = main._deep_health_check()
         assert status == 503
         assert "error" in details["disk"]
+
+
+# ──────────────────────────────────────────────────────────────
+# Blocked Users — CRUD + filtering
+# ──────────────────────────────────────────────────────────────
+
+import main
+from main import is_user_blocked
+
+
+class TestBlockedUsersCRUD:
+    def test_add_blocked_user(self, tmp_db):
+        ok, msg = database.add_blocked_user("ספאמר מציק")
+        assert ok is True
+        assert "נחסם" in msg
+
+    def test_add_blocked_user_duplicate(self, tmp_db):
+        database.add_blocked_user("ספאמר מציק")
+        ok, msg = database.add_blocked_user("ספאמר מציק")
+        assert ok is False
+        assert "כבר חסום" in msg
+
+    def test_add_blocked_user_empty(self, tmp_db):
+        ok, msg = database.add_blocked_user("")
+        assert ok is False
+        assert "ריק" in msg
+
+    def test_remove_blocked_user(self, tmp_db):
+        database.add_blocked_user("ספאמר")
+        ok, msg = database.remove_blocked_user("ספאמר")
+        assert ok is True
+        assert "הוסר" in msg
+
+    def test_remove_blocked_user_not_found(self, tmp_db):
+        ok, msg = database.remove_blocked_user("לא קיים")
+        assert ok is False
+        assert "לא נמצא" in msg
+
+    def test_get_blocked_users(self, tmp_db):
+        database.add_blocked_user("אלון")
+        database.add_blocked_user("דני")
+        users = database.get_blocked_users()
+        assert len(users) == 2
+        assert "אלון" in users
+        assert "דני" in users
+
+    def test_get_blocked_users_empty(self, tmp_db):
+        users = database.get_blocked_users()
+        assert users == []
+
+
+class TestIsUserBlocked:
+    def test_empty_list(self):
+        with patch.dict("main._keywords_state", {"blocked_users": []}):
+            assert is_user_blocked("כל שם") is False
+
+    def test_blocked_user(self):
+        with patch.dict("main._keywords_state", {"blocked_users": ["ספאמר", "מציק"]}):
+            assert is_user_blocked("ספאמר") is True
+
+    def test_not_blocked(self):
+        with patch.dict("main._keywords_state", {"blocked_users": ["ספאמר"]}):
+            assert is_user_blocked("משתמש רגיל") is False
+
+    def test_case_insensitive(self):
+        """DB שומר lowercase — is_user_blocked משווה author.lower() מול הרשימה."""
+        with patch.dict("main._keywords_state", {"blocked_users": ["john doe"]}):
+            assert is_user_blocked("John Doe") is True
+            assert is_user_blocked("JOHN DOE") is True
+
+    def test_empty_author(self):
+        with patch.dict("main._keywords_state", {"blocked_users": ["ספאמר"]}):
+            assert is_user_blocked("") is False
+
+    def test_none_author(self):
+        """author=None לא צריך לקרוס — מחזיר False."""
+        with patch.dict("main._keywords_state", {"blocked_users": ["ספאמר"]}):
+            assert is_user_blocked(None) is False
+
+    def test_exact_match_required(self):
+        """חסימה לפי שם מלא, לא substring."""
+        with patch.dict("main._keywords_state", {"blocked_users": ["אלון"]}):
+            assert is_user_blocked("אלון כהן") is False
+            assert is_user_blocked("אלון") is True
+
+
+class TestBuildBlockedUsersText:
+    def test_with_users(self):
+        with patch.dict("main._keywords_state", {"blocked_users": ["אלון", "דני"]}):
+            text = main._build_blocked_users_text()
+            assert "אלון" in text
+            assert "דני" in text
+            assert "(2)" in text
+
+    def test_empty(self):
+        with patch.dict("main._keywords_state", {"blocked_users": []}):
+            text = main._build_blocked_users_text()
+            assert "(ריק)" in text
+            assert "(0)" in text
