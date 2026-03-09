@@ -1302,8 +1302,15 @@ async def _telegram_control_loop(
                         )
                     continue
 
-                # ── בריאות קבוצות ────────────────────────────
+                # ── בריאות קבוצות — למפתח בלבד ──────────────
                 if cmd in ("/health",):
+                    dev_ids = _parse_developer_chat_ids()
+                    if not dev_ids or chat_id_int not in dev_ids:
+                        await asyncio.to_thread(
+                            send_message, "פקודה זו זמינה רק למפתח (DEVELOPER_CHAT_ID).",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
                     health_text = _build_group_health_text()
                     await asyncio.to_thread(
                         send_message_with_buttons,
