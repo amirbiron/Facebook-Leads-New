@@ -728,7 +728,9 @@ def _build_group_health_text() -> str:
                 lead_dt = _dt.fromisoformat(last_lead)
                 now = _now_local()
                 diff = now - lead_dt.replace(tzinfo=now.tzinfo) if lead_dt.tzinfo is None else now - lead_dt
-                if diff.days == 0:
+                if diff.total_seconds() < 0:
+                    lead_desc = "עכשיו"
+                elif diff.days == 0:
                     hours = diff.seconds // 3600
                     if hours == 0:
                         lead_desc = "לפני כמה דקות"
