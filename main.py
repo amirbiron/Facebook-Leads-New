@@ -1616,6 +1616,45 @@ async def run_cycle():
             new_posts.append(p)
         if skipped_early_hash:
             log.info(f"סינון כפילויות מוקדם: {skipped_early_hash} לפי content_hash (post_id השתנה בין סשנים)")
+
+        # שלב 2.1 — איחוד פוסטים זהים מקבוצות שונות (cross-group dedup)
+        # אותו אדם מפרסם נוסח זהה ב-3 קבוצות → ליד אחד עם ציון קבוצות נוספות.
+        # חוסך קריאות AI מיותרות + מפחית רעש בטלגרם.
+        _seen_hashes: dict[str, dict] = {}
+        unique_posts = []
+        cross_group_merged = 0
+        for p in new_posts:
+            c_hash = p.get("_content_hash", "")
+            if not c_hash:
+                # פוסט ללא hash (טקסט ריק/רעש בלבד) — מעביר כמו שהוא
+                p["also_in"] = []
+                p["_also_in_urls"] = []
+                unique_posts.append(p)
+                continue
+            if c_hash in _seen_hashes:
+                primary = _seen_hashes[c_hash]
+                dup_group = p["group"]
+                # רק אם באמת קבוצה אחרת — מונע תצוגה מטעה של "קבוצות נוספות"
+                # כשיש שני פוסטים מאותה קבוצה עם hash זהה
+                if dup_group != primary["group"] and dup_group not in primary["also_in"]:
+                    primary["also_in"].append(dup_group)
+                    # שומר group_url של הכפילות — כדי שבדיקת force_send תכסה
+                    # גם מילות קבוצה ספציפיות מקבוצות שאוחדו
+                    dup_url = p.get("group_url", "")
+                    if dup_url:
+                        primary["_also_in_urls"].append(dup_url)
+                    cross_group_merged += 1
+                # מסמן גם את הכפילות כנראית כדי שלא תופיע שוב בסבב הבא
+                mark_seen(p["id"], p["group"])
+            else:
+                p["also_in"] = []
+                p["_also_in_urls"] = []
+                _seen_hashes[c_hash] = p
+                unique_posts.append(p)
+        if cross_group_merged:
+            log.info(f"[DEDUP-XGROUP] איחוד פוסטים מקבוצות שונות: {cross_group_merged} כפילויות אוחדו")
+        new_posts = unique_posts
+
         log.info(f"פוסטים חדשים (לא נראו קודם): {len(new_posts)}")
         scan_progress["new_posts"] = len(new_posts)
 
@@ -1648,7 +1687,14 @@ async def run_cycle():
         force_send_posts = []
         rest_posts = []
         for post in new_posts:
+            # בדיקת force_send — גם מול group_url של הפוסט המקורי
+            # וגם מול group_urls של קבוצות שאוחדו (cross-group dedup)
             matched_kw = matches_force_send(post["content"], post.get("group_url", ""))
+            if not matched_kw:
+                for alt_url in post.get("_also_in_urls", []):
+                    matched_kw = matches_force_send(post["content"], alt_url)
+                    if matched_kw:
+                        break
             if matched_kw and not is_lead_sent(post["id"]):
                 c_hash = post.get("_content_hash") or _content_dedup_hash(post["content"])
                 if is_content_hash_sent(c_hash):
@@ -1662,6 +1708,7 @@ async def run_cycle():
                     post_url=post["url"],
                     reason=reason,
                     has_real_url=post.get("has_real_url", True),
+                    also_in=post.get("also_in"),
                 )
                 if not sent_ok:
                     log.warning(f"שליחת force_send נכשלה — הליד לא יישמר ב-DB (id={post['id'][:20]})")
@@ -1739,6 +1786,7 @@ async def run_cycle():
                         post_url=post["url"],
                         reason=reason,
                         has_real_url=post.get("has_real_url", True),
+                        also_in=post.get("also_in"),
                     )
                     if not sent_ok:
                         log.warning(f"שליחת ליד AI נכשלה — הליד לא יישמר ב-DB (id={post['id'][:20]})")
