@@ -3656,6 +3656,14 @@ class TestBlockedUsersCRUD:
         assert ok2 is True
         assert database.get_blocked_users().__len__() == 2
 
+    def test_same_name_different_urls(self, tmp_db):
+        """שני משתמשים עם אותו שם אבל URLs שונים — שניהם נחסמים."""
+        ok1, _ = database.add_blocked_user("https://facebook.com/user1", display_name="ספאמר")
+        ok2, _ = database.add_blocked_user("https://facebook.com/user2", display_name="ספאמר")
+        assert ok1 is True
+        assert ok2 is True
+        assert len(database.get_blocked_users()) == 2
+
 
 class TestIsUserBlocked:
     _SPAMMER = {"name": "ספאמר", "profile_url": "https://m.facebook.com/spammer123"}

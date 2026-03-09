@@ -126,11 +126,21 @@ def init_db():
         # מיגרציה — הוספת עמודת profile_url ל-DBs קיימים
         cols = [r[1] for r in conn.execute("PRAGMA table_info(blocked_users)").fetchall()]
         if "profile_url" not in cols:
-            conn.execute("ALTER TABLE blocked_users ADD COLUMN profile_url TEXT NOT NULL DEFAULT ''")
-            # העברת ערכי name ל-profile_url ליחידות שהוספו לפני השדרוג
-            conn.execute("UPDATE blocked_users SET profile_url = name WHERE profile_url = ''")
-            # UNIQUE על profile_url לא קיים עדיין — ניצור אינדקס
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_blocked_users_profile_url ON blocked_users (profile_url)")
+            # SQLite לא תומך ב-DROP CONSTRAINT, לכן יוצרים טבלה חדשה בלי UNIQUE על name
+            conn.execute("""
+                CREATE TABLE blocked_users_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    profile_url TEXT NOT NULL DEFAULT '' UNIQUE,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                INSERT INTO blocked_users_new (id, name, profile_url, created_at)
+                SELECT id, name, name, created_at FROM blocked_users
+            """)
+            conn.execute("DROP TABLE blocked_users")
+            conn.execute("ALTER TABLE blocked_users_new RENAME TO blocked_users")
 
 # ── CRUD ──────────────────────────────────────────────────────
 def is_seen(post_id: str) -> bool:
