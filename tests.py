@@ -3714,6 +3714,9 @@ class TestBuildBlockedUsersText:
             assert "אלון" in text
             assert "דני" in text
             assert "(2)" in text
+            # URL מוצג כדי שהמשתמש יוכל לעשות /unblock_user
+            assert "m.facebook.com/alon" in text
+            assert "m.facebook.com/dani" in text
 
     def test_empty(self):
         with patch.dict("main._keywords_state", {"blocked_users": []}):

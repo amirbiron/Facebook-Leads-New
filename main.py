@@ -669,8 +669,8 @@ def _build_blocked_users_text() -> str:
     with _kw_lock:
         users = _keywords_state["blocked_users"]
     if users:
-        lines = [f"• {u['name']}" for u in users]
-        users_text = "\n".join(lines)
+        lines = [f"• {u['name']}\n   {u['profile_url']}" for u in users]
+        users_text = "\n\n".join(lines)
     else:
         users_text = "(ריק)"
     return (
