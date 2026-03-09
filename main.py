@@ -1746,6 +1746,16 @@ async def run_cycle():
     stats = get_stats()
     log.info(f"סבב הסתיים | לידים בסבב: {leads_found} | סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}")
 
+    # הודעת סיכום סריקה — נשלחת לטלגרם רק כשנמצאו לידים חדשים,
+    # כדי לעזור למשתמש להבחין בין הודעות מסריקות שונות.
+    if leads_found > 0:
+        scan_time = _now_local().strftime("%H:%M")
+        summary = f"עד כאן לסריקה של שעה {scan_time}, נתראה בסריקה הבאה 💫"
+        try:
+            await asyncio.to_thread(send_message, summary, disable_web_page_preview=True)
+        except Exception:
+            log.debug("שליחת הודעת סיכום סריקה נכשלה — לא קריטי")
+
 async def main():
     log.info("מאתחל מסד נתונים...")
     init_db()
