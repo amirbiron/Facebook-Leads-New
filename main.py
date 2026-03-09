@@ -1616,6 +1616,34 @@ async def run_cycle():
             new_posts.append(p)
         if skipped_early_hash:
             log.info(f"סינון כפילויות מוקדם: {skipped_early_hash} לפי content_hash (post_id השתנה בין סשנים)")
+
+        # שלב 2.1 — איחוד פוסטים זהים מקבוצות שונות (cross-group dedup)
+        # אותו אדם מפרסם נוסח זהה ב-3 קבוצות → ליד אחד עם ציון קבוצות נוספות.
+        # חוסך קריאות AI מיותרות + מפחית רעש בטלגרם.
+        _seen_hashes: dict[str, dict] = {}
+        unique_posts = []
+        cross_group_merged = 0
+        for p in new_posts:
+            c_hash = p.get("_content_hash", "")
+            if not c_hash:
+                # פוסט ללא hash (טקסט ריק/רעש בלבד) — מעביר כמו שהוא
+                p["also_in"] = []
+                unique_posts.append(p)
+                continue
+            if c_hash in _seen_hashes:
+                # פוסט כפול מקבוצה אחרת — מוסיף את שם הקבוצה לליד המקורי
+                _seen_hashes[c_hash]["also_in"].append(p["group"])
+                cross_group_merged += 1
+                # מסמן גם את הכפילות כנראית כדי שלא תופיע שוב בסבב הבא
+                mark_seen(p["id"], p["group"])
+            else:
+                p["also_in"] = []
+                _seen_hashes[c_hash] = p
+                unique_posts.append(p)
+        if cross_group_merged:
+            log.info(f"[DEDUP-XGROUP] איחוד פוסטים מקבוצות שונות: {cross_group_merged} כפילויות אוחדו")
+        new_posts = unique_posts
+
         log.info(f"פוסטים חדשים (לא נראו קודם): {len(new_posts)}")
         scan_progress["new_posts"] = len(new_posts)
 
@@ -1662,6 +1690,7 @@ async def run_cycle():
                     post_url=post["url"],
                     reason=reason,
                     has_real_url=post.get("has_real_url", True),
+                    also_in=post.get("also_in"),
                 )
                 if not sent_ok:
                     log.warning(f"שליחת force_send נכשלה — הליד לא יישמר ב-DB (id={post['id'][:20]})")
@@ -1739,6 +1768,7 @@ async def run_cycle():
                         post_url=post["url"],
                         reason=reason,
                         has_real_url=post.get("has_real_url", True),
+                        also_in=post.get("also_in"),
                     )
                     if not sent_ok:
                         log.warning(f"שליחת ליד AI נכשלה — הליד לא יישמר ב-DB (id={post['id'][:20]})")

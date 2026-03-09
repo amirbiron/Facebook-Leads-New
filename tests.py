@@ -3723,3 +3723,160 @@ class TestBuildBlockedUsersText:
             text = main._build_blocked_users_text()
             assert "(ריק)" in text
             assert "(0)" in text
+
+
+# ──────────────────────────────────────────────────────────────
+# Cross-group dedup — פוסט זהה מקבוצות שונות נשלח פעם אחת
+# ──────────────────────────────────────────────────────────────
+
+class TestCrossGroupDedup:
+    """בדיקות לאיחוד פוסטים זהים מקבוצות שונות בתוך סשן סריקה."""
+
+    def test_send_lead_also_in_display(self):
+        """send_lead מציג '+ N קבוצות נוספות' כשיש also_in."""
+        with patch("notifier.requests.post") as mock_post:
+            mock_post.return_value = MagicMock(status_code=200)
+            with patch.dict("os.environ", {
+                "TELEGRAM_BOT_TOKEN": "fake",
+                "TELEGRAM_CHAT_ID": "123",
+            }):
+                from notifier import send_lead
+                send_lead(
+                    "קבוצה-ראשית",
+                    "תוכן כלשהו",
+                    "https://m.facebook.com/groups/test/posts/1",
+                    "רלוונטי",
+                    also_in=["קבוצה-2", "קבוצה-3"],
+                )
+                sent_text = mock_post.call_args[1]["json"]["text"]
+                assert "קבוצה-ראשית" in sent_text
+                assert "+ 2 קבוצות נוספות" in sent_text
+
+    def test_send_lead_no_also_in(self):
+        """send_lead ללא also_in — לא מוסיף טקסט קבוצות נוספות."""
+        with patch("notifier.requests.post") as mock_post:
+            mock_post.return_value = MagicMock(status_code=200)
+            with patch.dict("os.environ", {
+                "TELEGRAM_BOT_TOKEN": "fake",
+                "TELEGRAM_CHAT_ID": "123",
+            }):
+                from notifier import send_lead
+                send_lead(
+                    "קבוצה-יחידה",
+                    "תוכן כלשהו",
+                    "https://m.facebook.com/groups/test/posts/1",
+                    "רלוונטי",
+                )
+                sent_text = mock_post.call_args[1]["json"]["text"]
+                assert "קבוצה-יחידה" in sent_text
+                assert "קבוצות נוספות" not in sent_text
+
+    def test_send_lead_empty_also_in(self):
+        """send_lead עם also_in ריק — לא מוסיף טקסט קבוצות נוספות."""
+        with patch("notifier.requests.post") as mock_post:
+            mock_post.return_value = MagicMock(status_code=200)
+            with patch.dict("os.environ", {
+                "TELEGRAM_BOT_TOKEN": "fake",
+                "TELEGRAM_CHAT_ID": "123",
+            }):
+                from notifier import send_lead
+                send_lead(
+                    "קבוצה-יחידה",
+                    "תוכן",
+                    "https://m.facebook.com/groups/test/posts/1",
+                    "רלוונטי",
+                    also_in=[],
+                )
+                sent_text = mock_post.call_args[1]["json"]["text"]
+                assert "קבוצות נוספות" not in sent_text
+
+    def test_content_dedup_hash_merges_groups(self):
+        """פוסטים עם אותו content_hash מאוחדים — also_in מתעדכן."""
+        from main import _content_dedup_hash
+
+        text = "שלום אני מחפש מתכנת לפרויקט גדול ומורכב במיוחד"
+        c_hash = _content_dedup_hash(text)
+
+        # סימולציה של הלוגיקה ב-run_one_scan — שלב 2.1
+        posts = [
+            {"id": "p1", "group": "קבוצה-א", "content": text, "_content_hash": c_hash},
+            {"id": "p2", "group": "קבוצה-ב", "content": text, "_content_hash": c_hash},
+            {"id": "p3", "group": "קבוצה-ג", "content": text, "_content_hash": c_hash},
+        ]
+
+        _seen_hashes: dict = {}
+        unique_posts = []
+        for p in posts:
+            ch = p.get("_content_hash", "")
+            if not ch:
+                p["also_in"] = []
+                unique_posts.append(p)
+                continue
+            if ch in _seen_hashes:
+                _seen_hashes[ch]["also_in"].append(p["group"])
+            else:
+                p["also_in"] = []
+                _seen_hashes[ch] = p
+                unique_posts.append(p)
+
+        assert len(unique_posts) == 1
+        assert unique_posts[0]["group"] == "קבוצה-א"
+        assert unique_posts[0]["also_in"] == ["קבוצה-ב", "קבוצה-ג"]
+
+    def test_different_content_not_merged(self):
+        """פוסטים עם תוכן שונה לא מאוחדים."""
+        from main import _content_dedup_hash
+
+        text1 = "מחפש מפתח פייתון לפרויקט חדש ומעניין שלי"
+        text2 = "דרושה מעצבת גרפית לעבודה קבועה במשרדים שלנו"
+        h1 = _content_dedup_hash(text1)
+        h2 = _content_dedup_hash(text2)
+
+        posts = [
+            {"id": "p1", "group": "קבוצה-א", "content": text1, "_content_hash": h1},
+            {"id": "p2", "group": "קבוצה-ב", "content": text2, "_content_hash": h2},
+        ]
+
+        _seen_hashes: dict = {}
+        unique_posts = []
+        for p in posts:
+            ch = p.get("_content_hash", "")
+            if not ch:
+                p["also_in"] = []
+                unique_posts.append(p)
+                continue
+            if ch in _seen_hashes:
+                _seen_hashes[ch]["also_in"].append(p["group"])
+            else:
+                p["also_in"] = []
+                _seen_hashes[ch] = p
+                unique_posts.append(p)
+
+        assert len(unique_posts) == 2
+        assert unique_posts[0]["also_in"] == []
+        assert unique_posts[1]["also_in"] == []
+
+    def test_empty_hash_not_merged(self):
+        """פוסטים ללא hash (טקסט ריק) לא מאוחדים ביניהם."""
+        posts = [
+            {"id": "p1", "group": "קבוצה-א", "content": "", "_content_hash": ""},
+            {"id": "p2", "group": "קבוצה-ב", "content": "", "_content_hash": ""},
+        ]
+
+        _seen_hashes: dict = {}
+        unique_posts = []
+        for p in posts:
+            ch = p.get("_content_hash", "")
+            if not ch:
+                p["also_in"] = []
+                unique_posts.append(p)
+                continue
+            if ch in _seen_hashes:
+                _seen_hashes[ch]["also_in"].append(p["group"])
+            else:
+                p["also_in"] = []
+                _seen_hashes[ch] = p
+                unique_posts.append(p)
+
+        # שני הפוסטים נשארים — hash ריק לא מאחד
+        assert len(unique_posts) == 2
