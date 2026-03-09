@@ -1619,6 +1619,17 @@ async def run_cycle():
             if filtered_by_age:
                 log.info(f"סונן לפי גיל: {filtered_by_age} פוסטים ישנים מ-{max_age} ימים דולגו")
 
+        # שלב 2.6 — סינון מפרסמים חסומים (blocked_users)
+        # לפני force_send — מפרסם חסום לא יישלח גם אם הפוסט מכיל מילת "שלח תמיד"
+        with _kw_lock:
+            _has_blocked_users = bool(_keywords_state["blocked_users"])
+        if _has_blocked_users:
+            before_user_block = len(new_posts)
+            new_posts = [p for p in new_posts if not is_user_blocked(p.get("author", ""))]
+            blocked_user_count = before_user_block - len(new_posts)
+            if blocked_user_count:
+                log.info(f"נחסמו {blocked_user_count} פוסטים לפי מפרסמים חסומים (blocked_users)")
+
         # שלב 3 — "שלח תמיד": פוסטים עם מילת force_send עוקפים את כל הסינון (block/pre_filter/AI)
         force_send_posts = []
         rest_posts = []
@@ -1663,16 +1674,6 @@ async def run_cycle():
             blocked_count = before_block - len(rest_posts)
             if blocked_count:
                 log.info(f"נחסמו {blocked_count} פוסטים לפי מילים חסומות (BLOCK_KEYWORDS)")
-
-        # שלב 4א½ — סינון מפרסמים חסומים (blocked_users)
-        with _kw_lock:
-            _has_blocked_users = bool(_keywords_state["blocked_users"])
-        if _has_blocked_users:
-            before_user_block = len(rest_posts)
-            rest_posts = [p for p in rest_posts if not is_user_blocked(p.get("author", ""))]
-            blocked_user_count = before_user_block - len(rest_posts)
-            if blocked_user_count:
-                log.info(f"נחסמו {blocked_user_count} פוסטים לפי מפרסמים חסומים (blocked_users)")
 
         # שלב 4ב — סינון מילות מפתח לפני שליחה ל-AI
         filtered_posts = [p for p in rest_posts if passes_keyword_filter(p["content"])]
