@@ -126,6 +126,9 @@ def init_db():
         # מיגרציה — הוספת עמודת profile_url ל-DBs קיימים
         cols = [r[1] for r in conn.execute("PRAGMA table_info(blocked_users)").fetchall()]
         if "profile_url" not in cols:
+            # ערכים ישנים (שמות טקסטואליים) לא יתאימו ל-URL — שומרים אותם לפני מחיקה
+            old_users = conn.execute("SELECT name FROM blocked_users").fetchall()
+            old_names = [r[0] for r in old_users]
             # SQLite לא תומך ב-DROP CONSTRAINT, לכן יוצרים טבלה חדשה בלי UNIQUE על name
             conn.execute("""
                 CREATE TABLE blocked_users_new (
@@ -135,12 +138,17 @@ def init_db():
                     created_at TEXT NOT NULL
                 )
             """)
-            conn.execute("""
-                INSERT INTO blocked_users_new (id, name, profile_url, created_at)
-                SELECT id, name, name, created_at FROM blocked_users
-            """)
+            # לא מעבירים ערכים ישנים — שמות טקסטואליים לא יתאימו ל-URL פרופיל
             conn.execute("DROP TABLE blocked_users")
             conn.execute("ALTER TABLE blocked_users_new RENAME TO blocked_users")
+            if old_names:
+                import sys
+                print(
+                    f"[MIGRATION] blocked_users: {len(old_names)} רשומות ישנות (לפי שם) נמחקו. "
+                    f"חסימה עובדת עכשיו לפי URL פרופיל. יש להוסיף מחדש דרך הפאנל/טלגרם: "
+                    f"{', '.join(old_names)}",
+                    file=sys.stderr,
+                )
 
 # ── CRUD ──────────────────────────────────────────────────────
 def is_seen(post_id: str) -> bool:
@@ -243,17 +251,17 @@ def add_group(raw_url: str) -> tuple[bool, str]:
     """מוסיף קבוצה ל-DB. מחזיר (success, message)."""
     url = _normalize_group_url(raw_url)
     name = _extract_group_name(url)
-    # בדיקת כפילות לפני בדיקת מגבלה — כדי לא להציג "שדרג" על קבוצה שכבר קיימת
-    with _get_conn() as conn:
-        exists = conn.execute("SELECT 1 FROM groups WHERE url = ?", (url,)).fetchone()
-    if exists:
-        return False, f"הקבוצה כבר קיימת: {url}"
-    # בדיקת מגבלת קבוצות לפי MAX_GROUPS
     max_groups = _get_max_groups()
-    if max_groups > 0 and count_groups() >= max_groups:
-        return False, f"הגעת למגבלת הקבוצות ({max_groups}). לשדרוג — פנה למנהל."
     try:
         with _get_conn() as conn:
+            # בדיקת כפילות לפני בדיקת מגבלה — כדי לא להציג "שדרג" על קבוצה שכבר קיימת
+            if conn.execute("SELECT 1 FROM groups WHERE url = ?", (url,)).fetchone():
+                return False, f"הקבוצה כבר קיימת: {url}"
+            # בדיקת מגבלה + INSERT באותה טרנזקציה — מונע race condition
+            if max_groups > 0:
+                count = conn.execute("SELECT COUNT(*) FROM groups").fetchone()[0]
+                if count >= max_groups:
+                    return False, f"הגעת למגבלת הקבוצות ({max_groups}). לשדרוג — פנה למנהל."
             conn.execute(
                 "INSERT INTO groups (name, url, created_at) VALUES (?, ?, ?)",
                 (name, url, _now().isoformat()),
