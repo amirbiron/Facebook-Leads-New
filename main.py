@@ -226,7 +226,7 @@ def _load_pre_filter_keywords() -> list[str]:
 
 # טעינה ראשונית — יתעדכנו דינמית בכל סבב.
 # כל הגישה דרך _kw_lock כדי למנוע race condition בין Flask thread ל-main loop.
-def _load_blocked_users() -> list[str]:
+def _load_blocked_users() -> list[dict]:
     """טוען מפרסמים חסומים מ-DB. רשימה ריקה אם ה-DB לא זמין."""
     try:
         return get_blocked_users()

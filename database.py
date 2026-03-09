@@ -356,12 +356,23 @@ def get_db_keywords(kw_type: str) -> list[str] | None:
 # ── Blocked Users CRUD ────────────────────────────────────
 
 def _normalize_profile_url(raw: str) -> str:
-    """מנרמל URL פרופיל פייסבוק — מסיר פרמטרים ומעביר ל-m.facebook.com."""
+    """מנרמל URL פרופיל פייסבוק — מסיר פרמטרי tracking ומעביר ל-m.facebook.com.
+    שומר על id= ב-profile.php URLs (משתמשים בלי vanity URL).
+    """
     url = raw.strip()
     if not url:
         return ""
+    # שמירת id= מ-profile.php לפני הסרת query params
+    profile_id = ""
+    if "profile.php" in url:
+        match = re.search(r"[?&]id=(\d+)", url)
+        if match:
+            profile_id = match.group(1)
     # הסרת query params (fbclid, tracking וכו')
     url = url.split("?")[0].rstrip("/")
+    # שחזור id= ל-profile.php
+    if profile_id:
+        url += f"?id={profile_id}"
     # נרמול דומיין
     if "facebook.com" in url and not url.startswith("http"):
         url = "https://" + url

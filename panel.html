@@ -1971,7 +1971,12 @@
       users.forEach(u => {
         const chip = document.createElement('span');
         chip.className = 'chip chip-block';
-        chip.innerHTML = `${u.name} <button class="chip-remove" onclick="removeBlockedUser('${u.profile_url.replace(/'/g, "\\'")}')">×</button>`;
+        chip.appendChild(document.createTextNode(u.name + ' '));
+        const btn = document.createElement('button');
+        btn.className = 'chip-remove';
+        btn.textContent = '×';
+        btn.onclick = () => removeBlockedUser(u.profile_url);
+        chip.appendChild(btn);
         container.appendChild(chip);
       });
     }

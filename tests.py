@@ -3640,6 +3640,22 @@ class TestBlockedUsersCRUD:
         assert "m.facebook.com" in users[0]["profile_url"]
         assert "fbclid" not in users[0]["profile_url"]
 
+    def test_profile_php_url_preserves_id(self, tmp_db):
+        """profile.php?id=12345 — שומר את ה-id, מסיר tracking params."""
+        database.add_blocked_user("https://www.facebook.com/profile.php?id=12345&fbclid=abc")
+        users = database.get_blocked_users()
+        assert "id=12345" in users[0]["profile_url"]
+        assert "fbclid" not in users[0]["profile_url"]
+        assert users[0]["name"] == "12345"
+
+    def test_profile_php_two_different_ids(self, tmp_db):
+        """שני משתמשי profile.php שונים לא מתנגשים."""
+        ok1, _ = database.add_blocked_user("https://facebook.com/profile.php?id=111")
+        ok2, _ = database.add_blocked_user("https://facebook.com/profile.php?id=222")
+        assert ok1 is True
+        assert ok2 is True
+        assert database.get_blocked_users().__len__() == 2
+
 
 class TestIsUserBlocked:
     _SPAMMER = {"name": "ספאמר", "profile_url": "https://m.facebook.com/spammer123"}
