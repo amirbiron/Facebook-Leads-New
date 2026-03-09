@@ -3790,6 +3790,33 @@ class TestCrossGroupDedup:
                 sent_text = mock_post.call_args[1]["json"]["text"]
                 assert "קבוצות נוספות" not in sent_text
 
+    @staticmethod
+    def _run_xgroup_dedup(posts):
+        """סימולציה של לוגיקת cross-group dedup מ-main.py שלב 2.1."""
+        _seen_hashes: dict = {}
+        unique_posts = []
+        for p in posts:
+            ch = p.get("_content_hash", "")
+            if not ch:
+                p["also_in"] = []
+                p["_also_in_urls"] = []
+                unique_posts.append(p)
+                continue
+            if ch in _seen_hashes:
+                primary = _seen_hashes[ch]
+                dup_group = p["group"]
+                if dup_group != primary["group"] and dup_group not in primary["also_in"]:
+                    primary["also_in"].append(dup_group)
+                    dup_url = p.get("group_url", "")
+                    if dup_url:
+                        primary["_also_in_urls"].append(dup_url)
+            else:
+                p["also_in"] = []
+                p["_also_in_urls"] = []
+                _seen_hashes[ch] = p
+                unique_posts.append(p)
+        return unique_posts
+
     def test_content_dedup_hash_merges_groups(self):
         """פוסטים עם אותו content_hash מאוחדים — also_in מתעדכן."""
         from main import _content_dedup_hash
@@ -3797,31 +3824,16 @@ class TestCrossGroupDedup:
         text = "שלום אני מחפש מתכנת לפרויקט גדול ומורכב במיוחד"
         c_hash = _content_dedup_hash(text)
 
-        # סימולציה של הלוגיקה ב-run_one_scan — שלב 2.1
         posts = [
             {"id": "p1", "group": "קבוצה-א", "content": text, "_content_hash": c_hash},
             {"id": "p2", "group": "קבוצה-ב", "content": text, "_content_hash": c_hash},
             {"id": "p3", "group": "קבוצה-ג", "content": text, "_content_hash": c_hash},
         ]
+        unique = self._run_xgroup_dedup(posts)
 
-        _seen_hashes: dict = {}
-        unique_posts = []
-        for p in posts:
-            ch = p.get("_content_hash", "")
-            if not ch:
-                p["also_in"] = []
-                unique_posts.append(p)
-                continue
-            if ch in _seen_hashes:
-                _seen_hashes[ch]["also_in"].append(p["group"])
-            else:
-                p["also_in"] = []
-                _seen_hashes[ch] = p
-                unique_posts.append(p)
-
-        assert len(unique_posts) == 1
-        assert unique_posts[0]["group"] == "קבוצה-א"
-        assert unique_posts[0]["also_in"] == ["קבוצה-ב", "קבוצה-ג"]
+        assert len(unique) == 1
+        assert unique[0]["group"] == "קבוצה-א"
+        assert unique[0]["also_in"] == ["קבוצה-ב", "קבוצה-ג"]
 
     def test_different_content_not_merged(self):
         """פוסטים עם תוכן שונה לא מאוחדים."""
@@ -3829,32 +3841,16 @@ class TestCrossGroupDedup:
 
         text1 = "מחפש מפתח פייתון לפרויקט חדש ומעניין שלי"
         text2 = "דרושה מעצבת גרפית לעבודה קבועה במשרדים שלנו"
-        h1 = _content_dedup_hash(text1)
-        h2 = _content_dedup_hash(text2)
 
         posts = [
-            {"id": "p1", "group": "קבוצה-א", "content": text1, "_content_hash": h1},
-            {"id": "p2", "group": "קבוצה-ב", "content": text2, "_content_hash": h2},
+            {"id": "p1", "group": "קבוצה-א", "content": text1, "_content_hash": _content_dedup_hash(text1)},
+            {"id": "p2", "group": "קבוצה-ב", "content": text2, "_content_hash": _content_dedup_hash(text2)},
         ]
+        unique = self._run_xgroup_dedup(posts)
 
-        _seen_hashes: dict = {}
-        unique_posts = []
-        for p in posts:
-            ch = p.get("_content_hash", "")
-            if not ch:
-                p["also_in"] = []
-                unique_posts.append(p)
-                continue
-            if ch in _seen_hashes:
-                _seen_hashes[ch]["also_in"].append(p["group"])
-            else:
-                p["also_in"] = []
-                _seen_hashes[ch] = p
-                unique_posts.append(p)
-
-        assert len(unique_posts) == 2
-        assert unique_posts[0]["also_in"] == []
-        assert unique_posts[1]["also_in"] == []
+        assert len(unique) == 2
+        assert unique[0]["also_in"] == []
+        assert unique[1]["also_in"] == []
 
     def test_empty_hash_not_merged(self):
         """פוסטים ללא hash (טקסט ריק) לא מאוחדים ביניהם."""
@@ -3862,21 +3858,63 @@ class TestCrossGroupDedup:
             {"id": "p1", "group": "קבוצה-א", "content": "", "_content_hash": ""},
             {"id": "p2", "group": "קבוצה-ב", "content": "", "_content_hash": ""},
         ]
+        unique = self._run_xgroup_dedup(posts)
+        assert len(unique) == 2
 
-        _seen_hashes: dict = {}
-        unique_posts = []
-        for p in posts:
-            ch = p.get("_content_hash", "")
-            if not ch:
-                p["also_in"] = []
-                unique_posts.append(p)
-                continue
-            if ch in _seen_hashes:
-                _seen_hashes[ch]["also_in"].append(p["group"])
-            else:
-                p["also_in"] = []
-                _seen_hashes[ch] = p
-                unique_posts.append(p)
+    def test_same_group_not_added_to_also_in(self):
+        """שני פוסטים מאותה קבוצה עם hash זהה — לא מוסיפים לalso_in."""
+        from main import _content_dedup_hash
 
-        # שני הפוסטים נשארים — hash ריק לא מאחד
-        assert len(unique_posts) == 2
+        text = "פוסט כפול מאותה קבוצה עם תוכן זהה לגמרי"
+        c_hash = _content_dedup_hash(text)
+
+        posts = [
+            {"id": "p1", "group": "קבוצה-א", "content": text, "_content_hash": c_hash},
+            {"id": "p2", "group": "קבוצה-א", "content": text, "_content_hash": c_hash},
+        ]
+        unique = self._run_xgroup_dedup(posts)
+
+        assert len(unique) == 1
+        # אותה קבוצה — also_in ריק, לא מציג "קבוצות נוספות" מטעה
+        assert unique[0]["also_in"] == []
+
+    def test_also_in_urls_collected(self):
+        """group_url של קבוצות שאוחדו נשמר ב-_also_in_urls — לבדיקת force_send."""
+        from main import _content_dedup_hash
+
+        text = "פוסט שפורסם בכמה קבוצות עם מילות מפתח שונות לכל קבוצה"
+        c_hash = _content_dedup_hash(text)
+
+        posts = [
+            {"id": "p1", "group": "קבוצה-א", "content": text, "_content_hash": c_hash,
+             "group_url": "https://m.facebook.com/groups/a"},
+            {"id": "p2", "group": "קבוצה-ב", "content": text, "_content_hash": c_hash,
+             "group_url": "https://m.facebook.com/groups/b"},
+            {"id": "p3", "group": "קבוצה-ג", "content": text, "_content_hash": c_hash,
+             "group_url": "https://m.facebook.com/groups/c"},
+        ]
+        unique = self._run_xgroup_dedup(posts)
+
+        assert len(unique) == 1
+        assert unique[0]["_also_in_urls"] == [
+            "https://m.facebook.com/groups/b",
+            "https://m.facebook.com/groups/c",
+        ]
+
+    def test_duplicate_group_name_not_added_twice(self):
+        """אותו שם קבוצה לא מתווסף ל-also_in יותר מפעם אחת."""
+        from main import _content_dedup_hash
+
+        text = "פוסט כפול שמופיע שלוש פעמים באותן שתי קבוצות"
+        c_hash = _content_dedup_hash(text)
+
+        posts = [
+            {"id": "p1", "group": "קבוצה-א", "content": text, "_content_hash": c_hash},
+            {"id": "p2", "group": "קבוצה-ב", "content": text, "_content_hash": c_hash},
+            {"id": "p3", "group": "קבוצה-ב", "content": text, "_content_hash": c_hash},
+        ]
+        unique = self._run_xgroup_dedup(posts)
+
+        assert len(unique) == 1
+        # קבוצה-ב מופיעה רק פעם אחת
+        assert unique[0]["also_in"] == ["קבוצה-ב"]

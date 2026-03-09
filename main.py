@@ -1628,16 +1628,27 @@ async def run_cycle():
             if not c_hash:
                 # פוסט ללא hash (טקסט ריק/רעש בלבד) — מעביר כמו שהוא
                 p["also_in"] = []
+                p["_also_in_urls"] = []
                 unique_posts.append(p)
                 continue
             if c_hash in _seen_hashes:
-                # פוסט כפול מקבוצה אחרת — מוסיף את שם הקבוצה לליד המקורי
-                _seen_hashes[c_hash]["also_in"].append(p["group"])
+                primary = _seen_hashes[c_hash]
+                dup_group = p["group"]
+                # רק אם באמת קבוצה אחרת — מונע תצוגה מטעה של "קבוצות נוספות"
+                # כשיש שני פוסטים מאותה קבוצה עם hash זהה
+                if dup_group != primary["group"] and dup_group not in primary["also_in"]:
+                    primary["also_in"].append(dup_group)
+                    # שומר group_url של הכפילות — כדי שבדיקת force_send תכסה
+                    # גם מילות קבוצה ספציפיות מקבוצות שאוחדו
+                    dup_url = p.get("group_url", "")
+                    if dup_url:
+                        primary["_also_in_urls"].append(dup_url)
                 cross_group_merged += 1
                 # מסמן גם את הכפילות כנראית כדי שלא תופיע שוב בסבב הבא
                 mark_seen(p["id"], p["group"])
             else:
                 p["also_in"] = []
+                p["_also_in_urls"] = []
                 _seen_hashes[c_hash] = p
                 unique_posts.append(p)
         if cross_group_merged:
@@ -1676,7 +1687,14 @@ async def run_cycle():
         force_send_posts = []
         rest_posts = []
         for post in new_posts:
+            # בדיקת force_send — גם מול group_url של הפוסט המקורי
+            # וגם מול group_urls של קבוצות שאוחדו (cross-group dedup)
             matched_kw = matches_force_send(post["content"], post.get("group_url", ""))
+            if not matched_kw:
+                for alt_url in post.get("_also_in_urls", []):
+                    matched_kw = matches_force_send(post["content"], alt_url)
+                    if matched_kw:
+                        break
             if matched_kw and not is_lead_sent(post["id"]):
                 c_hash = post.get("_content_hash") or _content_dedup_hash(post["content"])
                 if is_content_hash_sent(c_hash):
