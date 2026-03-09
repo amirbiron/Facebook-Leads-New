@@ -2039,7 +2039,7 @@ class TestBuildKeywordsText:
             assert "בוט" in text
             assert "אוטומציה" in text
             assert "ספאם" in text
-            assert "מילים חסומות" in text
+            assert "מילים חוסמות" in text
 
 
 class TestBuildBlockedText:

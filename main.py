@@ -58,7 +58,7 @@ sys.modules.setdefault("main", sys.modules[__name__])
 FB_EMAIL = os.environ.get("FB_EMAIL")
 FB_PASSWORD = os.environ.get("FB_PASSWORD")
 
-# מילים חסומות — פוסט שמכיל מילה מהרשימה לא יישלח ל-AI
+# מילים חוסמות — פוסט שמכיל מילה מהרשימה לא יישלח ל-AI
 # ניתן לערוך דרך משתנה סביבה BLOCK_KEYWORDS (מופרד בפסיקים)
 # או דינמית דרך פקודות טלגרם /block, /unblock
 _block_env = os.environ.get("BLOCK_KEYWORDS", "").strip()
@@ -202,7 +202,7 @@ def matches_force_send(text: str, group_url: str = "") -> str | None:
 
 
 def _load_block_keywords() -> list[str]:
-    """טוען מילים חסומות מ-DB עם fallback למשתנה סביבה.
+    """טוען מילים חוסמות מ-DB עם fallback למשתנה סביבה.
     None מ-DB = מעולם לא הוגדר → fallback.  [] = המשתמש רוקן הכל → רשימה ריקה.
     """
     try:
@@ -559,7 +559,7 @@ def _settings_menu_buttons() -> list[list[dict]]:
             {"text": "\U0001f50d מילות מפתח", "callback_data": "keywords"},
         ],
         [
-            {"text": "\U0001f6ab מילים חסומות", "callback_data": "blocked"},
+            {"text": "\U0001f6ab מילים חוסמות", "callback_data": "blocked"},
             {"text": "\U0001f6d1 מפרסמים חסומים", "callback_data": "blocked_users"},
         ],
         [
@@ -597,7 +597,7 @@ def _build_status_text(shared_state: dict) -> str:
         f"- שעה מקומית: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
         f"- שעות שקטות: {quiet_desc} | עכשיו: {'פעיל' if quiet_now else 'לא'}\n"
         f"- קבוצות פעילות: {groups_count}\n"
-        f"- מילות סינון: {pf_count} | מילים חסומות: {block_desc}\n"
+        f"- מילות סינון: {pf_count} | מילים חוסמות: {block_desc}\n"
         f"- סריקה רצה: {'כן' if in_progress else 'לא'}\n"
         f"- סריקה אחרונה התחילה: {last_started.strftime('%Y-%m-%d %H:%M:%S %Z') if last_started else '-'}\n"
         f"- סריקה אחרונה הסתיימה: {last_finished.strftime('%Y-%m-%d %H:%M:%S %Z') if last_finished else '-'}\n"
@@ -641,7 +641,7 @@ def _build_groups_text() -> str:
 
 
 def _build_keywords_text() -> str:
-    """בונה טקסט מילות מפתח לסינון + מילים חסומות."""
+    """בונה טקסט מילות מפתח לסינון + מילים חוסמות."""
     with _kw_lock:
         pf = _keywords_state["pre_filter"]
         bl = _keywords_state["block"]
@@ -649,18 +649,18 @@ def _build_keywords_text() -> str:
     bl_text = ", ".join(bl) if bl else "(ריק)"
     return (
         f"מילות מפתח לסינון ({len(pf)}):\n{pf_text}\n\n"
-        f"מילים חסומות ({len(bl)}):\n{bl_text}\n\n"
+        f"מילים חוסמות ({len(bl)}):\n{bl_text}\n\n"
         "פקודות: /add_keyword <מילה> | /remove_keyword <מילה> | /block <מילה> | /unblock <מילה>"
     )
 
 
 def _build_blocked_text() -> str:
-    """בונה טקסט מילים חסומות."""
+    """בונה טקסט מילים חוסמות."""
     with _kw_lock:
         bl = _keywords_state["block"]
     bl_text = ", ".join(bl) if bl else "(ריק)"
     return (
-        f"מילים חסומות ({len(bl)}):\n{bl_text}\n\n"
+        f"מילים חוסמות ({len(bl)}):\n{bl_text}\n\n"
         "פקודות: /block <מילה> | /unblock <מילה>"
     )
 
@@ -1748,7 +1748,7 @@ async def _run_debug_scan(group_url: str) -> str:
     if user_blocked:
         lines.append(f"\U0001f6d1 נחסמו לפי מפרסם: {user_blocked}")
 
-    # שלב 5 — סינון מילים חסומות
+    # שלב 5 — סינון מילים חוסמות
     blocked_count = 0
     after_block = []
     for p in after_dedup:
@@ -1757,7 +1757,7 @@ async def _run_debug_scan(group_url: str) -> str:
         else:
             after_block.append(p)
     if blocked_count:
-        lines.append(f"\U0001f6ab נחסמו לפי מילים חסומות: {blocked_count}")
+        lines.append(f"\U0001f6ab נחסמו לפי מילים חוסמות: {blocked_count}")
 
     # שלב 6 — סינון מילות מפתח
     passed_filter = [p for p in after_block if passes_keyword_filter(p["content"])]
@@ -2047,7 +2047,7 @@ async def run_cycle():
         if force_send_posts:
             log.info(f"נשלחו {len(force_send_posts)} לידים ישירות (force_send)")
 
-        # שלב 4א — סינון מילים חסומות (BLOCK_KEYWORDS)
+        # שלב 4א — סינון מילים חוסמות (BLOCK_KEYWORDS)
         with _kw_lock:
             _has_block = bool(_keywords_state["block"])
         if _has_block:
@@ -2055,7 +2055,7 @@ async def run_cycle():
             rest_posts = [p for p in rest_posts if not is_blocked(p["content"])]
             blocked_count = before_block - len(rest_posts)
             if blocked_count:
-                log.info(f"נחסמו {blocked_count} פוסטים לפי מילים חסומות (BLOCK_KEYWORDS)")
+                log.info(f"נחסמו {blocked_count} פוסטים לפי מילים חוסמות (BLOCK_KEYWORDS)")
 
         # שלב 4ב — סינון מילות מפתח לפני שליחה ל-AI
         filtered_posts = [p for p in rest_posts if passes_keyword_filter(p["content"])]

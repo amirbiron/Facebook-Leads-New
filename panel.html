@@ -1114,18 +1114,18 @@
           <span>מפרסמים חסומים</span>
         </a>
 
-        <a href="#schedule" class="nav-item" data-section="schedule">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-          </svg>
-          <span>שעות שקטות</span>
-        </a>
-
         <a href="#group-health" class="nav-item" data-section="group-health">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
           </svg>
           <span>בריאות קבוצות</span>
+        </a>
+
+        <a href="#schedule" class="nav-item" data-section="schedule">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <span>שעות שקטות</span>
         </a>
       </div>
     </nav>
@@ -1332,13 +1332,13 @@
 
         <div id="keywords-list" class="chips"></div>
 
-        <!-- מילים חסומות -->
+        <!-- מילים חוסמות -->
         <div class="card-section">
           <h3 class="card-title">
             <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
             </svg>
-            מילים חסומות
+            מילים חוסמות
           </h3>
           <p class="card-desc">
             פוסטים שמכילים מילה מרשימה זו ידולגו אוטומטית — לפני שליחה ל-AI
@@ -1482,6 +1482,30 @@
         <div id="blocked-users-list" class="chips"></div>
       </section>
 
+      <!-- ═══ בריאות קבוצות ═══ -->
+      <section id="group-health" class="card">
+        <h3 class="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+          </svg>
+          בריאות קבוצות
+        </h3>
+        <p class="card-desc">
+          התראה נשלחת לטלגרם כשקבוצה מחזירה 0 פוסטים מספר סבבים ברצף.
+        </p>
+
+        <div class="form-group">
+          <label for="inactive-threshold">סף התראה (סבבים ריקים ברצף)</label>
+          <input type="number" id="inactive-threshold" min="1" max="999" value="50"
+                 style="width: 100%; padding: 10px 12px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; font-size: 0.95rem;" dir="ltr">
+          <p class="hint">כמה סבבים ברצף של 0 פוסטים לפני שליחת התראה. ברירת מחדל: 50.</p>
+        </div>
+
+        <div class="btn-row" style="margin-top: 16px;">
+          <button class="btn btn-primary" onclick="saveGroupHealthSettings()">שמור</button>
+        </div>
+      </section>
+
       <!-- ═══ לוח זמנים ═══ -->
       <section id="schedule" class="card">
         <h3 class="card-title">
@@ -1507,33 +1531,6 @@
         <div class="btn-row" style="margin-top: 16px;">
           <button class="btn btn-primary" onclick="saveSchedule()">שמור</button>
         </div>
-      </section>
-
-      <!-- ═══ בריאות קבוצות ═══ -->
-      <section id="group-health" class="card">
-        <h3 class="card-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
-          </svg>
-          בריאות קבוצות
-        </h3>
-        <p class="card-desc">
-          מעקב אחרי קבוצות שלא מחזירות פוסטים — התראה נשלחת לטלגרם כשקבוצה ריקה מספר סבבים ברצף.
-        </p>
-
-        <div class="form-group">
-          <label for="inactive-threshold">סף התראה (סבבים ריקים ברצף)</label>
-          <input type="number" id="inactive-threshold" min="1" max="999" value="50"
-                 style="width: 100%; padding: 10px 12px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; font-size: 0.95rem;" dir="ltr">
-          <p class="hint">כמה סבבים ברצף של 0 פוסטים לפני שליחת התראה. ברירת מחדל: 50.</p>
-        </div>
-
-        <div class="btn-row" style="margin-top: 16px;">
-          <button class="btn btn-primary" onclick="saveGroupHealthSettings()">שמור</button>
-          <button class="btn btn-secondary" onclick="loadGroupHealth()" style="margin-inline-start: 8px;">רענן נתונים</button>
-        </div>
-
-        <div id="group-health-list" style="margin-top: 20px;"></div>
       </section>
     </main>
   </div>
@@ -1765,56 +1762,6 @@
       } catch (e) {
         toast('שגיאה: ' + e.message, 'error');
       }
-    }
-
-    async function loadGroupHealth() {
-      try {
-        const data = await api('/api/group-health');
-        document.getElementById('inactive-threshold').value = data.inactive_threshold || 50;
-        const list = document.getElementById('group-health-list');
-        if (!data.health || data.health.length === 0) {
-          list.innerHTML = '<p style="color: var(--text-muted)">אין נתוני בריאות עדיין — ירוצו אחרי הסריקה הראשונה.</p>';
-          return;
-        }
-        const threshold = data.inactive_threshold || 50;
-        const warnThreshold = Math.max(1, Math.floor(threshold / 2));
-        let html = '<table style="width:100%;border-collapse:collapse;font-size:0.9rem;">';
-        html += '<thead><tr style="border-bottom:1px solid var(--border);text-align:start;">'
-              + '<th style="padding:8px 6px;">קבוצה</th>'
-              + '<th style="padding:8px 6px;">פוסטים/סבב</th>'
-              + '<th style="padding:8px 6px;">סבבים ריקים</th>'
-              + '<th style="padding:8px 6px;">ליד אחרון</th>'
-              + '</tr></thead><tbody>';
-        for (const h of data.health) {
-          const consecutive = h.consecutive_empty || 0;
-          let icon = '✅';
-          let rowStyle = '';
-          if (consecutive >= threshold) {
-            icon = '⚠️';
-            rowStyle = 'background: var(--destructive-soft);';
-          } else if (consecutive >= warnThreshold) {
-            icon = '🟡';
-          }
-          const name = h.group_name || h.group_url;
-          const lastLead = h.last_lead_at ? new Date(h.last_lead_at).toLocaleDateString('he-IL') : '—';
-          html += `<tr style="border-bottom:1px solid var(--border);${rowStyle}">`
-                + `<td style="padding:8px 6px;">${icon} ${_esc(name)}</td>`
-                + `<td style="padding:8px 6px;">${h.last_posts_count}</td>`
-                + `<td style="padding:8px 6px;">${consecutive}</td>`
-                + `<td style="padding:8px 6px;">${lastLead}</td>`
-                + '</tr>';
-        }
-        html += '</tbody></table>';
-        list.innerHTML = html;
-      } catch (e) {
-        toast('שגיאה בטעינת בריאות קבוצות: ' + e.message, 'error');
-      }
-    }
-
-    function _esc(s) {
-      const d = document.createElement('div');
-      d.textContent = s;
-      return d.innerHTML;
     }
 
     async function savePostAge() {
@@ -2486,7 +2433,6 @@
         loadKeywords('block'),
         loadForceSend(),
         loadBlockedUsers(),
-        loadGroupHealth(),
       ]);
       // startScanPolling כבר קורא ל-loadScanStatus כפעולה ראשונה
       startScanPolling();
