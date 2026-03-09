@@ -36,6 +36,14 @@ log = get_logger("Panel")
 PANEL_PORT = int(os.environ.get("PANEL_PORT", os.environ.get("PORT", "8080")))
 
 
+def _safe_int(value, default: int) -> int:
+    """המרה בטוחה ל-int עם fallback — מונע crash כש-DB מכיל ערך לא תקין."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
 class _QuietRequestFilter:
     """מסנן בקשות polling תכופות מלוגים של werkzeug — מונע רעש."""
     _QUIET_PATHS = {"/api/scan-status"}
@@ -154,7 +162,7 @@ def create_app() -> Flask:
             "quiet_hours": quiet_hours,
             "interval_minutes": interval,
             "max_post_age_days": max_post_age_days,
-            "inactive_group_threshold": int(get_config("inactive_group_threshold", "50")),
+            "inactive_group_threshold": _safe_int(get_config("inactive_group_threshold", "50"), 50),
         })
 
     @app.route("/api/settings", methods=["PUT"])
@@ -170,6 +178,14 @@ def create_app() -> Flask:
                 if key == "fb_password":
                     if value:
                         set_config_encrypted(key, value)
+                elif key == "inactive_group_threshold":
+                    # ולידציה — חייב להיות מספר שלם >= 1
+                    try:
+                        val_int = int(value)
+                        if val_int >= 1:
+                            set_config(key, str(val_int))
+                    except (ValueError, TypeError):
+                        pass
                 else:
                     set_config(key, value)
 
@@ -352,8 +368,8 @@ def create_app() -> Flask:
                 h["group_url"],
                 h["group_url"].split("/groups/")[-1].rstrip("/") or h["group_url"],
             )
-        threshold = get_config("inactive_group_threshold", "50")
-        return jsonify({"health": health, "inactive_threshold": int(threshold)})
+        threshold = _safe_int(get_config("inactive_group_threshold", "50"), 50)
+        return jsonify({"health": health, "inactive_threshold": threshold})
 
     @app.route("/api/group-health/settings", methods=["PUT"])
     @require_auth

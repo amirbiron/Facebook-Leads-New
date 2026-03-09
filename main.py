@@ -690,6 +690,16 @@ def _build_group_health_text() -> str:
     # מיפוי URL → שם ידידותי
     url_to_name: dict[str, str] = {g["url"]: g["name"] for g in GROUPS}
 
+    # סף התראה — משמש גם לאייקונים
+    try:
+        _threshold = int(get_config("inactive_group_threshold", "50"))
+    except (ValueError, TypeError):
+        _threshold = 50
+    if _threshold < 1:
+        _threshold = 50
+    # סף אזהרה = חצי מסף ההתראה (לפחות 1)
+    _warn_threshold = max(1, _threshold // 2)
+
     lines = ["\U0001f4ca בריאות קבוצות:\n"]
     # קודם קבוצות עם health data
     seen_urls: set[str] = set()
@@ -701,9 +711,9 @@ def _build_group_health_text() -> str:
         last_count = h["last_posts_count"]
         last_lead = h["last_lead_at"]
 
-        if consecutive >= 5:
+        if consecutive >= _threshold:
             icon = "\u26a0\ufe0f"
-        elif consecutive >= 1:
+        elif consecutive >= _warn_threshold:
             icon = "\U0001f7e1"
         else:
             icon = "\u2705"
@@ -1869,7 +1879,12 @@ async def run_cycle():
             count = _posts_by_group.get(g_url, 0)
             update_group_health(g_url, count)
         # בדיקת קבוצות לא פעילות — שליחת התראה
-        _inactive_threshold = int(get_config("inactive_group_threshold", "50"))
+        try:
+            _inactive_threshold = int(get_config("inactive_group_threshold", "50"))
+        except (ValueError, TypeError):
+            _inactive_threshold = 50
+        if _inactive_threshold < 1:
+            _inactive_threshold = 50
         for health in get_all_group_health():
             if health["consecutive_empty"] >= _inactive_threshold:
                 # שולחים התראה רק בכפולות של הסף — לא להציף בהתראות חוזרות
