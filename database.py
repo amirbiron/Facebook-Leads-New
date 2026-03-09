@@ -5,6 +5,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 # נתיב אבסולוטי יחסית למיקום הקובץ — עובד גם ב-Docker וגם מקומית,
@@ -232,6 +233,11 @@ def _normalize_group_url(raw_url: str) -> str:
             url = "https://" + url
         else:
             url = "https://m.facebook.com/groups/" + url
+    # הסרת query params ו-fragment — לינקי שיתוף מכילים ?ref=share&rdid=...&#
+    # חייבים לנקות לפני החלפת דומיין כדי לא לפגוע ב-URL מקודד בתוך share_url param
+    parsed = urlparse(url)
+    url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+    url = url.rstrip("/")
     url = url.replace("www.facebook.com", "m.facebook.com")
     # טיפול בדומיין חשוף (facebook.com ללא subdomain)
     url = url.replace("://facebook.com", "://m.facebook.com")
