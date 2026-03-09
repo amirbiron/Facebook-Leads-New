@@ -1412,6 +1412,50 @@ class TestGroupsCRUD:
         assert groups == []
 
 
+class TestGroupLimit:
+    def test_no_limit_by_default(self, tmp_db, monkeypatch):
+        """ללא MAX_GROUPS — אין הגבלה."""
+        monkeypatch.delenv("MAX_GROUPS", raising=False)
+        for i in range(20):
+            ok, _ = database.add_group(f"https://m.facebook.com/groups/{i}")
+            assert ok is True
+
+    def test_limit_enforced(self, tmp_db, monkeypatch):
+        """MAX_GROUPS=2 — לא ניתן להוסיף קבוצה שלישית."""
+        monkeypatch.setenv("MAX_GROUPS", "2")
+        ok1, _ = database.add_group("https://m.facebook.com/groups/aaa")
+        ok2, _ = database.add_group("https://m.facebook.com/groups/bbb")
+        ok3, msg3 = database.add_group("https://m.facebook.com/groups/ccc")
+        assert ok1 is True
+        assert ok2 is True
+        assert ok3 is False
+        assert "מגבלת" in msg3
+
+    def test_limit_after_remove(self, tmp_db, monkeypatch):
+        """אחרי מחיקת קבוצה — אפשר שוב להוסיף."""
+        monkeypatch.setenv("MAX_GROUPS", "1")
+        database.add_group("https://m.facebook.com/groups/first")
+        ok, _ = database.add_group("https://m.facebook.com/groups/second")
+        assert ok is False
+        database.remove_group("https://m.facebook.com/groups/first")
+        ok, _ = database.add_group("https://m.facebook.com/groups/second")
+        assert ok is True
+
+    def test_count_groups(self, tmp_db):
+        assert database.count_groups() == 0
+        database.add_group("https://m.facebook.com/groups/111")
+        assert database.count_groups() == 1
+        database.add_group("https://m.facebook.com/groups/222")
+        assert database.count_groups() == 2
+
+    def test_zero_means_unlimited(self, tmp_db, monkeypatch):
+        """MAX_GROUPS=0 — ללא הגבלה."""
+        monkeypatch.setenv("MAX_GROUPS", "0")
+        for i in range(15):
+            ok, _ = database.add_group(f"https://m.facebook.com/groups/{i}")
+            assert ok is True
+
+
 # ──────────────────────────────────────────────────────────────
 # 8. Database — Keywords CRUD
 # ──────────────────────────────────────────────────────────────
@@ -3536,13 +3580,13 @@ from main import is_user_blocked
 
 class TestBlockedUsersCRUD:
     def test_add_blocked_user(self, tmp_db):
-        ok, msg = database.add_blocked_user("ספאמר מציק")
+        ok, msg = database.add_blocked_user("https://www.facebook.com/spammer123")
         assert ok is True
         assert "נחסם" in msg
 
     def test_add_blocked_user_duplicate(self, tmp_db):
-        database.add_blocked_user("ספאמר מציק")
-        ok, msg = database.add_blocked_user("ספאמר מציק")
+        database.add_blocked_user("https://m.facebook.com/spammer123")
+        ok, msg = database.add_blocked_user("https://www.facebook.com/spammer123")
         assert ok is False
         assert "כבר חסום" in msg
 
@@ -3551,72 +3595,128 @@ class TestBlockedUsersCRUD:
         assert ok is False
         assert "ריק" in msg
 
+    def test_add_blocked_user_with_display_name(self, tmp_db):
+        ok, msg = database.add_blocked_user(
+            "https://m.facebook.com/spammer123", display_name="ספאמר מציק"
+        )
+        assert ok is True
+        users = database.get_blocked_users()
+        assert users[0]["name"] == "ספאמר מציק"
+        assert "spammer123" in users[0]["profile_url"]
+
+    def test_add_blocked_user_extracts_name_from_url(self, tmp_db):
+        database.add_blocked_user("https://m.facebook.com/john.doe")
+        users = database.get_blocked_users()
+        assert users[0]["name"] == "john.doe"
+
     def test_remove_blocked_user(self, tmp_db):
-        database.add_blocked_user("ספאמר")
-        ok, msg = database.remove_blocked_user("ספאמר")
+        database.add_blocked_user("https://m.facebook.com/spammer123")
+        ok, msg = database.remove_blocked_user("https://m.facebook.com/spammer123")
         assert ok is True
         assert "הוסר" in msg
 
     def test_remove_blocked_user_not_found(self, tmp_db):
-        ok, msg = database.remove_blocked_user("לא קיים")
+        ok, msg = database.remove_blocked_user("https://m.facebook.com/nonexistent")
         assert ok is False
         assert "לא נמצא" in msg
 
     def test_get_blocked_users(self, tmp_db):
-        database.add_blocked_user("אלון")
-        database.add_blocked_user("דני")
+        database.add_blocked_user("https://m.facebook.com/user1", display_name="אלון")
+        database.add_blocked_user("https://m.facebook.com/user2", display_name="דני")
         users = database.get_blocked_users()
         assert len(users) == 2
-        assert "אלון" in users
-        assert "דני" in users
+        names = [u["name"] for u in users]
+        assert "אלון" in names
+        assert "דני" in names
 
     def test_get_blocked_users_empty(self, tmp_db):
         users = database.get_blocked_users()
         assert users == []
 
+    def test_url_normalization(self, tmp_db):
+        """www → m, הסרת query params."""
+        database.add_blocked_user("https://www.facebook.com/spammer?fbclid=abc")
+        users = database.get_blocked_users()
+        assert "m.facebook.com" in users[0]["profile_url"]
+        assert "fbclid" not in users[0]["profile_url"]
+
+    def test_profile_php_url_preserves_id(self, tmp_db):
+        """profile.php?id=12345 — שומר את ה-id, מסיר tracking params."""
+        database.add_blocked_user("https://www.facebook.com/profile.php?id=12345&fbclid=abc")
+        users = database.get_blocked_users()
+        assert "id=12345" in users[0]["profile_url"]
+        assert "fbclid" not in users[0]["profile_url"]
+        assert users[0]["name"] == "12345"
+
+    def test_profile_php_two_different_ids(self, tmp_db):
+        """שני משתמשי profile.php שונים לא מתנגשים."""
+        ok1, _ = database.add_blocked_user("https://facebook.com/profile.php?id=111")
+        ok2, _ = database.add_blocked_user("https://facebook.com/profile.php?id=222")
+        assert ok1 is True
+        assert ok2 is True
+        assert database.get_blocked_users().__len__() == 2
+
+    def test_same_name_different_urls(self, tmp_db):
+        """שני משתמשים עם אותו שם אבל URLs שונים — שניהם נחסמים."""
+        ok1, _ = database.add_blocked_user("https://facebook.com/user1", display_name="ספאמר")
+        ok2, _ = database.add_blocked_user("https://facebook.com/user2", display_name="ספאמר")
+        assert ok1 is True
+        assert ok2 is True
+        assert len(database.get_blocked_users()) == 2
+
 
 class TestIsUserBlocked:
+    _SPAMMER = {"name": "ספאמר", "profile_url": "https://m.facebook.com/spammer123"}
+    _ANNOYING = {"name": "מציק", "profile_url": "https://m.facebook.com/annoying456"}
+
     def test_empty_list(self):
         with patch.dict("main._keywords_state", {"blocked_users": []}):
-            assert is_user_blocked("כל שם") is False
+            assert is_user_blocked("https://m.facebook.com/anyone") is False
 
     def test_blocked_user(self):
-        with patch.dict("main._keywords_state", {"blocked_users": ["ספאמר", "מציק"]}):
-            assert is_user_blocked("ספאמר") is True
+        with patch.dict("main._keywords_state", {"blocked_users": [self._SPAMMER, self._ANNOYING]}):
+            assert is_user_blocked("https://m.facebook.com/spammer123") is True
 
     def test_not_blocked(self):
-        with patch.dict("main._keywords_state", {"blocked_users": ["ספאמר"]}):
-            assert is_user_blocked("משתמש רגיל") is False
+        with patch.dict("main._keywords_state", {"blocked_users": [self._SPAMMER]}):
+            assert is_user_blocked("https://m.facebook.com/normal_user") is False
 
-    def test_case_insensitive(self):
-        """DB שומר lowercase — is_user_blocked משווה author.lower() מול הרשימה."""
-        with patch.dict("main._keywords_state", {"blocked_users": ["john doe"]}):
-            assert is_user_blocked("John Doe") is True
-            assert is_user_blocked("JOHN DOE") is True
+    def test_www_normalized(self):
+        """URL עם www צריך להתאים ל-m.facebook.com ב-DB."""
+        with patch.dict("main._keywords_state", {"blocked_users": [self._SPAMMER]}):
+            assert is_user_blocked("https://www.facebook.com/spammer123") is True
 
-    def test_empty_author(self):
-        with patch.dict("main._keywords_state", {"blocked_users": ["ספאמר"]}):
+    def test_empty_author_url(self):
+        with patch.dict("main._keywords_state", {"blocked_users": [self._SPAMMER]}):
             assert is_user_blocked("") is False
 
-    def test_none_author(self):
-        """author=None לא צריך לקרוס — מחזיר False."""
-        with patch.dict("main._keywords_state", {"blocked_users": ["ספאמר"]}):
+    def test_none_author_url(self):
+        """author_url=None לא צריך לקרוס — מחזיר False."""
+        with patch.dict("main._keywords_state", {"blocked_users": [self._SPAMMER]}):
             assert is_user_blocked(None) is False
 
     def test_exact_match_required(self):
-        """חסימה לפי שם מלא, לא substring."""
-        with patch.dict("main._keywords_state", {"blocked_users": ["אלון"]}):
-            assert is_user_blocked("אלון כהן") is False
-            assert is_user_blocked("אלון") is True
+        """חסימה לפי URL מלא, לא substring."""
+        user = {"name": "אלון", "profile_url": "https://m.facebook.com/alon"}
+        with patch.dict("main._keywords_state", {"blocked_users": [user]}):
+            assert is_user_blocked("https://m.facebook.com/alon123") is False
+            assert is_user_blocked("https://m.facebook.com/alon") is True
 
 
 class TestBuildBlockedUsersText:
     def test_with_users(self):
-        with patch.dict("main._keywords_state", {"blocked_users": ["אלון", "דני"]}):
+        users = [
+            {"name": "אלון", "profile_url": "https://m.facebook.com/alon"},
+            {"name": "דני", "profile_url": "https://m.facebook.com/dani"},
+        ]
+        with patch.dict("main._keywords_state", {"blocked_users": users}):
             text = main._build_blocked_users_text()
             assert "אלון" in text
             assert "דני" in text
             assert "(2)" in text
+            # URL מוצג כדי שהמשתמש יוכל לעשות /unblock_user
+            assert "m.facebook.com/alon" in text
+            assert "m.facebook.com/dani" in text
 
     def test_empty(self):
         with patch.dict("main._keywords_state", {"blocked_users": []}):

@@ -226,7 +226,7 @@ def _load_pre_filter_keywords() -> list[str]:
 
 # טעינה ראשונית — יתעדכנו דינמית בכל סבב.
 # כל הגישה דרך _kw_lock כדי למנוע race condition בין Flask thread ל-main loop.
-def _load_blocked_users() -> list[str]:
+def _load_blocked_users() -> list[dict]:
     """טוען מפרסמים חסומים מ-DB. רשימה ריקה אם ה-DB לא זמין."""
     try:
         return get_blocked_users()
@@ -289,17 +289,21 @@ def is_blocked(text: str) -> bool:
     return any(kw in text_lower for kw in kws)
 
 
-def is_user_blocked(author: str) -> bool:
-    """בודק אם המפרסם נמצא ברשימה השחורה.
-    רשימה ריקה = אין חסימה. השמות ב-DB כבר lowercase.
+def is_user_blocked(author_url: str) -> bool:
+    """בודק אם המפרסם נמצא ברשימה השחורה לפי URL פרופיל.
+    רשימה ריקה = אין חסימה.
     """
-    if not author:
+    if not author_url:
         return False
     with _kw_lock:
         users = _keywords_state["blocked_users"]
     if not users:
         return False
-    return author.lower() in users
+    # נרמול ה-URL לפני השוואה (הסרת query params, www→m)
+    from database import _normalize_profile_url
+    normalized = _normalize_profile_url(author_url)
+    blocked_urls = {u["profile_url"] for u in users}
+    return normalized in blocked_urls
 
 
 # ── סינון לפי גיל פוסט ──────────────────────────────────────
@@ -623,9 +627,15 @@ def _build_daily_report_text(shared_state: dict) -> str:
 def _build_groups_text() -> str:
     """בונה טקסט רשימת קבוצות."""
     from scraper import GROUPS
+    from database import _get_max_groups
     if GROUPS:
         lines = [f"{i}. {g['name']}\n   {g['url']}" for i, g in enumerate(GROUPS, 1)]
-        return f"קבוצות פעילות ({len(GROUPS)}):\n\n" + "\n\n".join(lines)
+        header = f"קבוצות פעילות ({len(GROUPS)}"
+        max_g = _get_max_groups()
+        if max_g > 0:
+            header += f"/{max_g}"
+        header += "):"
+        return header + "\n\n" + "\n\n".join(lines)
     return "אין קבוצות מוגדרות."
 
 
@@ -658,10 +668,14 @@ def _build_blocked_users_text() -> str:
     """בונה טקסט מפרסמים חסומים."""
     with _kw_lock:
         users = _keywords_state["blocked_users"]
-    users_text = ", ".join(users) if users else "(ריק)"
+    if users:
+        lines = [f"• {u['name']}\n   {u['profile_url']}" for u in users]
+        users_text = "\n\n".join(lines)
+    else:
+        users_text = "(ריק)"
     return (
         f"מפרסמים חסומים ({len(users)}):\n{users_text}\n\n"
-        "פקודות: /block_user <שם> | /unblock_user <שם>"
+        "פקודות: /block_user <URL פרופיל> | /unblock_user <URL פרופיל>"
     )
 
 
@@ -1117,7 +1131,7 @@ async def _telegram_control_loop(
                     await _handle_crud_command(
                         text, chat_id_int,
                         add_blocked_user,
-                        "שימוש: /block_user <שם מפרסם>",
+                        "שימוש: /block_user <URL פרופיל פייסבוק>",
                         reload_fn=reload_keywords,
                     )
                     continue
@@ -1126,7 +1140,7 @@ async def _telegram_control_loop(
                     await _handle_crud_command(
                         text, chat_id_int,
                         remove_blocked_user,
-                        "שימוש: /unblock_user <שם מפרסם>",
+                        "שימוש: /unblock_user <URL פרופיל פייסבוק>",
                         reload_fn=reload_keywords,
                     )
                     continue
@@ -1625,7 +1639,7 @@ async def run_cycle():
             _has_blocked_users = bool(_keywords_state["blocked_users"])
         if _has_blocked_users:
             before_user_block = len(new_posts)
-            new_posts = [p for p in new_posts if not is_user_blocked(p.get("author", ""))]
+            new_posts = [p for p in new_posts if not is_user_blocked(p.get("author_url", ""))]
             blocked_user_count = before_user_block - len(new_posts)
             if blocked_user_count:
                 log.info(f"נחסמו {blocked_user_count} פוסטים לפי מפרסמים חסומים (blocked_users)")

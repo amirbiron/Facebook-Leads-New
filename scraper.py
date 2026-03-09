@@ -1120,19 +1120,28 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         skipped_short += 1
                         continue
 
-                    # חילוץ שם המפרסם — בד"כ ב-<strong> או <h3> ראשון בפוסט
+                    # חילוץ שם המפרסם + קישור לפרופיל
                     author = ""
+                    author_url = ""
                     try:
-                        author = await asyncio.wait_for(
+                        author_info = await asyncio.wait_for(
                             el.evaluate("""(el) => {
+                                let name = '', url = '';
                                 const s = el.querySelector('strong');
-                                if (s) return (s.innerText || '').trim();
                                 const h = el.querySelector('h3');
-                                if (h) return (h.innerText || '').trim();
-                                return '';
+                                const nameEl = s || h;
+                                if (nameEl) {
+                                    name = (nameEl.innerText || '').trim();
+                                    // הלינק לפרופיל עוטף את ה-strong/h3
+                                    const a = nameEl.closest('a') || nameEl.querySelector('a');
+                                    if (a && a.href) url = a.href;
+                                }
+                                return {name, url};
                             }"""),
                             timeout=3,
                         )
+                        author = author_info.get("name", "")
+                        author_url = author_info.get("url", "")
                     except Exception:
                         pass
 
@@ -1183,6 +1192,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         "group_url": group["url"],
                         "has_real_url": has_real_url,
                         "author": author,
+                        "author_url": author_url,
                     })
 
                     if len(posts) >= MAX_POSTS:

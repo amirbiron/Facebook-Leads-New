@@ -18,6 +18,8 @@ from database import (
     add_group,
     remove_group,
     get_db_groups,
+    count_groups,
+    _get_max_groups,
     add_keyword,
     remove_keyword,
     get_db_keywords,
@@ -191,9 +193,14 @@ def create_app() -> Flask:
     @require_auth
     def list_groups():
         groups = get_db_groups()
-        if groups is None:
-            return jsonify({"groups": [], "source": "none"})
-        return jsonify({"groups": groups, "source": "custom"})
+        max_groups = _get_max_groups()
+        result = {
+            "groups": groups or [],
+            "source": "none" if groups is None else "custom",
+            "max_groups": max_groups,   # 0 = ללא הגבלה
+            "count": count_groups(),
+        }
+        return jsonify(result)
 
     @app.route("/api/groups", methods=["POST"])
     @require_auth
@@ -391,20 +398,20 @@ def create_app() -> Flask:
     @require_auth
     def create_blocked_user():
         data = request.get_json(force=True)
-        name = data.get("name", "").strip()
-        if not name:
-            return jsonify({"ok": False, "message": "שם ריק"}), 400
-        ok, msg = add_blocked_user(name)
+        url = data.get("url", "").strip()
+        if not url:
+            return jsonify({"ok": False, "message": "URL ריק"}), 400
+        ok, msg = add_blocked_user(url)
         return jsonify({"ok": ok, "message": msg})
 
     @app.route("/api/blocked_users", methods=["DELETE"])
     @require_auth
     def delete_blocked_user():
         data = request.get_json(force=True)
-        name = data.get("name", "").strip()
-        if not name:
-            return jsonify({"ok": False, "message": "שם ריק"}), 400
-        ok, msg = remove_blocked_user(name)
+        url = data.get("url", "").strip()
+        if not url:
+            return jsonify({"ok": False, "message": "URL ריק"}), 400
+        ok, msg = remove_blocked_user(url)
         return jsonify({"ok": ok, "message": msg})
 
     return app
