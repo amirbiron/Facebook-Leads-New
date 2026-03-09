@@ -122,7 +122,7 @@
 - `_MODEL_PRIORITY` — רשימת מודלים לפי סדר עדיפות. כשמודל נכשל, עובר אוטומטית לבא ושומר ב-DB.
 - פונקציית עזר `_parse_json_response()` — חילוץ JSON כולל unwrap של markdown. **חייבים להשתמש בה בכל פירוש תשובה מ-API** (לא לשכפל את הלוגיקה).
 - fallback חכם: אם באצ' נכשל (שגיאת API, JSON לא תקין, אורך שגוי, אלמנט null) — נופל לסיווג בודד פוסט-פוסט.
-- **סנכרון פרומפט עם הפאנל**: `_CLASSIFICATION_CRITERIA_DEFAULT` הוא ברירת מחדל בלבד. המשתמש יכול להגדיר פרומפט מותאם אישית דרך הפאנל (נשמר ב-DB כ-`classification_criteria`). **כשמעדכנים את ה-default בקוד — הפרומפט המותאם בפאנל לא מתעדכן אוטומטית.** הפאנל מציג באנר כשברירת המחדל השתנתה.
+- **פרומפט סיווג**: `_CLASSIFICATION_CRITERIA_DEFAULT` נטען מ-env var `CLASSIFICATION_CRITERIA`. המשתמש יכול להגדיר פרומפט מותאם דרך הפאנל (נשמר ב-DB כ-`classification_criteria`, עדיפות על env). אם שניהם ריקים — הבוט לא יסווג.
 
 ## async
 - כל הקוד async. Playwright משתמש ב-async API.

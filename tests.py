@@ -16,25 +16,34 @@ import pytest
 from main import passes_keyword_filter
 
 
+_TEST_PRE_FILTER = ["בוט", "אוטומציה", "סקריפט", "מתכנת", "פיתוח"]
+
+
 class TestPassesKeywordFilter:
     def test_matching_keyword(self):
-        assert passes_keyword_filter("אני צריך בוט לטלגרם") is True
+        with patch.dict("main._keywords_state", {"pre_filter": _TEST_PRE_FILTER}):
+            assert passes_keyword_filter("אני צריך בוט לטלגרם") is True
 
     def test_no_match(self):
-        assert passes_keyword_filter("שלום לכולם, מה קורה?") is False
+        with patch.dict("main._keywords_state", {"pre_filter": _TEST_PRE_FILTER}):
+            assert passes_keyword_filter("שלום לכולם, מה קורה?") is False
 
     def test_case_insensitive(self):
-        assert passes_keyword_filter("אוטומציה") is True
+        with patch.dict("main._keywords_state", {"pre_filter": _TEST_PRE_FILTER}):
+            assert passes_keyword_filter("אוטומציה") is True
 
     def test_empty_string(self):
-        assert passes_keyword_filter("") is False
+        with patch.dict("main._keywords_state", {"pre_filter": _TEST_PRE_FILTER}):
+            assert passes_keyword_filter("") is False
 
     def test_keyword_as_substring(self):
         # "מתכנת" appears inside a longer word — should still match
-        assert passes_keyword_filter("אני מתכנתת מנוסה") is True
+        with patch.dict("main._keywords_state", {"pre_filter": _TEST_PRE_FILTER}):
+            assert passes_keyword_filter("אני מתכנתת מנוסה") is True
 
     def test_multiple_keywords(self):
-        assert passes_keyword_filter("פיתוח בוט אוטומציה") is True
+        with patch.dict("main._keywords_state", {"pre_filter": _TEST_PRE_FILTER}):
+            assert passes_keyword_filter("פיתוח בוט אוטומציה") is True
 
     def test_empty_list_passes_all(self):
         """רשימת מילות מפתח ריקה = אין סינון מוקדם, הכל עובר."""
@@ -1713,7 +1722,8 @@ class TestPanelAPI:
         resp = panel_client.get("/api/keywords/pre_filter")
         data = resp.get_json()
         assert data["source"] == "default"
-        assert len(data["keywords"]) > 0
+        # ברירת מחדל מגיעה מ-env var — ייתכן שריקה אם לא הוגדר
+        assert isinstance(data["keywords"], list)
 
     def test_add_and_list_keywords(self, panel_client):
         resp = panel_client.post("/api/keywords/pre_filter", json={"word": "טסט"})
@@ -1753,7 +1763,8 @@ class TestPanelAPI:
         resp = panel_client.get("/api/settings")
         data = resp.get_json()
         assert "classification_criteria_default" in data
-        assert len(data["classification_criteria_default"]) > 0
+        # ברירת מחדל מגיעה מ-env var — ייתכן שריקה אם לא הוגדר
+        assert isinstance(data["classification_criteria_default"], str)
 
     def test_auth_not_required_when_no_token(self, panel_client):
         resp = panel_client.post("/api/auth")
@@ -2254,25 +2265,28 @@ class TestEnsureKeywordsMigrated:
         assert kws == ["קיימת"]
 
     def test_panel_add_preserves_defaults(self, panel_client):
-        """הוספת מילה בפאנל שומרת את ברירות המחדל."""
-        # שלב 1: לפני הוספה — ברירות מחדל
-        resp = panel_client.get("/api/keywords/pre_filter")
-        data = resp.get_json()
-        assert data["source"] == "default"
-        default_count = len(data["keywords"])
-        assert default_count > 0
+        """הוספת מילה בפאנל שומרת את ברירות המחדל מ-env."""
+        # שלב 1: הגדרת ברירות מחדל דרך env (כמו שהלקוח יגדיר)
+        test_defaults = ["בוט", "אוטומציה", "סקריפט"]
+        with patch("main._PRE_FILTER_KEYWORDS_DEFAULT", test_defaults):
+            # שלב 2: לפני הוספה — ברירות מחדל
+            resp = panel_client.get("/api/keywords/pre_filter")
+            data = resp.get_json()
+            assert data["source"] == "default"
+            default_count = len(data["keywords"])
+            assert default_count == 3
 
-        # שלב 2: הוספת מילה חדשה דרך הפאנל
-        resp = panel_client.post("/api/keywords/pre_filter", json={"word": "מילה_חדשה_מאוד"})
-        assert resp.get_json()["ok"] is True
+            # שלב 3: הוספת מילה חדשה דרך הפאנל
+            resp = panel_client.post("/api/keywords/pre_filter", json={"word": "מילה_חדשה_מאוד"})
+            assert resp.get_json()["ok"] is True
 
-        # שלב 3: בדיקה שכל ברירות המחדל + החדשה קיימות
-        resp = panel_client.get("/api/keywords/pre_filter")
-        data = resp.get_json()
-        assert data["source"] == "custom"
-        assert "מילה_חדשה_מאוד" in data["keywords"]
-        # ברירות המחדל נשמרו + המילה החדשה
-        assert len(data["keywords"]) == default_count + 1
+            # שלב 4: בדיקה שכל ברירות המחדל + החדשה קיימות
+            resp = panel_client.get("/api/keywords/pre_filter")
+            data = resp.get_json()
+            assert data["source"] == "custom"
+            assert "מילה_חדשה_מאוד" in data["keywords"]
+            # ברירות המחדל נשמרו + המילה החדשה
+            assert len(data["keywords"]) == default_count + 1
 
 
     def test_panel_add_without_existing(self, panel_client):

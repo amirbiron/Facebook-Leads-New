@@ -1594,27 +1594,41 @@
       if (!token) return;
       setToken(token);
       try {
-        const res = await api('/api/auth', { method: 'POST' });
+        const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+        const res = await fetch(API + '/api/auth', { method: 'POST', headers });
         if (res.ok) {
           hideLogin();
-          loadAll();
+          await loadAll();
+        } else {
+          setToken('');
+          input.value = '';
+          toast('טוקן שגוי', 'error');
         }
       } catch (e) {
         setToken('');
         input.value = '';
-        toast('טוקן שגוי', 'error');
+        toast('שגיאת תקשורת', 'error');
       }
     }
 
     async function checkAuth() {
+      const token = getToken();
       try {
-        const res = await api('/api/auth', { method: 'POST' });
-        if (res.auth_required && !getToken()) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const res = await fetch(API + '/api/auth', { method: 'POST', headers });
+        const data = await res.json();
+        if (res.ok) {
+          hideLogin();
+          return true;
+        }
+        if (data.auth_required) {
           showLogin();
           return false;
         }
         return true;
       } catch (e) {
+        // אם אין PANEL_TOKEN בשרת — אין צורך באימות
         showLogin();
         return false;
       }

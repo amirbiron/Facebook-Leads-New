@@ -25,6 +25,10 @@ services:
         value: "1"
       - key: PANEL_TOKEN
         sync: false
+      - key: PRE_FILTER_KEYWORDS
+        sync: false
+      - key: CLASSIFICATION_CRITERIA
+        sync: false
     disk:
       name: fb-leads-data
       mountPath: /app/data

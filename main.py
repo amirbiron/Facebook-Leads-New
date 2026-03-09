@@ -65,13 +65,14 @@ _block_env = os.environ.get("BLOCK_KEYWORDS", "").strip()
 _BLOCK_KEYWORDS_ENV = [w.strip().lower() for w in _block_env.split(",") if w.strip()] if _block_env else []
 
 # מילות מפתח לסינון מוקדם — רק פוסטים שמכילים לפחות מילה אחת יעברו ל-AI
-# ניתן לערוך דינמית דרך פקודת טלגרם /add_keyword, /remove_keyword
-_PRE_FILTER_KEYWORDS_DEFAULT = [
-    "בוט", "אוטומציה", "סקריפט", "מתכנת", "פיתוח", "מחפש מפתח",
-    "דרוש מפתח", "צריך עזרה", "מישהו יכול", "לבנות מערכת",
-    "טלגרם", "אינטגרציה", "אוטומטי", "ווטסאפ", "בהתנדבות",
-    "צ'אטבוט", "צאטבוט",
-]
+# ניתן להגדיר דרך משתנה סביבה PRE_FILTER_KEYWORDS (מופרד בפסיקים),
+# דרך פאנל ההגדרות, או דרך פקודות טלגרם /add_keyword, /remove_keyword.
+# אם לא הוגדר — רשימה ריקה (= אין סינון מוקדם, הכל עובר ל-AI).
+_pre_filter_env = os.environ.get("PRE_FILTER_KEYWORDS", "").strip()
+_PRE_FILTER_KEYWORDS_DEFAULT = (
+    [w.strip().lower() for w in _pre_filter_env.split(",") if w.strip()]
+    if _pre_filter_env else []
+)
 
 def _load_force_send_keywords() -> list[str]:
     """טוען מילות 'שלח תמיד' מ-DB. פוסט שמכיל מילה כזו נשלח ישירות ללא AI."""
