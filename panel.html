@@ -1617,17 +1617,16 @@
         const headers = { 'Content-Type': 'application/json' };
         if (token) headers['Authorization'] = `Bearer ${token}`;
         const res = await fetch(API + '/api/auth', { method: 'POST', headers });
-        const data = await res.json();
-        if (res.ok) {
-          // אימות הצליח, או שאין צורך באימות (auth_required=false)
-          hideLogin();
-          return true;
+        if (!res.ok) {
+          // כל תשובה לא-תקינה (401, 429 וכו') — דורשים אימות מחדש
+          showLogin();
+          return false;
         }
-        // כל תשובה לא-תקינה (401, 429 וכו') — דורשים אימות מחדש
-        showLogin();
-        return false;
+        // אימות הצליח, או שאין צורך באימות (auth_required=false)
+        hideLogin();
+        return true;
       } catch (e) {
-        // שגיאת רשת או JSON לא תקין — ברירת מחדל: דורשים אימות
+        // שגיאת רשת — ברירת מחדל: דורשים אימות
         showLogin();
         return false;
       }

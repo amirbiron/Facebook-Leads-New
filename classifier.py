@@ -207,7 +207,7 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
         return []
     if not _get_classification_criteria():
         log.error("לא הוגדרו קריטריוני סיווג (CLASSIFICATION_CRITERIA / פאנל) — מדלג על סיווג")
-        return [{"relevant": False, "reason": "לא הוגדרו קריטריוני סיווג"}] * len(posts)
+        return [{"relevant": False, "reason": "לא הוגדרו קריטריוני סיווג"} for _ in posts]
 
     all_results: list[dict] = []
 
