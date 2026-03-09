@@ -1815,7 +1815,7 @@ async def run_cycle():
     # (like quiet-hours logic) without Playwright installed.
     from scraper import scrape_all
     from classifier import classify_batch
-    from notifier import send_lead, send_error_alert
+    from notifier import send_lead, send_error_alert, send_message
 
     _reset_scan_progress()
 
@@ -2139,17 +2139,15 @@ async def run_cycle():
     stats = get_stats()
     log.info(f"סבב הסתיים | לידים בסבב: {leads_found} | סך נראו: {stats['seen']} | סך נשלחו: {stats['sent']}")
 
-    # הודעת סיכום סריקה — נשלחת לטלגרם תמיד בסוף סריקה,
+    # הודעת סיכום סריקה — נשלחת לטלגרם רק כשנמצאו לידים חדשים,
     # כדי לעזור למשתמש להבחין בין הודעות מסריקות שונות.
-    scan_time = _now_local().strftime("%H:%M")
     if leads_found > 0:
-        summary = f"עד כאן לסריקה של שעה {scan_time} ({leads_found} לידים), נתראה בסריקה הבאה 💫"
-    else:
-        summary = f"הסריקה של שעה {scan_time} הסתיימה — לא נמצאו לידים חדשים 💫"
-    try:
-        await asyncio.to_thread(send_message, summary, disable_web_page_preview=True)
-    except Exception:
-        log.debug("שליחת הודעת סיכום סריקה נכשלה — לא קריטי")
+        scan_time = _now_local().strftime("%H:%M")
+        summary = f"עד כאן לסריקה של שעה {scan_time}, נתראה בסריקה הבאה 💫"
+        try:
+            await asyncio.to_thread(send_message, summary, disable_web_page_preview=True)
+        except Exception:
+            log.debug("שליחת הודעת סיכום סריקה נכשלה — לא קריטי")
 
 async def main():
     log.info("מאתחל מסד נתונים...")
