@@ -1458,11 +1458,11 @@
           מפרסמים חסומים
         </h3>
         <p class="card-desc">
-          פוסטים מאותו מפרסם נחסמים אוטומטית — שימושי כשיש ספאמרים חוזרים בקבוצות.
+          פוסטים מאותו מפרסם נחסמים אוטומטית — הדביקו קישור לפרופיל הפייסבוק.
         </p>
 
         <div class="input-group">
-          <input type="text" id="new-blocked-user" placeholder="הוסף שם מפרסם..."
+          <input type="url" id="new-blocked-user" placeholder="https://facebook.com/profile..." dir="ltr"
                  onkeydown="if(event.key==='Enter')addBlockedUser()">
           <button class="btn btn-destructive btn-sm" onclick="addBlockedUser()">
             <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1958,20 +1958,32 @@
     async function loadBlockedUsers() {
       try {
         const data = await api('/api/blocked_users');
-        renderChips('blocked-users-list', data.users, 'blocked_user');
+        renderBlockedUsers(data.users);
       } catch (e) {
         toast('שגיאה בטעינת מפרסמים חסומים: ' + e.message, 'error');
       }
     }
 
+    function renderBlockedUsers(users) {
+      const container = document.getElementById('blocked-users-list');
+      container.innerHTML = '';
+      if (!users || users.length === 0) return;
+      users.forEach(u => {
+        const chip = document.createElement('span');
+        chip.className = 'chip chip-block';
+        chip.innerHTML = `${u.name} <button class="chip-remove" onclick="removeBlockedUser('${u.profile_url.replace(/'/g, "\\'")}')">×</button>`;
+        container.appendChild(chip);
+      });
+    }
+
     async function addBlockedUser() {
       const input = document.getElementById('new-blocked-user');
-      const name = input.value.trim();
-      if (!name) return;
+      const url = input.value.trim();
+      if (!url) return;
       try {
         const data = await api('/api/blocked_users', {
           method: 'POST',
-          body: { name },
+          body: { url },
         });
         if (data.ok) {
           toast(data.message);
@@ -1985,11 +1997,11 @@
       }
     }
 
-    async function removeBlockedUser(name) {
+    async function removeBlockedUser(profileUrl) {
       try {
         const data = await api('/api/blocked_users', {
           method: 'DELETE',
-          body: { name },
+          body: { url: profileUrl },
         });
         if (data.ok) {
           toast(data.message);

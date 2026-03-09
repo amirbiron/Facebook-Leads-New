@@ -118,10 +118,19 @@ def init_db():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS blocked_users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                profile_url TEXT NOT NULL DEFAULT '' UNIQUE,
                 created_at TEXT NOT NULL
             )
         """)
+        # מיגרציה — הוספת עמודת profile_url ל-DBs קיימים
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(blocked_users)").fetchall()]
+        if "profile_url" not in cols:
+            conn.execute("ALTER TABLE blocked_users ADD COLUMN profile_url TEXT NOT NULL DEFAULT ''")
+            # העברת ערכי name ל-profile_url ליחידות שהוספו לפני השדרוג
+            conn.execute("UPDATE blocked_users SET profile_url = name WHERE profile_url = ''")
+            # UNIQUE על profile_url לא קיים עדיין — ניצור אינדקס
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_blocked_users_profile_url ON blocked_users (profile_url)")
 
 # ── CRUD ──────────────────────────────────────────────────────
 def is_seen(post_id: str) -> bool:
@@ -224,6 +233,11 @@ def add_group(raw_url: str) -> tuple[bool, str]:
     """מוסיף קבוצה ל-DB. מחזיר (success, message)."""
     url = _normalize_group_url(raw_url)
     name = _extract_group_name(url)
+    # בדיקת כפילות לפני בדיקת מגבלה — כדי לא להציג "שדרג" על קבוצה שכבר קיימת
+    with _get_conn() as conn:
+        exists = conn.execute("SELECT 1 FROM groups WHERE url = ?", (url,)).fetchone()
+    if exists:
+        return False, f"הקבוצה כבר קיימת: {url}"
     # בדיקת מגבלת קבוצות לפי MAX_GROUPS
     max_groups = _get_max_groups()
     if max_groups > 0 and count_groups() >= max_groups:
@@ -341,42 +355,62 @@ def get_db_keywords(kw_type: str) -> list[str] | None:
 
 # ── Blocked Users CRUD ────────────────────────────────────
 
-def add_blocked_user(name: str) -> tuple[bool, str]:
-    """מוסיף מפרסם לרשימה שחורה. מחזיר (success, message).
-    שומר ב-lowercase לעקביות עם is_user_blocked (case-insensitive).
-    """
-    name = name.strip().lower()
-    if not name:
-        return False, "שם ריק"
+def _normalize_profile_url(raw: str) -> str:
+    """מנרמל URL פרופיל פייסבוק — מסיר פרמטרים ומעביר ל-m.facebook.com."""
+    url = raw.strip()
+    if not url:
+        return ""
+    # הסרת query params (fbclid, tracking וכו')
+    url = url.split("?")[0].rstrip("/")
+    # נרמול דומיין
+    if "facebook.com" in url and not url.startswith("http"):
+        url = "https://" + url
+    url = url.replace("www.facebook.com", "m.facebook.com")
+    url = url.replace("://facebook.com", "://m.facebook.com")
+    return url
+
+
+def _extract_profile_name(url: str) -> str:
+    """מחלץ שם פרופיל מ-URL (לתצוגה עד שהסקרייפר יעדכן)."""
+    match = re.search(r"facebook\.com/(?:profile\.php\?id=)?([^/?]+)", url)
+    return match.group(1) if match else url
+
+
+def add_blocked_user(profile_url: str, display_name: str = "") -> tuple[bool, str]:
+    """מוסיף מפרסם לרשימה שחורה לפי URL פרופיל. מחזיר (success, message)."""
+    url = _normalize_profile_url(profile_url)
+    if not url:
+        return False, "URL ריק"
+    name = display_name.strip() or _extract_profile_name(url)
     try:
         with _get_conn() as conn:
             conn.execute(
-                "INSERT INTO blocked_users (name, created_at) VALUES (?, ?)",
-                (name, _now().isoformat()),
+                "INSERT INTO blocked_users (name, profile_url, created_at) VALUES (?, ?, ?)",
+                (name, url, _now().isoformat()),
             )
         return True, f"מפרסם נחסם: {name}"
     except sqlite3.IntegrityError:
-        return False, f"המפרסם כבר חסום: {name}"
+        return False, f"המפרסם כבר חסום: {url}"
 
 
-def remove_blocked_user(name: str) -> tuple[bool, str]:
-    """מסיר מפרסם מהרשימה השחורה. מחזיר (success, message)."""
-    name = name.strip().lower()
+def remove_blocked_user(profile_url: str) -> tuple[bool, str]:
+    """מסיר מפרסם מהרשימה השחורה לפי URL. מחזיר (success, message)."""
+    url = _normalize_profile_url(profile_url)
     with _get_conn() as conn:
         deleted = conn.execute(
-            "DELETE FROM blocked_users WHERE name = ?", (name,)
+            "DELETE FROM blocked_users WHERE profile_url = ?", (url,)
         ).rowcount
     if deleted:
-        return True, f"מפרסם הוסר מהחסימה: {name}"
-    return False, f"מפרסם לא נמצא ברשימה: {name}"
+        return True, f"מפרסם הוסר מהחסימה: {url}"
+    return False, f"מפרסם לא נמצא ברשימה: {url}"
 
 
-def get_blocked_users() -> list[str]:
-    """מחזיר את כל המפרסמים החסומים."""
+def get_blocked_users() -> list[dict]:
+    """מחזיר את כל המפרסמים החסומים כרשימת dicts עם name ו-profile_url."""
     rows = _get_conn().execute(
-        "SELECT name FROM blocked_users ORDER BY id"
+        "SELECT name, profile_url FROM blocked_users ORDER BY id"
     ).fetchall()
-    return [r[0] for r in rows]
+    return [{"name": r[0], "profile_url": r[1]} for r in rows]
 
 
 # ── Config (key-value) ────────────────────────────────────────

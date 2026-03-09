@@ -398,20 +398,20 @@ def create_app() -> Flask:
     @require_auth
     def create_blocked_user():
         data = request.get_json(force=True)
-        name = data.get("name", "").strip()
-        if not name:
-            return jsonify({"ok": False, "message": "שם ריק"}), 400
-        ok, msg = add_blocked_user(name)
+        url = data.get("url", "").strip()
+        if not url:
+            return jsonify({"ok": False, "message": "URL ריק"}), 400
+        ok, msg = add_blocked_user(url)
         return jsonify({"ok": ok, "message": msg})
 
     @app.route("/api/blocked_users", methods=["DELETE"])
     @require_auth
     def delete_blocked_user():
         data = request.get_json(force=True)
-        name = data.get("name", "").strip()
-        if not name:
-            return jsonify({"ok": False, "message": "שם ריק"}), 400
-        ok, msg = remove_blocked_user(name)
+        url = data.get("url", "").strip()
+        if not url:
+            return jsonify({"ok": False, "message": "URL ריק"}), 400
+        ok, msg = remove_blocked_user(url)
         return jsonify({"ok": ok, "message": msg})
 
     return app
