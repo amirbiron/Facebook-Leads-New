@@ -123,6 +123,15 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS group_health (
+                group_url TEXT PRIMARY KEY,
+                last_posts_count INTEGER DEFAULT 0,
+                consecutive_empty INTEGER DEFAULT 0,
+                last_lead_at TEXT,
+                updated_at TEXT
+            )
+        """)
         # מיגרציה — הוספת עמודת profile_url ל-DBs קיימים
         cols = [r[1] for r in conn.execute("PRAGMA table_info(blocked_users)").fetchall()]
         if "profile_url" not in cols:
@@ -601,6 +610,81 @@ def get_usage_by_model() -> list[dict]:
             "total_tokens": r[3],
             "total_cost_usd": r[4],
             "total_calls": r[5],
+        }
+        for r in rows
+    ]
+
+
+# ── Group Health ──────────────────────────────────────────────
+
+def update_group_health(group_url: str, posts_count: int):
+    """מעדכן את מצב הבריאות של קבוצה אחרי סריקה.
+    אם posts_count == 0, מגדיל את consecutive_empty ב-1.
+    אחרת, מאפס את consecutive_empty ל-0.
+    """
+    now = _now().isoformat()
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT consecutive_empty FROM group_health WHERE group_url = ?",
+            (group_url,),
+        ).fetchone()
+        if row is None:
+            consecutive = 1 if posts_count == 0 else 0
+            conn.execute(
+                "INSERT INTO group_health (group_url, last_posts_count, consecutive_empty, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                (group_url, posts_count, consecutive, now),
+            )
+        else:
+            consecutive = (row[0] + 1) if posts_count == 0 else 0
+            conn.execute(
+                "UPDATE group_health SET last_posts_count = ?, consecutive_empty = ?, updated_at = ? "
+                "WHERE group_url = ?",
+                (posts_count, consecutive, now, group_url),
+            )
+
+
+def update_group_last_lead(group_url: str):
+    """מעדכן את last_lead_at של קבוצה — נקרא כשנשלח ליד מהקבוצה."""
+    now = _now().isoformat()
+    with _get_conn() as conn:
+        conn.execute(
+            "UPDATE group_health SET last_lead_at = ? WHERE group_url = ?",
+            (now, group_url),
+        )
+
+
+def get_group_health(group_url: str) -> dict | None:
+    """מחזיר מצב בריאות לקבוצה בודדת, או None אם אין רשומה."""
+    row = _get_conn().execute(
+        "SELECT group_url, last_posts_count, consecutive_empty, last_lead_at, updated_at "
+        "FROM group_health WHERE group_url = ?",
+        (group_url,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "group_url": row[0],
+        "last_posts_count": row[1],
+        "consecutive_empty": row[2],
+        "last_lead_at": row[3],
+        "updated_at": row[4],
+    }
+
+
+def get_all_group_health() -> list[dict]:
+    """מחזיר מצב בריאות של כל הקבוצות."""
+    rows = _get_conn().execute(
+        "SELECT group_url, last_posts_count, consecutive_empty, last_lead_at, updated_at "
+        "FROM group_health ORDER BY consecutive_empty DESC"
+    ).fetchall()
+    return [
+        {
+            "group_url": r[0],
+            "last_posts_count": r[1],
+            "consecutive_empty": r[2],
+            "last_lead_at": r[3],
+            "updated_at": r[4],
         }
         for r in rows
     ]
