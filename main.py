@@ -915,6 +915,7 @@ async def _telegram_control_loop(
                 {"command": "keywords", "description": "מילות מפתח"},
                 {"command": "force_send", "description": "מילות 'שלח תמיד' (עוקף AI)"},
                 {"command": "block_user", "description": "חסימת מפרסם (רשימה שחורה)"},
+                {"command": "unblock_user", "description": "הסרת חסימת מפרסם"},
                 {"command": "blocked_users", "description": "רשימת מפרסמים חסומים"},
                 {"command": "max_age", "description": "סינון פוסטים ישנים (לפי ימים)"},
             ]},
