@@ -1697,7 +1697,10 @@
       try {
         currentSettings = await api('/api/settings');
         document.getElementById('fb-email').value = currentSettings.fb_email || '';
-        document.getElementById('fb-password').value = currentSettings.fb_password || '';
+        const pwField = document.getElementById('fb-password');
+        pwField.value = '';
+        // placeholder מראה שיש סיסמה שמורה, אבל לא חושפים אותה
+        pwField.placeholder = currentSettings.fb_password_set ? '(סיסמה שמורה — הזן חדשה לשינוי)' : '••••••••';
         document.getElementById('criteria-text').value = currentSettings.classification_criteria || '';
 
         // שעות שקטות
