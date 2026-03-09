@@ -1619,16 +1619,15 @@
         const res = await fetch(API + '/api/auth', { method: 'POST', headers });
         const data = await res.json();
         if (res.ok) {
+          // אימות הצליח, או שאין צורך באימות (auth_required=false)
           hideLogin();
           return true;
         }
-        if (data.auth_required) {
-          showLogin();
-          return false;
-        }
-        return true;
+        // כל תשובה לא-תקינה (401, 429 וכו') — דורשים אימות מחדש
+        showLogin();
+        return false;
       } catch (e) {
-        // אם אין PANEL_TOKEN בשרת — אין צורך באימות
+        // שגיאת רשת או JSON לא תקין — ברירת מחדל: דורשים אימות
         showLogin();
         return false;
       }

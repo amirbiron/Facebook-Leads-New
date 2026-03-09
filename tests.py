@@ -1009,6 +1009,7 @@ class TestContentHashDedup:
 # ──────────────────────────────────────────────────────────────
 
 
+@patch("classifier._CLASSIFICATION_CRITERIA_DEFAULT", "פרומפט סיווג לטסטים")
 class TestClassifyPost:
     def _make_mock_response(self, text: str):
         """Build a mock OpenAI ChatCompletion response."""
@@ -1086,6 +1087,7 @@ class TestClassifyPost:
 # ──────────────────────────────────────────────────────────────
 
 
+@patch("classifier._CLASSIFICATION_CRITERIA_DEFAULT", "פרומפט סיווג לטסטים")
 class TestClassifyBatch:
     def _make_mock_response(self, text: str):
         message = SimpleNamespace(content=text)
@@ -1240,6 +1242,7 @@ class TestClassifyBatch:
 # ──────────────────────────────────────────────────────────────
 
 
+@patch("classifier._CLASSIFICATION_CRITERIA_DEFAULT", "פרומפט סיווג לטסטים")
 class TestModelFallback:
     def _make_mock_response(self, text: str):
         message = SimpleNamespace(content=text)

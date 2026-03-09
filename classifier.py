@@ -152,6 +152,9 @@ def _track_usage(response, model: str, call_type: str):
 
 
 def classify_post(content: str, group_name: str) -> dict:
+    if not _get_classification_criteria():
+        log.error("לא הוגדרו קריטריוני סיווג (CLASSIFICATION_CRITERIA / פאנל) — מדלג על סיווג")
+        return {"relevant": False, "reason": "לא הוגדרו קריטריוני סיווג"}
     try:
         log.debug(f"שולח לסיווג: {content[:80]}...")
         raw_text = _chat_completion(
@@ -202,6 +205,9 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
     """
     if not posts:
         return []
+    if not _get_classification_criteria():
+        log.error("לא הוגדרו קריטריוני סיווג (CLASSIFICATION_CRITERIA / פאנל) — מדלג על סיווג")
+        return [{"relevant": False, "reason": "לא הוגדרו קריטריוני סיווג"}] * len(posts)
 
     all_results: list[dict] = []
 
