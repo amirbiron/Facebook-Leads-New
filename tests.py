@@ -1412,6 +1412,50 @@ class TestGroupsCRUD:
         assert groups == []
 
 
+class TestGroupLimit:
+    def test_no_limit_by_default(self, tmp_db, monkeypatch):
+        """ללא MAX_GROUPS — אין הגבלה."""
+        monkeypatch.delenv("MAX_GROUPS", raising=False)
+        for i in range(20):
+            ok, _ = database.add_group(f"https://m.facebook.com/groups/{i}")
+            assert ok is True
+
+    def test_limit_enforced(self, tmp_db, monkeypatch):
+        """MAX_GROUPS=2 — לא ניתן להוסיף קבוצה שלישית."""
+        monkeypatch.setenv("MAX_GROUPS", "2")
+        ok1, _ = database.add_group("https://m.facebook.com/groups/aaa")
+        ok2, _ = database.add_group("https://m.facebook.com/groups/bbb")
+        ok3, msg3 = database.add_group("https://m.facebook.com/groups/ccc")
+        assert ok1 is True
+        assert ok2 is True
+        assert ok3 is False
+        assert "מגבלת" in msg3
+
+    def test_limit_after_remove(self, tmp_db, monkeypatch):
+        """אחרי מחיקת קבוצה — אפשר שוב להוסיף."""
+        monkeypatch.setenv("MAX_GROUPS", "1")
+        database.add_group("https://m.facebook.com/groups/first")
+        ok, _ = database.add_group("https://m.facebook.com/groups/second")
+        assert ok is False
+        database.remove_group("https://m.facebook.com/groups/first")
+        ok, _ = database.add_group("https://m.facebook.com/groups/second")
+        assert ok is True
+
+    def test_count_groups(self, tmp_db):
+        assert database.count_groups() == 0
+        database.add_group("https://m.facebook.com/groups/111")
+        assert database.count_groups() == 1
+        database.add_group("https://m.facebook.com/groups/222")
+        assert database.count_groups() == 2
+
+    def test_zero_means_unlimited(self, tmp_db, monkeypatch):
+        """MAX_GROUPS=0 — ללא הגבלה."""
+        monkeypatch.setenv("MAX_GROUPS", "0")
+        for i in range(15):
+            ok, _ = database.add_group(f"https://m.facebook.com/groups/{i}")
+            assert ok is True
+
+
 # ──────────────────────────────────────────────────────────────
 # 8. Database — Keywords CRUD
 # ──────────────────────────────────────────────────────────────

@@ -206,10 +206,28 @@ def _extract_group_name(url: str) -> str:
     match = re.search(r"/groups/([^/?]+)", url)
     return match.group(1) if match else url
 
+def _get_max_groups() -> int:
+    """מחזיר את מגבלת הקבוצות. 0 = ללא הגבלה."""
+    try:
+        return int(os.environ.get("MAX_GROUPS", "0"))
+    except (ValueError, TypeError):
+        return 0
+
+
+def count_groups() -> int:
+    """מחזיר את מספר הקבוצות הפעילות ב-DB."""
+    row = _get_conn().execute("SELECT COUNT(*) FROM groups").fetchone()
+    return row[0] if row else 0
+
+
 def add_group(raw_url: str) -> tuple[bool, str]:
     """מוסיף קבוצה ל-DB. מחזיר (success, message)."""
     url = _normalize_group_url(raw_url)
     name = _extract_group_name(url)
+    # בדיקת מגבלת קבוצות לפי MAX_GROUPS
+    max_groups = _get_max_groups()
+    if max_groups > 0 and count_groups() >= max_groups:
+        return False, f"הגעת למגבלת הקבוצות ({max_groups}). לשדרוג — פנה למנהל."
     try:
         with _get_conn() as conn:
             conn.execute(

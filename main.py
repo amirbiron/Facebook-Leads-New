@@ -623,9 +623,15 @@ def _build_daily_report_text(shared_state: dict) -> str:
 def _build_groups_text() -> str:
     """בונה טקסט רשימת קבוצות."""
     from scraper import GROUPS
+    from database import count_groups, _get_max_groups
     if GROUPS:
         lines = [f"{i}. {g['name']}\n   {g['url']}" for i, g in enumerate(GROUPS, 1)]
-        return f"קבוצות פעילות ({len(GROUPS)}):\n\n" + "\n\n".join(lines)
+        header = f"קבוצות פעילות ({len(GROUPS)}"
+        max_g = _get_max_groups()
+        if max_g > 0:
+            header += f"/{max_g}"
+        header += "):"
+        return header + "\n\n" + "\n\n".join(lines)
     return "אין קבוצות מוגדרות."
 
 

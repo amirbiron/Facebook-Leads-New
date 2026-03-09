@@ -1253,6 +1253,7 @@
         <p class="card-desc">רשימת הקבוצות שהבוט יסרוק — הוסף כתובות של קבוצות פייסבוק</p>
 
         <div id="groups-source" class="source-badge"></div>
+        <div id="groups-limit" style="font-size:13px; color:var(--text-secondary); margin-bottom:8px;"></div>
 
         <div class="input-group">
           <input type="url" id="new-group-url" placeholder="https://facebook.com/groups/..." dir="ltr"
@@ -1765,6 +1766,22 @@
         const data = await api('/api/groups');
         renderGroups(data.groups);
         renderSourceBadge('groups-source', data.source);
+        // הצגת מגבלת קבוצות
+        const limitEl = document.getElementById('groups-limit');
+        const addBtn = document.querySelector('#groups .btn-primary');
+        if (data.max_groups > 0) {
+          limitEl.textContent = `${data.count} / ${data.max_groups} קבוצות`;
+          if (data.count >= data.max_groups) {
+            limitEl.style.color = 'var(--destructive, #e74c3c)';
+            if (addBtn) addBtn.disabled = true;
+          } else {
+            limitEl.style.color = 'var(--text-secondary)';
+            if (addBtn) addBtn.disabled = false;
+          }
+        } else {
+          limitEl.textContent = '';
+          if (addBtn) addBtn.disabled = false;
+        }
       } catch (e) {
         toast('שגיאה בטעינת קבוצות: ' + e.message, 'error');
       }
