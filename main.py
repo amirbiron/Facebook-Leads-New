@@ -16,6 +16,7 @@ from database import (
     get_config, set_config, get_config_encrypted, get_config_by_prefix,
     get_usage_stats, get_daily_usage_stats, get_usage_by_model,
     add_blocked_user, remove_blocked_user, get_blocked_users,
+    update_group_health, update_group_last_lead, get_all_group_health,
 )
 from logger import get_logger
 
@@ -679,6 +680,81 @@ def _build_blocked_users_text() -> str:
     )
 
 
+def _build_group_health_text() -> str:
+    """בונה טקסט בריאות קבוצות — סטטיסטיקות לכל קבוצה."""
+    from scraper import GROUPS
+    health_data = get_all_group_health()
+    if not health_data and not GROUPS:
+        return "אין קבוצות מוגדרות."
+
+    # מיפוי URL → שם ידידותי
+    url_to_name: dict[str, str] = {g["url"]: g["name"] for g in GROUPS}
+
+    # סף התראה — משמש גם לאייקונים
+    try:
+        _threshold = int(get_config("inactive_group_threshold", "50"))
+    except (ValueError, TypeError):
+        _threshold = 50
+    if _threshold < 1:
+        _threshold = 50
+    # סף אזהרה = חצי מסף ההתראה (לפחות 1)
+    _warn_threshold = max(1, _threshold // 2)
+
+    lines = ["\U0001f4ca בריאות קבוצות:\n"]
+    # קודם קבוצות עם health data
+    seen_urls: set[str] = set()
+    for h in health_data:
+        url = h["group_url"]
+        seen_urls.add(url)
+        name = url_to_name.get(url, url.split("/groups/")[-1].rstrip("/") or url)
+        consecutive = h["consecutive_empty"]
+        last_count = h["last_posts_count"]
+        last_lead = h["last_lead_at"]
+
+        if consecutive >= _threshold:
+            icon = "\u26a0\ufe0f"
+        elif consecutive >= _warn_threshold:
+            icon = "\U0001f7e1"
+        else:
+            icon = "\u2705"
+
+        line = f"{icon} {name} — {last_count} פוסטים/סבב"
+        if consecutive > 0:
+            line += f" (0 כבר {consecutive} סבבים!)"
+        if last_lead:
+            # תצוגה ידידותית של last_lead_at
+            try:
+                from datetime import datetime as _dt
+                lead_dt = _dt.fromisoformat(last_lead)
+                now = _now_local()
+                diff = now - lead_dt.replace(tzinfo=now.tzinfo) if lead_dt.tzinfo is None else now - lead_dt
+                if diff.total_seconds() < 0:
+                    lead_desc = "עכשיו"
+                elif diff.days == 0:
+                    hours = diff.seconds // 3600
+                    if hours == 0:
+                        lead_desc = "לפני כמה דקות"
+                    else:
+                        lead_desc = f"לפני {hours} שעות"
+                elif diff.days == 1:
+                    lead_desc = "אתמול"
+                else:
+                    lead_desc = f"לפני {diff.days} ימים"
+            except Exception:
+                lead_desc = last_lead[:10]
+            line += f", ליד אחרון: {lead_desc}"
+        else:
+            line += ", ליד אחרון: -"
+        lines.append(line)
+
+    # קבוצות שעדיין לא נסרקו (אין health data)
+    for g in GROUPS:
+        if g["url"] not in seen_urls:
+            lines.append(f"\u2753 {g['name']} — טרם נסרקה")
+
+    return "\n".join(lines)
+
+
 def _build_developer_usage_text() -> str:
     """בונה טקסט שימוש ב-API — נגיש רק למפתח."""
     now = _now_local()
@@ -932,6 +1008,7 @@ async def _telegram_control_loop(
                 {"command": "unblock_user", "description": "הסרת חסימת מפרסם"},
                 {"command": "blocked_users", "description": "רשימת מפרסמים חסומים"},
                 {"command": "max_age", "description": "סינון פוסטים ישנים (לפי ימים)"},
+                {"command": "health", "description": "בריאות קבוצות — סטטיסטיקות"},
             ]},
             timeout=10,
         )
@@ -1225,6 +1302,18 @@ async def _telegram_control_loop(
                         )
                     continue
 
+                # ── בריאות קבוצות ────────────────────────────
+                if cmd in ("/health",):
+                    health_text = _build_group_health_text()
+                    await asyncio.to_thread(
+                        send_message_with_buttons,
+                        health_text,
+                        _back_to_menu_button(),
+                        chat_id=chat_id_int,
+                        disable_web_page_preview=True,
+                    )
+                    continue
+
                 # ── מעקב עלויות — למפתח בלבד ─────────────────
                 if cmd in ("/developer_usage",):
                     dev_ids = _parse_developer_chat_ids()
@@ -1242,6 +1331,41 @@ async def _telegram_control_loop(
                         chat_id=chat_id_int,
                         disable_web_page_preview=True,
                     )
+                    continue
+
+                # ── Debug קבוצה בודדת — למפתח בלבד ────────────
+                if cmd in ("/debug",):
+                    dev_ids = _parse_developer_chat_ids()
+                    if not dev_ids or chat_id_int not in dev_ids:
+                        await asyncio.to_thread(
+                            send_message, "פקודה זו זמינה רק למפתח (DEVELOPER_CHAT_ID).",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        await asyncio.to_thread(
+                            send_message,
+                            "שימוש: /debug <group_url>\nסורק קבוצה אחת ומציג את כל שלבי העיבוד.",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    debug_url = parts[1].strip()
+                    await asyncio.to_thread(
+                        send_message, f"מתחיל סריקת debug לקבוצה:\n{debug_url}",
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    try:
+                        debug_result = await _run_debug_scan(debug_url)
+                        await asyncio.to_thread(
+                            send_message, debug_result,
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                    except Exception as e:
+                        await asyncio.to_thread(
+                            send_message, f"שגיאה בסריקת debug:\n{e}",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
                     continue
 
         except requests.HTTPError as e:
@@ -1520,6 +1644,163 @@ def _on_group_scraped(group_name: str, group_index: int, total_groups: int, post
     scan_progress["total_posts_found"] = sum(g["posts_found"] for g in done_list)
 
 
+async def _run_debug_scan(group_url: str) -> str:
+    """סורק קבוצה בודדת במצב debug ומחזיר דו\"ח מפורט של כל שלבי העיבוד."""
+    import gc
+    from scraper import scrape_group, GROUPS, load_session, save_session, login
+    from scraper import block_heavy_resources, random_delay, dismiss_cookie_dialog
+    from scraper import _is_wui_page, _has_login_overlay
+    from database import _normalize_group_url, DB_PATH
+
+    normalized_url = _normalize_group_url(group_url)
+    # חיפוש שם הקבוצה ברשימה
+    group_name = normalized_url.split("/groups/")[-1].rstrip("/") or normalized_url
+    for g in GROUPS:
+        if g["url"] == normalized_url:
+            group_name = g["name"]
+            break
+
+    group = {"name": group_name, "url": normalized_url}
+    lines = [f"\U0001f50d דו\"ח Debug: {group_name}\n{normalized_url}\n"]
+
+    # שלב 1 — סריקה
+    fb_email = get_config("fb_email") or FB_EMAIL
+    fb_password = get_config_encrypted("fb_password") or FB_PASSWORD
+    if not fb_email or not fb_password:
+        return "חסרים FB_EMAIL / FB_PASSWORD — לא ניתן לסרוק."
+
+    from playwright.async_api import async_playwright
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+                       "--renderer-process-limit=1", "--js-flags=--max-old-space-size=128"]
+            )
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+                viewport={"width": 360, "height": 640},
+                locale="he-IL"
+            )
+            page = await context.new_page()
+            await block_heavy_resources(page)
+
+            session_loaded = await load_session(context)
+            if session_loaded:
+                await page.goto("https://m.facebook.com", wait_until="domcontentloaded")
+                await random_delay(1, 2)
+                await dismiss_cookie_dialog(page)
+                if "login" in page.url or await _has_login_overlay(page) or await _is_wui_page(page):
+                    await context.clear_cookies()
+                    await login(page, email=fb_email, password=fb_password)
+                    await save_session(context)
+            else:
+                await login(page, email=fb_email, password=fb_password)
+                await save_session(context)
+
+            # ללא seen_checker — כדי לא לעצור גלילה מוקדם ולקבל מקסימום פוסטים
+            posts = await scrape_group(page, group, seen_checker=None)
+            await browser.close()
+    except Exception as e:
+        return f"שגיאה בסריקה: {e}"
+
+    gc.collect()
+
+    lines.append(f"\U0001f4e6 פוסטים שנטענו מהקבוצה: {len(posts)}")
+
+    # שלב 2 — כמה חדשים (בדיקת seen בנפרד — כי לא העברנו seen_checker לסקריפר)
+    new_posts = [p for p in posts if not is_seen(p["id"])]
+    already_seen = len(posts) - len(new_posts)
+    lines.append(f"\U0001f195 פוסטים חדשים (לא נראו): {len(new_posts)}")
+    if already_seen:
+        lines.append(f"   כבר נראו בעבר: {already_seen}")
+
+    # שלב 2.5 — content_hash dedup
+    dedup_caught = 0
+    after_dedup = []
+    for p in new_posts:
+        c_hash = _content_dedup_hash(p["content"])
+        if c_hash and is_content_hash_sent(c_hash):
+            dedup_caught += 1
+            continue
+        after_dedup.append(p)
+    if dedup_caught:
+        lines.append(f"\U0001f503 כפילויות לפי content_hash: {dedup_caught}")
+
+    # שלב 3 — סינון גיל
+    max_age = _load_max_post_age()
+    age_filtered = 0
+    if max_age:
+        before = len(after_dedup)
+        after_dedup = [p for p in after_dedup if not is_post_too_old(p["content"], max_age)]
+        age_filtered = before - len(after_dedup)
+    if age_filtered:
+        lines.append(f"\u23f3 סוננו לפי גיל ({max_age} ימים): {age_filtered}")
+
+    # שלב 4 — סינון מפרסמים חסומים
+    user_blocked = 0
+    with _kw_lock:
+        _has_bu = bool(_keywords_state["blocked_users"])
+    if _has_bu:
+        before = len(after_dedup)
+        after_dedup = [p for p in after_dedup if not is_user_blocked(p.get("author_url", ""))]
+        user_blocked = before - len(after_dedup)
+    if user_blocked:
+        lines.append(f"\U0001f6d1 נחסמו לפי מפרסם: {user_blocked}")
+
+    # שלב 5 — סינון מילים חסומות
+    blocked_count = 0
+    after_block = []
+    for p in after_dedup:
+        if is_blocked(p["content"]):
+            blocked_count += 1
+        else:
+            after_block.append(p)
+    if blocked_count:
+        lines.append(f"\U0001f6ab נחסמו לפי מילים חסומות: {blocked_count}")
+
+    # שלב 6 — סינון מילות מפתח
+    passed_filter = [p for p in after_block if passes_keyword_filter(p["content"])]
+    kw_filtered = len(after_block) - len(passed_filter)
+    lines.append(f"\U0001f50d עברו סינון מילות מפתח: {len(passed_filter)}")
+    if kw_filtered:
+        lines.append(f"   סוננו (לא מכילים מילת מפתח): {kw_filtered}")
+
+    # שלב 7 — כמה כבר נשלחו
+    not_sent = [p for p in passed_filter if not is_lead_sent(p["id"])]
+    already_sent = len(passed_filter) - len(not_sent)
+    lines.append(f"\u2709\ufe0f ממתינים לסיווג AI: {len(not_sent)}")
+    if already_sent:
+        lines.append(f"   כבר נשלחו: {already_sent}")
+
+    # דוגמה לפוסט שנפסל (אם יש)
+    if kw_filtered and after_block:
+        # מחפשים פוסט שלא עבר סינון מילות מפתח
+        for p in after_block:
+            if not passes_keyword_filter(p["content"]):
+                snippet = p["content"].replace("\n", " ")[:150]
+                lines.append(f"\n\U0001f4dd דוגמה לפוסט שנפסל (מילות מפתח):\n\"{snippet}...\"")
+                break
+
+    if blocked_count and after_dedup:
+        for p in after_dedup:
+            if is_blocked(p["content"]):
+                snippet = p["content"].replace("\n", " ")[:150]
+                # מציג את המילה החסומה שנמצאה
+                with _kw_lock:
+                    block_kws = _keywords_state["block"]
+                found_word = ""
+                text_lower = p["content"].lower()
+                for kw in block_kws:
+                    if kw in text_lower:
+                        found_word = kw
+                        break
+                lines.append(f"\n\U0001f4dd דוגמה לפוסט שנחסם (מילה: '{found_word}'):\n\"{snippet}...\"")
+                break
+
+    return "\n".join(lines)
+
+
 async def run_cycle():
     import gc
     # Lazy imports to keep startup light and allow running parts of the codebase
@@ -1586,6 +1867,44 @@ async def run_cycle():
     # הדפדפן כבר סגור כאן — משחררים זיכרון לפני הסיווג
     gc.collect()
     log.debug("זיכרון שוחרר אחרי סגירת דפדפן")
+
+    # מעקב בריאות קבוצות — כמה פוסטים כל קבוצה החזירה
+    try:
+        from scraper import GROUPS
+        _posts_by_group: dict[str, int] = {}
+        for p in posts:
+            g_url = p.get("group_url", "")
+            if g_url:
+                _posts_by_group[g_url] = _posts_by_group.get(g_url, 0) + 1
+        for group in GROUPS:
+            g_url = group["url"]
+            count = _posts_by_group.get(g_url, 0)
+            update_group_health(g_url, count)
+        # בדיקת קבוצות לא פעילות — שליחת התראה
+        try:
+            _inactive_threshold = int(get_config("inactive_group_threshold", "50"))
+        except (ValueError, TypeError):
+            _inactive_threshold = 50
+        if _inactive_threshold < 1:
+            _inactive_threshold = 50
+        for health in get_all_group_health():
+            if health["consecutive_empty"] >= _inactive_threshold:
+                # שולחים התראה רק בכפולות של הסף — לא להציף בהתראות חוזרות
+                if health["consecutive_empty"] % _inactive_threshold == 0:
+                    from notifier import send_message as _send_msg
+                    _group_name = health["group_url"].split("/groups/")[-1].rstrip("/") or health["group_url"]
+                    # חיפוש שם ידידותי מרשימת הקבוצות
+                    for g in GROUPS:
+                        if g["url"] == health["group_url"]:
+                            _group_name = g["name"]
+                            break
+                    await asyncio.to_thread(
+                        _send_msg,
+                        f"\u26a0\ufe0f הקבוצה '{_group_name}' לא מחזירה פוסטים כבר {health['consecutive_empty']} סבבים — כדאי לבדוק",
+                        disable_web_page_preview=True,
+                    )
+    except Exception as e:
+        log.warning(f"מעקב בריאות קבוצות נכשל (ממשיכים): {e}")
 
     # try/finally — מבטיח ש-_finish_scan_progress ייקרא גם אם יש exception
     # אחרי שלב הגרידה (בסינון, סיווג, שליחה וכו')
@@ -1716,6 +2035,8 @@ async def run_cycle():
                     continue
                 save_lead(post["id"], post["group"], post["content"], reason,
                           content_hash=c_hash)
+                if post.get("group_url"):
+                    update_group_last_lead(post["group_url"])
                 leads_found += 1
                 scan_progress["leads_sent"] = leads_found
                 _dedup_debug(post["id"], post["content"], c_hash, "force_send")
@@ -1793,6 +2114,8 @@ async def run_cycle():
                         continue
                     save_lead(post["id"], post["group"], post["content"], reason,
                               content_hash=post.get("_content_hash", ""))
+                    if post.get("group_url"):
+                        update_group_last_lead(post["group_url"])
                     leads_found += 1
                     scan_progress["leads_sent"] = leads_found
                     _dedup_debug(post["id"], post["content"], post.get("_content_hash", ""), "ai_classified")

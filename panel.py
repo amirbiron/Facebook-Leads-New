@@ -27,12 +27,21 @@ from database import (
     add_blocked_user,
     remove_blocked_user,
     get_blocked_users,
+    get_all_group_health,
 )
 from logger import get_logger
 
 log = get_logger("Panel")
 
 PANEL_PORT = int(os.environ.get("PANEL_PORT", os.environ.get("PORT", "8080")))
+
+
+def _safe_int(value, default: int) -> int:
+    """המרה בטוחה ל-int עם fallback — מונע crash כש-DB מכיל ערך לא תקין."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
 
 
 class _QuietRequestFilter:
@@ -153,6 +162,7 @@ def create_app() -> Flask:
             "quiet_hours": quiet_hours,
             "interval_minutes": interval,
             "max_post_age_days": max_post_age_days,
+            "inactive_group_threshold": _safe_int(get_config("inactive_group_threshold", "50"), 50),
         })
 
     @app.route("/api/settings", methods=["PUT"])
@@ -160,7 +170,7 @@ def create_app() -> Flask:
     def update_settings():
         data = request.get_json(force=True)
         allowed = ("fb_email", "fb_password", "classification_criteria",
-                    "quiet_hours", "max_post_age_days")
+                    "quiet_hours", "max_post_age_days", "inactive_group_threshold")
         for key in allowed:
             if key in data:
                 value = str(data[key]).strip()
@@ -168,6 +178,14 @@ def create_app() -> Flask:
                 if key == "fb_password":
                     if value:
                         set_config_encrypted(key, value)
+                elif key == "inactive_group_threshold":
+                    # ולידציה — חייב להיות מספר שלם >= 1
+                    try:
+                        val_int = int(value)
+                        if val_int >= 1:
+                            set_config(key, str(val_int))
+                    except (ValueError, TypeError):
+                        pass
                 else:
                     set_config(key, value)
 
@@ -335,6 +353,39 @@ def create_app() -> Flask:
             "total_sent": total["sent"],
             "server_time": now.strftime("%H:%M:%S"),
         })
+
+    # ── בריאות קבוצות ───────────────────────────────────────────
+
+    @app.route("/api/group-health", methods=["GET"])
+    @require_auth
+    def get_group_health():
+        health = get_all_group_health()
+        groups = get_db_groups() or []
+        url_to_name = {g["url"]: g["name"] for g in groups}
+        # מוסיפים שם ידידותי לכל רשומה
+        for h in health:
+            h["group_name"] = url_to_name.get(
+                h["group_url"],
+                h["group_url"].split("/groups/")[-1].rstrip("/") or h["group_url"],
+            )
+        threshold = _safe_int(get_config("inactive_group_threshold", "50"), 50)
+        return jsonify({"health": health, "inactive_threshold": threshold})
+
+    @app.route("/api/group-health/settings", methods=["PUT"])
+    @require_auth
+    def update_group_health_settings():
+        data = request.get_json(force=True)
+        threshold = data.get("inactive_threshold")
+        if threshold is not None:
+            try:
+                val = int(threshold)
+                if val < 1:
+                    return jsonify({"ok": False, "message": "הסף חייב להיות לפחות 1"}), 400
+                set_config("inactive_group_threshold", str(val))
+                return jsonify({"ok": True, "inactive_threshold": val})
+            except (ValueError, TypeError):
+                return jsonify({"ok": False, "message": "ערך לא תקין"}), 400
+        return jsonify({"ok": False, "message": "חסר inactive_threshold"}), 400
 
     # ── מילות מפתח ────────────────────────────────────────────
 
