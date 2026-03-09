@@ -74,28 +74,9 @@ def _is_model_deprecated_error(e: openai.APIError) -> bool:
     return any(hint in msg for hint in deprecated_hints)
 
 
-# קריטריוני סיווג — ברירת מחדל (ניתן לעדכן דרך הפאנל)
-_CLASSIFICATION_CRITERIA_DEFAULT = """אתה מסנן לידים לפרילנסר מפתח ישראלי.
-תפקידך: לזהות פוסטים בקבוצות פייסבוק שבהם עסק קטן או בעל עסק קטן מחפש מפתח שיבנה לו משהו.
-
-כלל מפתח — זהה את תפקיד הכותב:
-- אם הכותב הוא **מפתח/יזם** שמציג את העבודה שלו ("אני בונה...", "פיתחנו כלי...", "אני מפתח...") — תמיד לא רלוונטי, גם אם מוזכרים עסקים קטנים.
-- רק אם הכותב הוא **לקוח** שמחפש מישהו שיבנה/יפתח עבורו — רלוונטי.
-
-רלוונטי = כן אם:
-- עסק קטן מחפש מפתח / פרילנסר / מתכנת לפרויקט
-- בעל עסק קטן מחפש מישהו לבנות לו אתר, בוט, אוטומציה, כלי AI, אפליקציה
-- יש תקציב או כוונה ברורה לשלם
-- הצעת עבודה מעסק קטן לפרילנסר
-
-רלוונטי = לא אם:
-- הכותב מציג עצמו כמפתח / יזם / בונה ("אני מפתח...", "בנינו כלי...", "עובד על...")
-- מפתח שמפרסם מוצר או שירות שלו
-- מישהו מחפש עבודה (הם המועמד, לא הלקוח)
-- חברה גדולה או סטארטאפ מגויס מחפשים עובד שכיר
-- שאלה טכנית כללית ללא כוונת שכירה
-- שיתוף מאמר / כלי / תוכן
-- דיון כללי על AI או פיתוח"""
+# קריטריוני סיווג — ברירת מחדל (ניתן לעדכן דרך הפאנל או משתנה סביבה CLASSIFICATION_CRITERIA)
+# אם לא הוגדר — ברירת מחדל ריקה (חובה להגדיר דרך env/פאנל לפני הפעלה).
+_CLASSIFICATION_CRITERIA_DEFAULT = os.environ.get("CLASSIFICATION_CRITERIA", "").strip()
 
 
 def _get_classification_criteria() -> str:
@@ -171,6 +152,9 @@ def _track_usage(response, model: str, call_type: str):
 
 
 def classify_post(content: str, group_name: str) -> dict:
+    if not _get_classification_criteria():
+        log.error("לא הוגדרו קריטריוני סיווג (CLASSIFICATION_CRITERIA / פאנל) — מדלג על סיווג")
+        return {"relevant": False, "reason": "לא הוגדרו קריטריוני סיווג"}
     try:
         log.debug(f"שולח לסיווג: {content[:80]}...")
         raw_text = _chat_completion(
@@ -221,6 +205,9 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
     """
     if not posts:
         return []
+    if not _get_classification_criteria():
+        log.error("לא הוגדרו קריטריוני סיווג (CLASSIFICATION_CRITERIA / פאנל) — מדלג על סיווג")
+        return [{"relevant": False, "reason": "לא הוגדרו קריטריוני סיווג"} for _ in posts]
 
     all_results: list[dict] = []
 
