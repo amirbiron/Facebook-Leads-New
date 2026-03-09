@@ -1598,7 +1598,7 @@
         const res = await fetch(API + '/api/auth', { method: 'POST', headers });
         if (res.ok) {
           hideLogin();
-          await loadAll();
+          loadAll();  // fire-and-forget — שגיאת טעינה לא צריכה למחוק טוקן תקין
         } else {
           setToken('');
           input.value = '';
