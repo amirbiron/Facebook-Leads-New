@@ -1815,7 +1815,7 @@ async def run_cycle():
     # (like quiet-hours logic) without Playwright installed.
     from scraper import scrape_all
     from classifier import classify_batch
-    from notifier import send_lead, send_error_alert
+    from notifier import send_lead, send_error_alert, send_message
 
     _reset_scan_progress()
 
