@@ -150,10 +150,11 @@ def create_app() -> Flask:
             except (ValueError, TypeError):
                 pass
 
+        # סיסמה — לא חושפים את הערך, רק מצב set/unset
         fb_password_raw = get_config_encrypted("fb_password") or os.environ.get("FB_PASSWORD", "")
         return jsonify({
             "fb_email": get_config("fb_email") or os.environ.get("FB_EMAIL", ""),
-            "fb_password": fb_password_raw,
+            "fb_password_set": bool(fb_password_raw),
             "classification_criteria": criteria_db or _CLASSIFICATION_CRITERIA_DEFAULT,
             "classification_criteria_default": _CLASSIFICATION_CRITERIA_DEFAULT,
             "criteria_is_default": is_default,

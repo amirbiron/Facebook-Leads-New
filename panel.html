@@ -1698,9 +1698,9 @@
         currentSettings = await api('/api/settings');
         document.getElementById('fb-email').value = currentSettings.fb_email || '';
         const pwField = document.getElementById('fb-password');
-        pwField.value = currentSettings.fb_password || '';
-        // עדכון placeholder — אם יש סיסמה שמורה, הנקודות מייצגות ערך אמיתי
-        pwField.placeholder = currentSettings.fb_password ? '' : '••••••••';
+        pwField.value = '';
+        // placeholder מראה שיש סיסמה שמורה, אבל לא חושפים אותה
+        pwField.placeholder = currentSettings.fb_password_set ? '(סיסמה שמורה — הזן חדשה לשינוי)' : '••••••••';
         document.getElementById('criteria-text').value = currentSettings.classification_criteria || '';
 
         // שעות שקטות
