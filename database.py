@@ -115,6 +115,13 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS blocked_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            )
+        """)
 
 # ── CRUD ──────────────────────────────────────────────────────
 def is_seen(post_id: str) -> bool:
@@ -313,6 +320,44 @@ def get_db_keywords(kw_type: str) -> list[str] | None:
         "SELECT word FROM keywords WHERE type = ? ORDER BY id", (kw_type,)
     ).fetchall()
     return [r[0] for r in rows]
+
+# ── Blocked Users CRUD ────────────────────────────────────
+
+def add_blocked_user(name: str) -> tuple[bool, str]:
+    """מוסיף מפרסם לרשימה שחורה. מחזיר (success, message)."""
+    name = name.strip()
+    if not name:
+        return False, "שם ריק"
+    try:
+        with _get_conn() as conn:
+            conn.execute(
+                "INSERT INTO blocked_users (name, created_at) VALUES (?, ?)",
+                (name, _now().isoformat()),
+            )
+        return True, f"מפרסם נחסם: {name}"
+    except sqlite3.IntegrityError:
+        return False, f"המפרסם כבר חסום: {name}"
+
+
+def remove_blocked_user(name: str) -> tuple[bool, str]:
+    """מסיר מפרסם מהרשימה השחורה. מחזיר (success, message)."""
+    name = name.strip()
+    with _get_conn() as conn:
+        deleted = conn.execute(
+            "DELETE FROM blocked_users WHERE name = ?", (name,)
+        ).rowcount
+    if deleted:
+        return True, f"מפרסם הוסר מהחסימה: {name}"
+    return False, f"מפרסם לא נמצא ברשימה: {name}"
+
+
+def get_blocked_users() -> list[str]:
+    """מחזיר את כל המפרסמים החסומים."""
+    rows = _get_conn().execute(
+        "SELECT name FROM blocked_users ORDER BY id"
+    ).fetchall()
+    return [r[0] for r in rows]
+
 
 # ── Config (key-value) ────────────────────────────────────────
 

@@ -15,6 +15,7 @@ from database import (
     add_keyword, remove_keyword, get_db_keywords, ensure_keywords_migrated,
     get_config, set_config, get_config_encrypted, get_config_by_prefix,
     get_usage_stats, get_daily_usage_stats, get_usage_by_model,
+    add_blocked_user, remove_blocked_user, get_blocked_users,
 )
 from logger import get_logger
 
@@ -225,12 +226,20 @@ def _load_pre_filter_keywords() -> list[str]:
 
 # טעינה ראשונית — יתעדכנו דינמית בכל סבב.
 # כל הגישה דרך _kw_lock כדי למנוע race condition בין Flask thread ל-main loop.
+def _load_blocked_users() -> list[str]:
+    """טוען מפרסמים חסומים מ-DB. רשימה ריקה אם ה-DB לא זמין."""
+    try:
+        return get_blocked_users()
+    except Exception:
+        return []
+
 _kw_lock = threading.Lock()
 _keywords_state: dict = {
     "block": _load_block_keywords(),
     "pre_filter": _load_pre_filter_keywords(),
     "force_send": _load_force_send_keywords(),
     "group_force_send": get_all_group_force_send(),
+    "blocked_users": _load_blocked_users(),
 }
 # aliases — backward-compatible read-only access (שומרים את השמות הישנים לקריאה בלבד)
 BLOCK_KEYWORDS = _keywords_state["block"]
@@ -247,11 +256,13 @@ def reload_keywords():
     new_pre = _load_pre_filter_keywords()
     new_force = _load_force_send_keywords()
     new_group_force = get_all_group_force_send()
+    new_blocked_users = _load_blocked_users()
     with _kw_lock:
         _keywords_state["block"] = new_block
         _keywords_state["pre_filter"] = new_pre
         _keywords_state["force_send"] = new_force
         _keywords_state["group_force_send"] = new_group_force
+        _keywords_state["blocked_users"] = new_blocked_users
         BLOCK_KEYWORDS = new_block
         PRE_FILTER_KEYWORDS = new_pre
         FORCE_SEND_KEYWORDS = new_force
@@ -276,6 +287,21 @@ def is_blocked(text: str) -> bool:
         return False
     text_lower = text.lower()
     return any(kw in text_lower for kw in kws)
+
+
+def is_user_blocked(author: str) -> bool:
+    """בודק אם המפרסם נמצא ברשימה השחורה.
+    רשימה ריקה = אין חסימה. השוואה case-insensitive.
+    """
+    if not author:
+        return False
+    with _kw_lock:
+        users = _keywords_state["blocked_users"]
+    if not users:
+        return False
+    author_lower = author.lower()
+    return any(u.lower() == author_lower for u in users)
+
 
 # ── סינון לפי גיל פוסט ──────────────────────────────────────
 
@@ -530,6 +556,9 @@ def _settings_menu_buttons() -> list[list[dict]]:
         ],
         [
             {"text": "\U0001f6ab מילים חסומות", "callback_data": "blocked"},
+            {"text": "\U0001f6d1 מפרסמים חסומים", "callback_data": "blocked_users"},
+        ],
+        [
             {"text": "\U0001f519 חזרה", "callback_data": "menu"},
         ],
     ]
@@ -623,6 +652,17 @@ def _build_blocked_text() -> str:
     return (
         f"מילים חסומות ({len(bl)}):\n{bl_text}\n\n"
         "פקודות: /block <מילה> | /unblock <מילה>"
+    )
+
+
+def _build_blocked_users_text() -> str:
+    """בונה טקסט מפרסמים חסומים."""
+    with _kw_lock:
+        users = _keywords_state["blocked_users"]
+    users_text = ", ".join(users) if users else "(ריק)"
+    return (
+        f"מפרסמים חסומים ({len(users)}):\n{users_text}\n\n"
+        "פקודות: /block_user <שם> | /unblock_user <שם>"
     )
 
 
@@ -843,6 +883,14 @@ async def _telegram_control_loop(
                 [[{"text": "\U0001f519 חזרה להגדרות", "callback_data": "settings"}]],
             )
 
+        elif cb_data == "blocked_users":
+            bu_text = _build_blocked_users_text()
+            await asyncio.to_thread(
+                edit_message_text, chat_id_int, message_id,
+                bu_text,
+                [[{"text": "\U0001f519 חזרה להגדרות", "callback_data": "settings"}]],
+            )
+
     # ניקוי webhook קודם וביטול polling תקוע מאינסטנס ישן
     try:
         await asyncio.to_thread(
@@ -867,6 +915,8 @@ async def _telegram_control_loop(
                 {"command": "groups", "description": "רשימת קבוצות"},
                 {"command": "keywords", "description": "מילות מפתח"},
                 {"command": "force_send", "description": "מילות 'שלח תמיד' (עוקף AI)"},
+                {"command": "block_user", "description": "חסימת מפרסם (רשימה שחורה)"},
+                {"command": "blocked_users", "description": "רשימת מפרסמים חסומים"},
                 {"command": "max_age", "description": "סינון פוסטים ישנים (לפי ימים)"},
             ]},
             timeout=10,
@@ -1059,6 +1109,35 @@ async def _telegram_control_loop(
                         lambda w: remove_keyword(w, "block"),
                         "שימוש: /unblock <מילה>",
                         reload_fn=reload_keywords,
+                    )
+                    continue
+
+                # ── ניהול רשימה שחורה של מפרסמים ──────────────
+                if cmd in ("/block_user",):
+                    await _handle_crud_command(
+                        text, chat_id_int,
+                        add_blocked_user,
+                        "שימוש: /block_user <שם מפרסם>",
+                        reload_fn=reload_keywords,
+                    )
+                    continue
+
+                if cmd in ("/unblock_user",):
+                    await _handle_crud_command(
+                        text, chat_id_int,
+                        remove_blocked_user,
+                        "שימוש: /unblock_user <שם מפרסם>",
+                        reload_fn=reload_keywords,
+                    )
+                    continue
+
+                if cmd in ("/blocked_users",):
+                    msg_text = _build_blocked_users_text()
+                    await asyncio.to_thread(
+                        send_message_with_buttons, msg_text,
+                        _back_to_menu_button(),
+                        chat_id=chat_id_int,
+                        disable_web_page_preview=True,
                     )
                     continue
 
@@ -1584,6 +1663,16 @@ async def run_cycle():
             blocked_count = before_block - len(rest_posts)
             if blocked_count:
                 log.info(f"נחסמו {blocked_count} פוסטים לפי מילים חסומות (BLOCK_KEYWORDS)")
+
+        # שלב 4א½ — סינון מפרסמים חסומים (blocked_users)
+        with _kw_lock:
+            _has_blocked_users = bool(_keywords_state["blocked_users"])
+        if _has_blocked_users:
+            before_user_block = len(rest_posts)
+            rest_posts = [p for p in rest_posts if not is_user_blocked(p.get("author", ""))]
+            blocked_user_count = before_user_block - len(rest_posts)
+            if blocked_user_count:
+                log.info(f"נחסמו {blocked_user_count} פוסטים לפי מפרסמים חסומים (blocked_users)")
 
         # שלב 4ב — סינון מילות מפתח לפני שליחה ל-AI
         filtered_posts = [p for p in rest_posts if passes_keyword_filter(p["content"])]

@@ -22,6 +22,9 @@ from database import (
     remove_keyword,
     get_db_keywords,
     ensure_keywords_migrated,
+    add_blocked_user,
+    remove_blocked_user,
+    get_blocked_users,
 )
 from logger import get_logger
 
@@ -374,6 +377,34 @@ def create_app() -> Flask:
         if not word:
             return jsonify({"ok": False, "message": "מילה ריקה"}), 400
         ok, msg = remove_keyword(word, kw_type)
+        return jsonify({"ok": ok, "message": msg})
+
+    # ── מפרסמים חסומים (blocked_users) ───────────────────────
+
+    @app.route("/api/blocked_users", methods=["GET"])
+    @require_auth
+    def list_blocked_users():
+        users = get_blocked_users()
+        return jsonify({"users": users})
+
+    @app.route("/api/blocked_users", methods=["POST"])
+    @require_auth
+    def create_blocked_user():
+        data = request.get_json(force=True)
+        name = data.get("name", "").strip()
+        if not name:
+            return jsonify({"ok": False, "message": "שם ריק"}), 400
+        ok, msg = add_blocked_user(name)
+        return jsonify({"ok": ok, "message": msg})
+
+    @app.route("/api/blocked_users", methods=["DELETE"])
+    @require_auth
+    def delete_blocked_user():
+        data = request.get_json(force=True)
+        name = data.get("name", "").strip()
+        if not name:
+            return jsonify({"ok": False, "message": "שם ריק"}), 400
+        ok, msg = remove_blocked_user(name)
         return jsonify({"ok": ok, "message": msg})
 
     return app
