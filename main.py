@@ -1686,7 +1686,8 @@ async def _run_debug_scan(group_url: str) -> str:
                 await login(page, email=fb_email, password=fb_password)
                 await save_session(context)
 
-            posts = await scrape_group(page, group, seen_checker=is_seen)
+            # ללא seen_checker — כדי לא לעצור גלילה מוקדם ולקבל מקסימום פוסטים
+            posts = await scrape_group(page, group, seen_checker=None)
             await browser.close()
     except Exception as e:
         return f"שגיאה בסריקה: {e}"
@@ -1695,9 +1696,12 @@ async def _run_debug_scan(group_url: str) -> str:
 
     lines.append(f"\U0001f4e6 פוסטים שנטענו מהקבוצה: {len(posts)}")
 
-    # שלב 2 — כמה חדשים
+    # שלב 2 — כמה חדשים (בדיקת seen בנפרד — כי לא העברנו seen_checker לסקריפר)
     new_posts = [p for p in posts if not is_seen(p["id"])]
+    already_seen = len(posts) - len(new_posts)
     lines.append(f"\U0001f195 פוסטים חדשים (לא נראו): {len(new_posts)}")
+    if already_seen:
+        lines.append(f"   כבר נראו בעבר: {already_seen}")
 
     # שלב 2.5 — content_hash dedup
     dedup_caught = 0
@@ -1865,7 +1869,7 @@ async def run_cycle():
             count = _posts_by_group.get(g_url, 0)
             update_group_health(g_url, count)
         # בדיקת קבוצות לא פעילות — שליחת התראה
-        _inactive_threshold = int(get_config("inactive_group_threshold", "5"))
+        _inactive_threshold = int(get_config("inactive_group_threshold", "50"))
         for health in get_all_group_health():
             if health["consecutive_empty"] >= _inactive_threshold:
                 # שולחים התראה רק בכפולות של הסף — לא להציף בהתראות חוזרות

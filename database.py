@@ -645,31 +645,21 @@ def update_group_health(group_url: str, posts_count: int):
 
 
 def update_group_last_lead(group_url: str):
-    """מעדכן את last_lead_at של קבוצה — נקרא כשנשלח ליד מהקבוצה."""
+    """מעדכן את last_lead_at של קבוצה — נקרא כשנשלח ליד מהקבוצה.
+    אם אין רשומה לקבוצה — יוצר אותה (INSERT).
+    """
     now = _now().isoformat()
     with _get_conn() as conn:
-        conn.execute(
+        affected = conn.execute(
             "UPDATE group_health SET last_lead_at = ? WHERE group_url = ?",
             (now, group_url),
-        )
-
-
-def get_group_health(group_url: str) -> dict | None:
-    """מחזיר מצב בריאות לקבוצה בודדת, או None אם אין רשומה."""
-    row = _get_conn().execute(
-        "SELECT group_url, last_posts_count, consecutive_empty, last_lead_at, updated_at "
-        "FROM group_health WHERE group_url = ?",
-        (group_url,),
-    ).fetchone()
-    if row is None:
-        return None
-    return {
-        "group_url": row[0],
-        "last_posts_count": row[1],
-        "consecutive_empty": row[2],
-        "last_lead_at": row[3],
-        "updated_at": row[4],
-    }
+        ).rowcount
+        if affected == 0:
+            conn.execute(
+                "INSERT INTO group_health (group_url, last_posts_count, consecutive_empty, last_lead_at, updated_at) "
+                "VALUES (?, 0, 0, ?, ?)",
+                (group_url, now, now),
+            )
 
 
 def get_all_group_health() -> list[dict]:

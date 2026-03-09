@@ -154,7 +154,7 @@ def create_app() -> Flask:
             "quiet_hours": quiet_hours,
             "interval_minutes": interval,
             "max_post_age_days": max_post_age_days,
-            "inactive_group_threshold": int(get_config("inactive_group_threshold", "5")),
+            "inactive_group_threshold": int(get_config("inactive_group_threshold", "50")),
         })
 
     @app.route("/api/settings", methods=["PUT"])
@@ -352,7 +352,7 @@ def create_app() -> Flask:
                 h["group_url"],
                 h["group_url"].split("/groups/")[-1].rstrip("/") or h["group_url"],
             )
-        threshold = get_config("inactive_group_threshold", "5")
+        threshold = get_config("inactive_group_threshold", "50")
         return jsonify({"health": health, "inactive_threshold": int(threshold)})
 
     @app.route("/api/group-health/settings", methods=["PUT"])
