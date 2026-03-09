@@ -3589,8 +3589,10 @@ class TestIsUserBlocked:
             assert is_user_blocked("משתמש רגיל") is False
 
     def test_case_insensitive(self):
-        with patch.dict("main._keywords_state", {"blocked_users": ["John Doe"]}):
-            assert is_user_blocked("john doe") is True
+        """DB שומר lowercase — is_user_blocked משווה author.lower() מול הרשימה."""
+        with patch.dict("main._keywords_state", {"blocked_users": ["john doe"]}):
+            assert is_user_blocked("John Doe") is True
+            assert is_user_blocked("JOHN DOE") is True
 
     def test_empty_author(self):
         with patch.dict("main._keywords_state", {"blocked_users": ["ספאמר"]}):

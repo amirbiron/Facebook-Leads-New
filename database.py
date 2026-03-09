@@ -324,8 +324,10 @@ def get_db_keywords(kw_type: str) -> list[str] | None:
 # ── Blocked Users CRUD ────────────────────────────────────
 
 def add_blocked_user(name: str) -> tuple[bool, str]:
-    """מוסיף מפרסם לרשימה שחורה. מחזיר (success, message)."""
-    name = name.strip()
+    """מוסיף מפרסם לרשימה שחורה. מחזיר (success, message).
+    שומר ב-lowercase לעקביות עם is_user_blocked (case-insensitive).
+    """
+    name = name.strip().lower()
     if not name:
         return False, "שם ריק"
     try:
@@ -341,7 +343,7 @@ def add_blocked_user(name: str) -> tuple[bool, str]:
 
 def remove_blocked_user(name: str) -> tuple[bool, str]:
     """מסיר מפרסם מהרשימה השחורה. מחזיר (success, message)."""
-    name = name.strip()
+    name = name.strip().lower()
     with _get_conn() as conn:
         deleted = conn.execute(
             "DELETE FROM blocked_users WHERE name = ?", (name,)

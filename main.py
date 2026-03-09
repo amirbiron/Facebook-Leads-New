@@ -291,7 +291,7 @@ def is_blocked(text: str) -> bool:
 
 def is_user_blocked(author: str) -> bool:
     """בודק אם המפרסם נמצא ברשימה השחורה.
-    רשימה ריקה = אין חסימה. השוואה case-insensitive.
+    רשימה ריקה = אין חסימה. השמות ב-DB כבר lowercase.
     """
     if not author:
         return False
@@ -299,8 +299,7 @@ def is_user_blocked(author: str) -> bool:
         users = _keywords_state["blocked_users"]
     if not users:
         return False
-    author_lower = author.lower()
-    return any(u.lower() == author_lower for u in users)
+    return author.lower() in users
 
 
 # ── סינון לפי גיל פוסט ──────────────────────────────────────
