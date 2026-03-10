@@ -100,6 +100,18 @@
   - **בדיקת content_hash מוקדמת**: `[DEDUP-EARLY]` — מיד אחרי סינון `is_seen`, לפני סינון מילות מפתח. תופס כפילויות כש-post_id השתנה אבל התוכן זהה.
   - **אינדקס DB**: `idx_sent_leads_content_hash` על `sent_leads.content_hash` לביצועים.
 
+### 15. לוגין במובייל נכשל בשרת חדש — mobile UA שובר form + security checkpoint
+**הבעיה:** בשכפול ללקוח חדש (שרת חדש = IP חדש), הלוגין ב-m.facebook.com נכשל משתי סיבות:
+  1. **אין form HTML אמיתי**: mobile UA (Pixel 7) → m.facebook.com → React, אין `<form>` → overlays "הורד אפליקציה" חוסמים → `form.submit()` / Enter נכשלים.
+  2. **security checkpoint**: IP חדש + דפדפן headless → פייסבוק דורש אימות נוסף (`two_step_verification` / `checkpoint` / `approvals` ב-URL) גם בלי 2FA.
+**הכלל:**
+  - **לוגין תמיד בדסקטופ**: `login()` מקבל `browser` ויוצר context דסקטופ זמני (UA: Chrome/Windows, viewport: 1280x720) → `www.facebook.com/login/` → form HTML אמיתי עם email+password באותו דף.
+  - **העברת cookies**: cookies של `.facebook.com` עובדים cross-subdomain → לוגין בדסקטופ, סריקה במובייל.
+  - **context נסגר**: desktop context נסגר מיד אחרי העברת cookies (חסכון זיכרון).
+  - **fallback**: אם `browser` לא מסופק, לוגין ישירות במובייל (תאימות לאחור).
+  - **`_CHECKPOINT_MARKERS`**: `("checkpoint", "two_step_verification", "approvals")` — בדיקה ב-URL אחרי לוגין. הודעת שגיאה ברורה + צילום מסך `debug_checkpoint.png`.
+  - **זה לא באג בקוד**: security checkpoint הוא החלטה של פייסבוק. הפתרון: אישור מכשיר ידני חד-פעמי (ראו `client_checklist.md` סעיף 2.8).
+
 ## כללי עבודה על session/auth detection
 - **false positive שובר הכל**: זיהוי שגוי של "סשן פג" → re-login → נכשל → 0 פוסטים. לכן **סף גבוה + בדיקה כפולה**.
 - **לפני שמניחים שפייסבוק שינה משהו** — לבדוק אם **הקוד עצמו השתנה** (רגרסיה). לפרוס גרסה ישנה ידועה כעובדת ולהשוות.

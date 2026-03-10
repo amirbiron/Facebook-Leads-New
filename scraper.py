@@ -33,6 +33,16 @@ _LOGIN_BTN_SELECTORS = [
     "input[type='submit']",
 ]
 
+# סימני checkpoint / אימות נוסף בURL אחרי לוגין
+_CHECKPOINT_MARKERS = ("checkpoint", "two_step_verification", "approvals")
+
+# User-Agent דסקטופ ללוגין — www.facebook.com מציג form HTML אמיתי עם UA דסקטופ
+_DESKTOP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
 
 async def _has_login_overlay(page) -> bool:
     """מזהה overlay לוגין לפי טקסט — כשפייסבוק מציג 'פתיחת האפליקציה / התחברות'
@@ -403,7 +413,89 @@ async def dismiss_cookie_dialog(page):
             continue
     return False
 
-async def login(page, email: str, password: str):
+async def _login_desktop(desktop_page, email: str, password: str):
+    """לוגין בדסקטופ (www.facebook.com) — form HTML אמיתי עם email+password באותו דף.
+    מחזיר את ה-cookies לאחר לוגין מוצלח."""
+    log.info("מתחבר לפייסבוק (דסקטופ)...")
+    await desktop_page.goto("https://www.facebook.com/login/", wait_until="domcontentloaded")
+    await random_delay(1, 3)
+
+    log.debug(f"URL אחרי ניווט (דסקטופ): {desktop_page.url}")
+
+    await dismiss_cookie_dialog(desktop_page)
+
+    email_selectors = ["#email", "input[name='email']", "input[type='email']"]
+    pass_selectors = ["#pass", "input[name='pass']", "input[type='password']"]
+
+    # שדה אימייל
+    email_field = None
+    for selector in email_selectors:
+        try:
+            email_field = await desktop_page.wait_for_selector(selector, timeout=10000)
+            if email_field:
+                log.debug(f"[דסקטופ] שדה אימייל נמצא עם: {selector}")
+                break
+        except Exception:
+            continue
+
+    if not email_field:
+        try:
+            await desktop_page.screenshot(path="data/debug_desktop_login_page.png")
+        except Exception:
+            pass
+        raise Exception("לא נמצא שדה אימייל בדף הלוגין (דסקטופ)")
+
+    await email_field.fill(email)
+    await random_delay(0.5, 1)
+
+    # שדה סיסמה — בדסקטופ תמיד באותו דף
+    pass_field = None
+    for selector in pass_selectors:
+        try:
+            pass_field = await desktop_page.wait_for_selector(selector, timeout=5000)
+            if pass_field:
+                log.debug(f"[דסקטופ] שדה סיסמה נמצא עם: {selector}")
+                break
+        except Exception:
+            continue
+
+    if not pass_field:
+        try:
+            await desktop_page.screenshot(path="data/debug_desktop_no_password.png")
+        except Exception:
+            pass
+        raise Exception("לא נמצא שדה סיסמה בדף הלוגין (דסקטופ)")
+
+    await pass_field.fill(password)
+    await random_delay(0.5, 1)
+
+    # שליחת טופס
+    log.debug("[דסקטופ] שולח טופס לוגין...")
+    login_btn = None
+    for sel in ["button[name='login']", "button[type='submit']", "input[type='submit']"]:
+        try:
+            login_btn = await desktop_page.query_selector(sel)
+            if login_btn:
+                break
+        except Exception:
+            continue
+
+    try:
+        if login_btn:
+            async with desktop_page.expect_navigation(timeout=15000):
+                await login_btn.click()
+        else:
+            async with desktop_page.expect_navigation(timeout=15000):
+                await pass_field.press("Enter")
+    except Exception:
+        await asyncio.sleep(5)
+
+    await random_delay(2, 3)
+    return desktop_page.url
+
+
+async def _login_mobile(page, email: str, password: str):
+    """לוגין במובייל (m.facebook.com) — fallback אם אין גישה ל-browser object."""
     log.info("מתחבר לפייסבוק (מובייל)...")
     await page.goto("https://m.facebook.com/login", wait_until="domcontentloaded")
     await random_delay(1, 3)
@@ -570,11 +662,79 @@ async def login(page, email: str, password: str):
         await asyncio.sleep(5)
 
     await random_delay(2, 3)
+    return page.url
 
-    current_url = page.url
+
+async def login(page, email: str, password: str, browser=None):
+    """מתחבר לפייסבוק.
+
+    אם browser מסופק — יוצר context דסקטופ זמני ללוגין ב-www.facebook.com
+    (form HTML אמיתי, אמין יותר), מעביר cookies ל-context המובייל, וסוגר.
+    אם browser לא מסופק — לוגין ישירות במובייל (fallback, תואם לאחור).
+
+    Cookies של .facebook.com עובדים cross-subdomain (www ↔ m).
+    """
+    if browser:
+        # --- לוגין בדסקטופ והעברת cookies למובייל ---
+        log.info("משתמש ב-context דסקטופ ללוגין (www.facebook.com)...")
+        desktop_ctx = await browser.new_context(
+            user_agent=_DESKTOP_UA,
+            viewport={"width": 1280, "height": 720},
+            locale="he-IL",
+        )
+        desktop_page = await desktop_ctx.new_page()
+        try:
+            post_login_url = await _login_desktop(desktop_page, email, password)
+
+            # בדיקת checkpoint/2FA אחרי לוגין דסקטופ
+            if any(m in post_login_url for m in _CHECKPOINT_MARKERS):
+                try:
+                    await desktop_page.screenshot(path="data/debug_checkpoint.png")
+                except Exception:
+                    pass
+                log.error(f"פייסבוק דורש אימות נוסף (checkpoint): {post_login_url}")
+                raise Exception(
+                    "פייסבוק דורש אימות נוסף (security checkpoint) — "
+                    "היכנס ידנית לחשבון מדפדפן רגיל ואשר את המכשיר. "
+                    "ראה debug_checkpoint.png"
+                )
+
+            # בדיקה אם עדיין בדף לוגין
+            if "/login" in post_login_url:
+                try:
+                    await desktop_page.screenshot(path="data/debug_login_failed.png")
+                    page_text = await desktop_page.evaluate(
+                        "() => (document.body?.innerText || '').substring(0, 800)")
+                    log.error(f"תוכן דף לוגין דסקטופ שנכשל:\n{page_text}")
+                except Exception:
+                    pass
+                raise Exception("התחברות נכשלה (דסקטופ) — בדוק אימייל/סיסמה")
+
+            # העברת cookies מ-context דסקטופ ל-context מובייל
+            cookies = await desktop_ctx.cookies()
+            await page.context.add_cookies(cookies)
+            log.info(f"הועברו {len(cookies)} cookies מדסקטופ למובייל")
+
+        finally:
+            await desktop_ctx.close()
+            log.debug("context דסקטופ נסגר")
+
+    else:
+        # --- fallback: לוגין ישירות במובייל ---
+        post_login_url = await _login_mobile(page, email, password)
+
+    # --- בדיקות אחרי לוגין (משותף לשני המסלולים) ---
+    # אם השתמשנו בדסקטופ, ננווט למובייל כדי לוודא שה-cookies עובדים
+    if browser:
+        await page.goto("https://m.facebook.com", wait_until="domcontentloaded")
+        await random_delay(1, 3)
+        current_url = page.url
+    else:
+        current_url = post_login_url
+
     log.debug(f"URL אחרי לוגין: {current_url}")
 
-    if "/login" in current_url and "checkpoint" not in current_url:
+    if "/login" in current_url and not any(m in current_url for m in _CHECKPOINT_MARKERS):
         error_msg = None
         for selector in ["div[role='alert']", "#error_box", "div._9ay7", "div.login_error_box"]:
             try:
@@ -605,13 +765,17 @@ async def login(page, email: str, password: str):
             log.error(f"התחברות נכשלה — URL עדיין בדף לוגין: {current_url}")
             raise Exception("התחברות נכשלה — בדוק אימייל/סיסמה")
 
-    if "checkpoint" in current_url:
+    if any(m in current_url for m in _CHECKPOINT_MARKERS):
         try:
             await page.screenshot(path="data/debug_checkpoint.png")
         except Exception:
             pass
         log.error(f"פייסבוק דורש אימות נוסף (checkpoint): {current_url}")
-        raise Exception("פייסבוק דורש אימות נוסף — בדוק את החשבון ידנית")
+        raise Exception(
+            "פייסבוק דורש אימות נוסף (security checkpoint) — "
+            "היכנס ידנית לחשבון מדפדפן רגיל ואשר את המכשיר. "
+            "ראה debug_checkpoint.png"
+        )
 
     # אימות נוסף: פייסבוק מובייל מפנה מ-/login ל-/ — בדיקת URL לא מספיקה.
     # אם שדות הלוגין עדיין מוצגים, ההתחברות לא הצליחה באמת
@@ -1299,12 +1463,12 @@ async def scrape_all(email: str, password: str, seen_checker=None,
                 reason = "wui-only (רק לינקי 'פתח באפליקציה')" if is_wui else "login redirect/overlay"
                 log.warning(f"סשן פג ({reason}) — מנקה cookies ומתחבר מחדש")
                 await context.clear_cookies()
-                await login(page, email, password)
+                await login(page, email, password, browser=browser)
                 await save_session(context)
             else:
                 log.info("סשן תקין — ממשיך")
         else:
-            await login(page, email, password)
+            await login(page, email, password, browser=browser)
             await save_session(context)
 
         global _session_needs_refresh
@@ -1320,7 +1484,7 @@ async def scrape_all(email: str, password: str, seen_checker=None,
                 log.warning("סשן פג זוהה בקבוצה — מנקה cookies ומתחבר מחדש...")
                 try:
                     await context.clear_cookies()
-                    await login(page, email, password)
+                    await login(page, email, password, browser=browser)
                     await save_session(context)
                     posts = await scrape_group(page, group, seen_checker=seen_checker)
                     if _session_needs_refresh:
