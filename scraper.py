@@ -699,8 +699,8 @@ async def login(page, email: str, password: str, browser=None):
                     "ראה debug_checkpoint.png"
                 )
 
-            # בדיקה אם עדיין בדף לוגין
-            if "/login" in post_login_url:
+            # בדיקה אם עדיין בדף לוגין (לא כולל checkpoint שכבר טופל למעלה)
+            if "/login" in post_login_url and not any(m in post_login_url for m in _CHECKPOINT_MARKERS):
                 try:
                     await desktop_page.screenshot(path="data/debug_login_failed.png")
                     page_text = await desktop_page.evaluate(
