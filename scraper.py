@@ -43,6 +43,26 @@ _DESKTOP_UA = (
     "Chrome/120.0.0.0 Safari/537.36"
 )
 
+# ניווט עם retry — timeout רשת חד-פעמי לא צריך להרוג את כל הסייקל
+_GOTO_RETRIES = 3
+_GOTO_TIMEOUTS = [30_000, 45_000, 60_000]  # timeout עולה בכל ניסיון
+
+
+async def _goto_with_retry(page, url: str, **kwargs):
+    """page.goto עם retry על timeout — מונע קריסת סייקל בגלל איטיות רשת חולפת."""
+    last_err = None
+    for attempt in range(_GOTO_RETRIES):
+        timeout = _GOTO_TIMEOUTS[min(attempt, len(_GOTO_TIMEOUTS) - 1)]
+        try:
+            return await page.goto(url, timeout=timeout, **kwargs)
+        except PlaywrightTimeout as e:
+            last_err = e
+            log.warning(f"timeout בניווט ל-{url[:60]} (ניסיון {attempt + 1}/{_GOTO_RETRIES}, "
+                        f"timeout={timeout}ms) — {'מנסה שוב' if attempt + 1 < _GOTO_RETRIES else 'נכשל'}")
+            if attempt + 1 < _GOTO_RETRIES:
+                await asyncio.sleep(2 * (attempt + 1))
+    raise last_err
+
 
 async def _has_login_overlay(page) -> bool:
     """מזהה overlay לוגין לפי טקסט — כשפייסבוק מציג 'פתיחת האפליקציה / התחברות'
@@ -726,7 +746,7 @@ async def login(page, email: str, password: str, browser=None):
     # --- בדיקות אחרי לוגין (משותף לשני המסלולים) ---
     # אם השתמשנו בדסקטופ, ננווט למובייל כדי לוודא שה-cookies עובדים
     if browser:
-        await page.goto("https://m.facebook.com", wait_until="domcontentloaded")
+        await _goto_with_retry(page, "https://m.facebook.com", wait_until="domcontentloaded")
         await random_delay(1, 3)
         current_url = page.url
     else:
@@ -1112,7 +1132,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
     try:
         log.debug("ניווט לדף הקבוצה...")
-        await page.goto(group["url"], wait_until="domcontentloaded", timeout=30000)
+        await _goto_with_retry(page, group["url"], wait_until="domcontentloaded")
         current_url = page.url
         log.debug(f"הגענו ל: {current_url}")
 
@@ -1455,7 +1475,7 @@ async def scrape_all(email: str, password: str, seen_checker=None,
 
         if session_loaded:
             log.debug("בודק תקינות סשן...")
-            await page.goto("https://m.facebook.com", wait_until="domcontentloaded")
+            await _goto_with_retry(page, "https://m.facebook.com", wait_until="domcontentloaded")
             await random_delay(1, 3)
             await dismiss_cookie_dialog(page)
             is_wui = await _is_wui_page(page)
