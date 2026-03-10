@@ -1700,10 +1700,10 @@ async def _run_debug_scan(group_url: str) -> str:
                 await dismiss_cookie_dialog(page)
                 if "login" in page.url or await _has_login_overlay(page) or await _is_wui_page(page):
                     await context.clear_cookies()
-                    await login(page, email=fb_email, password=fb_password)
+                    await login(page, email=fb_email, password=fb_password, browser=browser)
                     await save_session(context)
             else:
-                await login(page, email=fb_email, password=fb_password)
+                await login(page, email=fb_email, password=fb_password, browser=browser)
                 await save_session(context)
 
             # ללא seen_checker — כדי לא לעצור גלילה מוקדם ולקבל מקסימום פוסטים
