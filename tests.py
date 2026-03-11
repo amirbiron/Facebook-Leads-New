@@ -4071,7 +4071,26 @@ class TestSendLeadHotWord:
         "TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123",
         "HOT_LEAD_CUSTOM_EMOJI_ID": "5368324170671202286",
     })
-    def test_custom_emoji_two_entities_sent(self, mock_post):
+    def test_custom_emoji_no_parse_mode(self, mock_post):
+        """custom emoji — ללא parse_mode (entities ו-parse_mode סותרים ב-Telegram API)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        from notifier import send_lead
+        send_lead("קבוצה", "תוכן", "https://m.facebook.com/groups/test/posts/123", "סיבה",
+                  is_hot=True)
+        first_call = mock_post.call_args_list[0]
+        payload = first_call.kwargs.get("json", {})
+        assert "entities" in payload
+        # parse_mode לא אמור להיות — סותר entities
+        assert "parse_mode" not in payload
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {
+        "TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123",
+        "HOT_LEAD_CUSTOM_EMOJI_ID": "5368324170671202286",
+    })
+    def test_custom_emoji_two_custom_entities(self, mock_post):
         """HOT_LEAD_CUSTOM_EMOJI_ID — שני custom emoji (לפני ואחרי 'ליד חם!')."""
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -4081,18 +4100,38 @@ class TestSendLeadHotWord:
                   is_hot=True)
         first_call = mock_post.call_args_list[0]
         payload = first_call.kwargs.get("json", {})
-        # צריך לכלול entities ו-parse_mode
-        assert "entities" in payload
-        assert payload.get("parse_mode") == "Markdown"
         entities = payload["entities"]
-        # שני entities — אחד לפני ואחד אחרי
-        assert len(entities) == 2
-        assert entities[0]["type"] == "custom_emoji"
-        assert entities[0]["offset"] == 0
-        assert entities[0]["custom_emoji_id"] == "5368324170671202286"
-        assert entities[1]["type"] == "custom_emoji"
-        assert entities[1]["offset"] > 0  # האמוג'י השני בסוף השורה
-        assert entities[1]["custom_emoji_id"] == "5368324170671202286"
+        custom_emoji_ents = [e for e in entities if e["type"] == "custom_emoji"]
+        assert len(custom_emoji_ents) == 2
+        assert custom_emoji_ents[0]["offset"] == 0
+        assert custom_emoji_ents[0]["custom_emoji_id"] == "5368324170671202286"
+        assert custom_emoji_ents[1]["offset"] > 0
+        assert custom_emoji_ents[1]["custom_emoji_id"] == "5368324170671202286"
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {
+        "TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123",
+        "HOT_LEAD_CUSTOM_EMOJI_ID": "5368324170671202286",
+    })
+    def test_custom_emoji_includes_formatting_entities(self, mock_post):
+        """custom emoji path — כולל bold ו-text_link entities (לא רק custom emoji)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        from notifier import send_lead
+        send_lead("קבוצה", "תוכן", "https://m.facebook.com/groups/test/posts/123", "סיבה",
+                  is_hot=True)
+        first_call = mock_post.call_args_list[0]
+        payload = first_call.kwargs.get("json", {})
+        entities = payload["entities"]
+        entity_types = {e["type"] for e in entities}
+        # צריך לכלול bold (עבור כותרות) ו-text_link (עבור הלינק)
+        assert "bold" in entity_types
+        assert "text_link" in entity_types
+        # הטקסט לא צריך לכלול סימני markdown
+        text = payload["text"]
+        assert "*" not in text
+        assert "](" not in text
 
     @patch("notifier.requests.post")
     @patch.dict("os.environ", {
@@ -4100,8 +4139,7 @@ class TestSendLeadHotWord:
         "HOT_LEAD_CUSTOM_EMOJI_ID": "5368324170671202286",
     })
     def test_custom_emoji_fallback_on_failure(self, mock_post):
-        """אם שליחת custom emoji נכשלת — fallback לשליחה רגילה בלי entities."""
-        # קריאה ראשונה (custom emoji) נכשלת, שנייה (fallback) מצליחה
+        """אם שליחת custom emoji נכשלת — fallback לשליחה רגילה עם markdown."""
         fail_response = MagicMock()
         fail_response.status_code = 400
         ok_response = MagicMock()
@@ -4111,7 +4149,8 @@ class TestSendLeadHotWord:
         result = send_lead("קבוצה", "תוכן", "https://m.facebook.com/groups/test/posts/123", "סיבה",
                            is_hot=True)
         assert result is True
-        # שתי קריאות — ראשונה עם entities, שנייה בלי
         assert mock_post.call_count == 2
+        # fallback — markdown, ללא entities
         second_payload = mock_post.call_args_list[1].kwargs.get("json", {})
         assert "entities" not in second_payload
+        assert second_payload.get("parse_mode") == "Markdown"

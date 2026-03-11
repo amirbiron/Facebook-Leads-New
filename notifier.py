@@ -244,6 +244,11 @@ def _to_desktop_url(url: str) -> str:
     """ממיר URL מובייל ל-URL דסקטופ (m.facebook.com → www.facebook.com)."""
     return url.replace("://m.facebook.com", "://www.facebook.com")
 
+def _utf16_len(s: str) -> int:
+    """מחזיר אורך מחרוזת ביחידות UTF-16 (כמו ש-Telegram API מצפה)."""
+    return len(s.encode("utf-16-le")) // 2
+
+
 def _build_hot_lead_entities(hot_line: str) -> list[dict] | None:
     """בונה entities עבור custom emoji בשורת ליד חם.
 
@@ -259,27 +264,78 @@ def _build_hot_lead_entities(hot_line: str) -> list[dict] | None:
         return None
 
     # שורת ליד חם: "🚨 ליד חם! 🚨" — מחליפים את שני ה-🚨 ב-custom emoji
-    # התו הראשון (🚨) — offset 0
     placeholder = "\U0001f6a8"
-    utf16_length = len(placeholder.encode("utf-16-le")) // 2
+    emoji_utf16_len = _utf16_len(placeholder)
 
-    # חישוב offset של האמוג'י השני (בסוף השורה) ביחידות UTF-16
-    last_emoji_offset = len(hot_line.encode("utf-16-le")) // 2 - utf16_length
+    # offset של האמוג'י השני (בסוף השורה) ביחידות UTF-16
+    last_emoji_offset = _utf16_len(hot_line) - emoji_utf16_len
 
     return [
         {
             "type": "custom_emoji",
             "offset": 0,
-            "length": utf16_length,
+            "length": emoji_utf16_len,
             "custom_emoji_id": custom_emoji_id,
         },
         {
             "type": "custom_emoji",
             "offset": last_emoji_offset,
-            "length": utf16_length,
+            "length": emoji_utf16_len,
             "custom_emoji_id": custom_emoji_id,
         },
     ]
+
+
+def _build_full_entities(hot_line: str, group_label: str, reason_label: str,
+                         link_label: str, link_url: str,
+                         text: str, hot_entities: list[dict]) -> list[dict]:
+    """בונה את כל ה-entities של ההודעה (custom emoji + bold + text_link).
+
+    Telegram API: parse_mode ו-entities סותרים — כשיש custom emoji
+    צריך לבנות את כל הפורמט ידנית כ-entities.
+    """
+    entities = list(hot_entities)  # מתחילים עם custom emoji entities
+
+    # bold על "ליד חדש"
+    lead_title = "\U0001f3af ליד חדש"
+    idx = text.find(lead_title)
+    if idx >= 0:
+        entities.append({
+            "type": "bold",
+            "offset": _utf16_len(text[:idx]),
+            "length": _utf16_len(lead_title),
+        })
+
+    # bold על "קבוצה:"
+    idx = text.find(group_label)
+    if idx >= 0:
+        entities.append({
+            "type": "bold",
+            "offset": _utf16_len(text[:idx]),
+            "length": _utf16_len(group_label),
+        })
+
+    # bold על "למה רלוונטי:"
+    idx = text.find(reason_label)
+    if idx >= 0:
+        entities.append({
+            "type": "bold",
+            "offset": _utf16_len(text[:idx]),
+            "length": _utf16_len(reason_label),
+        })
+
+    # text_link על "פתח פוסט/קבוצה"
+    link_marker = f"\U0001f517 {link_label}"
+    idx = text.find(link_marker)
+    if idx >= 0:
+        entities.append({
+            "type": "text_link",
+            "offset": _utf16_len(text[:idx]),
+            "length": _utf16_len(link_marker),
+            "url": link_url,
+        })
+
+    return entities
 
 
 # שורת ברירת מחדל לליד חם — קבועה, לא ניתנת לשינוי
@@ -303,9 +359,12 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
     link_label = "פתח פוסט" if has_real_url else "פתח קבוצה"
 
     # תצוגת קבוצה — אם הפוסט הופיע גם בקבוצות נוספות, מציג אותן
-    group_line = f"\U0001f4cc *קבוצה:* {group_name}"
+    group_label = "קבוצה:"
+    group_line = f"\U0001f4cc {group_label} {group_name}"
     if also_in:
         group_line += f" (+ {len(also_in)} קבוצות נוספות)"
+
+    reason_label = "למה רלוונטי:"
 
     # שורת ליד חם — מופיעה בראש ההודעה אם הפוסט מכיל מילה חמה
     hot_line = ""
@@ -314,24 +373,26 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
         hot_line = f"{_HOT_LEAD_LINE}\n\n"
         hot_entities = _build_hot_lead_entities(_HOT_LEAD_LINE)
 
-    text = (
-        f"{hot_line}"
-        f"\U0001f3af *ליד חדש*\n"
-        f"{group_line}\n\n"
-        f"{short_content}\n\n"
-        f"\U0001f4a1 *למה רלוונטי:* {reason}\n\n"
-        f"\U0001f517 [{link_label}]({desktop_url})"
-    )
-
-    # אם יש custom emoji entities — שולחים דרך API ישירות עם entities + parse_mode
+    # אם יש custom emoji — טקסט בלי markdown, פורמט דרך entities בלבד
     if hot_entities:
+        text = (
+            f"{hot_line}"
+            f"\U0001f3af ליד חדש\n"
+            f"{group_line}\n\n"
+            f"{short_content}\n\n"
+            f"\U0001f4a1 {reason_label} {reason}\n\n"
+            f"\U0001f517 {link_label}"
+        )
+        all_entities = _build_full_entities(
+            hot_line, group_label, reason_label,
+            link_label, desktop_url, text, hot_entities,
+        )
         bot_token = _get_bot_token()
         chat_id = _get_chat_id()
         payload = {
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": "Markdown",
-            "entities": hot_entities,
+            "entities": all_entities,
             "disable_web_page_preview": False,
         }
         try:
@@ -348,6 +409,16 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
         except Exception as e:
             log.warning(f"שליחת custom emoji נכשלה ({e}), שולח ללא custom emoji")
 
+    # נתיב רגיל (ללא custom emoji, או fallback) — markdown
+    text = (
+        f"{hot_line}"
+        f"\U0001f3af *ליד חדש*\n"
+        f"\U0001f4cc *{group_label}* {group_name}"
+        + (f" (+ {len(also_in)} קבוצות נוספות)" if also_in else "")
+        + f"\n\n{short_content}\n\n"
+        f"\U0001f4a1 *{reason_label}* {reason}\n\n"
+        f"\U0001f517 [{link_label}]({desktop_url})"
+    )
     return send_message(
         text,
         parse_mode="Markdown",
