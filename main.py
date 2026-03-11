@@ -1069,12 +1069,18 @@ async def _telegram_control_loop(
                 {"command": "groups", "description": "רשימת קבוצות"},
                 {"command": "keywords", "description": "מילות מפתח"},
                 {"command": "force_send", "description": "מילות 'שלח תמיד' (עוקף AI)"},
+                {"command": "unforce", "description": "הסרת מילת 'שלח תמיד'"},
                 {"command": "hot_word", "description": "מילים חמות (ליד חם עם התראה)"},
+                {"command": "unhot", "description": "הסרת מילה חמה"},
+                {"command": "block", "description": "הוספת מילה חוסמת"},
+                {"command": "unblock", "description": "הסרת מילה חוסמת"},
                 {"command": "block_user", "description": "חסימת מפרסם (רשימה שחורה)"},
                 {"command": "unblock_user", "description": "הסרת חסימת מפרסם"},
                 {"command": "blocked_users", "description": "רשימת מפרסמים חסומים"},
                 {"command": "max_age", "description": "סינון פוסטים ישנים (לפי ימים)"},
                 {"command": "health", "description": "בריאות קבוצות — סטטיסטיקות"},
+                {"command": "panel", "description": "לינק לפאנל ניהול"},
+                {"command": "set_emoji", "description": "הגדרת custom emoji לליד חם"},
             ]},
             timeout=10,
         )
@@ -1375,6 +1381,60 @@ async def _telegram_control_loop(
                         remove_hot_word,
                         "שימוש: /unhot <מילה>",
                         reload_fn=reload_keywords,
+                    )
+                    continue
+
+                # ── הגדרת custom emoji לליד חם ──────────────────
+                if cmd in ("/set_emoji",):
+                    # בדיקת "off" קודם — לפני בדיקת entities
+                    parts = text.split(maxsplit=1)
+                    if len(parts) > 1 and parts[1].strip().lower() == "off":
+                        set_config("hot_lead_custom_emoji_id", "")
+                        os.environ.pop("HOT_LEAD_CUSTOM_EMOJI_ID", None)
+                        await asyncio.to_thread(
+                            send_message,
+                            "\U0001f6a8 Custom emoji בוטל — חזרה לאמוג'י ברירת מחדל.",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+
+                    # חיפוש custom emoji entity בהודעה
+                    entities = msg.get("entities") or []
+                    custom_emoji_ents = [
+                        e for e in entities if e.get("type") == "custom_emoji"
+                    ]
+                    if not custom_emoji_ents:
+                        current_id = os.environ.get("HOT_LEAD_CUSTOM_EMOJI_ID", "").strip()
+                        status = f"מוגדר: `{current_id}`" if current_id else "לא מוגדר"
+                        await asyncio.to_thread(
+                            send_message,
+                            f"\U0001f3a8 Custom emoji לליד חם: {status}\n\n"
+                            "שימוש: שלח /set_emoji ואחריו custom emoji (דורש טלגרם פרימיום).\n"
+                            "הבוט ישמור את ה-ID וישתמש בו בהתראות ליד חם.\n\n"
+                            "/set_emoji off \u2014 ביטול (חזרה ל-\U0001f6a8)",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                            parse_mode="Markdown",
+                        )
+                        continue
+
+                    emoji_id = custom_emoji_ents[0].get("custom_emoji_id", "")
+                    if not emoji_id:
+                        await asyncio.to_thread(
+                            send_message,
+                            "לא הצלחתי לזהות custom emoji ID. נסה שוב עם אמוג'י אחר.",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+
+                    set_config("hot_lead_custom_emoji_id", emoji_id)
+                    os.environ["HOT_LEAD_CUSTOM_EMOJI_ID"] = emoji_id
+                    await asyncio.to_thread(
+                        send_message,
+                        f"\u2705 Custom emoji הוגדר בהצלחה!\n"
+                        f"ID: `{emoji_id}`\n\n"
+                        "האמוג'י ישמש בהתראות ליד חם מעכשיו.",
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                        parse_mode="Markdown",
                     )
                     continue
 
@@ -2269,6 +2329,10 @@ async def run_cycle():
 async def main():
     log.info("מאתחל מסד נתונים...")
     init_db()
+    # טעינת custom emoji ID מ-DB (אם הוגדר דרך /set_emoji) — כדי ש-notifier.py יקרא מ-env
+    _saved_emoji_id = get_config("hot_lead_custom_emoji_id")
+    if _saved_emoji_id and not os.environ.get("HOT_LEAD_CUSTOM_EMOJI_ID"):
+        os.environ["HOT_LEAD_CUSTOM_EMOJI_ID"] = _saved_emoji_id
     # פאנל מופעל ראשון — אם הוא תופס את אותו פורט כמו health, לא צריך שרת health נפרד
     panel_started = _start_panel()
     panel_port = _get_panel_port()
