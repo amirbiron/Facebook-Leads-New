@@ -3946,3 +3946,239 @@ class TestCrossGroupDedup:
         assert len(unique) == 1
         # קבוצה-ב מופיעה רק פעם אחת
         assert unique[0]["also_in"] == ["קבוצה-ב"]
+
+
+# ──────────────────────────────────────────────────────────────
+# מילים חמות (hot words)
+# ──────────────────────────────────────────────────────────────
+
+from main import matches_hot_word, add_hot_word, remove_hot_word
+
+
+class TestMatchesHotWord:
+    """בדיקות לפונקציית matches_hot_word — זיהוי מילים חמות בפוסטים."""
+
+    def test_match_found(self):
+        with patch.dict("main._keywords_state", {"hot_words": ["דחוף", "מיידי"]}):
+            assert matches_hot_word("צריך עזרה דחוף!") == "דחוף"
+
+    def test_no_match(self):
+        with patch.dict("main._keywords_state", {"hot_words": ["דחוף", "מיידי"]}):
+            assert matches_hot_word("פוסט רגיל") is None
+
+    def test_case_insensitive(self):
+        with patch.dict("main._keywords_state", {"hot_words": ["urgent"]}):
+            assert matches_hot_word("This is URGENT!") == "urgent"
+
+    def test_empty_hot_words(self):
+        """רשימת מילים חמות ריקה — לא מחזירה כלום."""
+        with patch.dict("main._keywords_state", {"hot_words": []}):
+            assert matches_hot_word("דחוף מאוד") is None
+
+    def test_no_hot_words_key(self):
+        """אין מפתח hot_words ב-state — לא קורס."""
+        with patch.dict("main._keywords_state", {}, clear=True):
+            assert matches_hot_word("דחוף") is None
+
+    def test_first_match_returned(self):
+        """מחזיר את המילה הראשונה שנמצאה."""
+        with patch.dict("main._keywords_state", {"hot_words": ["דחוף", "מיידי"]}):
+            assert matches_hot_word("צריך מיידי ודחוף") == "דחוף"
+
+    def test_substring_match(self):
+        """מילה חמה כ-substring — נתפסת (כמו בשאר מנגנוני הסינון)."""
+        with patch.dict("main._keywords_state", {"hot_words": ["דחוף"]}):
+            assert matches_hot_word("בדחיפות") is None  # "דחוף" לא ב-"בדחיפות"
+            assert matches_hot_word("דחוף!!") == "דחוף"
+
+
+class TestAddRemoveHotWord:
+    """בדיקות ל-CRUD של מילים חמות."""
+
+    @patch("main._save_hot_words")
+    @patch("main._load_hot_words", return_value=[])
+    def test_add_new_word(self, mock_load, mock_save):
+        ok, msg = add_hot_word("דחוף")
+        assert ok is True
+        assert "נוספה" in msg
+        mock_save.assert_called_once_with(["דחוף"])
+
+    @patch("main._save_hot_words")
+    @patch("main._load_hot_words", return_value=["דחוף"])
+    def test_add_duplicate(self, mock_load, mock_save):
+        ok, msg = add_hot_word("דחוף")
+        assert ok is False
+        assert "כבר קיימת" in msg
+        mock_save.assert_not_called()
+
+    @patch("main._save_hot_words")
+    @patch("main._load_hot_words", return_value=[])
+    def test_add_empty(self, mock_load, mock_save):
+        ok, msg = add_hot_word("  ")
+        assert ok is False
+        mock_save.assert_not_called()
+
+    @patch("main._save_hot_words")
+    @patch("main._load_hot_words", return_value=["דחוף", "מיידי"])
+    def test_remove_word(self, mock_load, mock_save):
+        ok, msg = remove_hot_word("דחוף")
+        assert ok is True
+        assert "הוסרה" in msg
+        mock_save.assert_called_once_with(["מיידי"])
+
+    @patch("main._save_hot_words")
+    @patch("main._load_hot_words", return_value=["דחוף"])
+    def test_remove_nonexistent(self, mock_load, mock_save):
+        ok, msg = remove_hot_word("לא קיים")
+        assert ok is False
+        assert "לא נמצאה" in msg
+        mock_save.assert_not_called()
+
+
+class TestSendLeadHotWord:
+    """בדיקות ל-send_lead עם פרמטר is_hot."""
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123"})
+    def test_hot_lead_has_prefix(self, mock_post):
+        """ליד חם — ההודעה מתחילה בשורת ליד חם."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        from notifier import send_lead
+        send_lead("קבוצה", "תוכן", "https://m.facebook.com/groups/test/posts/123", "סיבה",
+                  is_hot=True)
+        call_args = mock_post.call_args
+        text = call_args.kwargs.get("json", {}).get("text", "")
+        assert "ליד חם" in text
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123"})
+    def test_normal_lead_no_prefix(self, mock_post):
+        """ליד רגיל — ללא שורת ליד חם."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        from notifier import send_lead
+        send_lead("קבוצה", "תוכן", "https://m.facebook.com/groups/test/posts/123", "סיבה",
+                  is_hot=False)
+        call_args = mock_post.call_args
+        text = call_args.kwargs.get("json", {}).get("text", "")
+        assert "ליד חם" not in text
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {
+        "TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123",
+        "HOT_LEAD_CUSTOM_EMOJI_ID": "5368324170671202286",
+    })
+    def test_custom_emoji_no_parse_mode(self, mock_post):
+        """custom emoji — ללא parse_mode (entities ו-parse_mode סותרים ב-Telegram API)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        from notifier import send_lead
+        send_lead("קבוצה", "תוכן", "https://m.facebook.com/groups/test/posts/123", "סיבה",
+                  is_hot=True)
+        first_call = mock_post.call_args_list[0]
+        payload = first_call.kwargs.get("json", {})
+        assert "entities" in payload
+        # parse_mode לא אמור להיות — סותר entities
+        assert "parse_mode" not in payload
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {
+        "TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123",
+        "HOT_LEAD_CUSTOM_EMOJI_ID": "5368324170671202286",
+    })
+    def test_custom_emoji_two_custom_entities(self, mock_post):
+        """HOT_LEAD_CUSTOM_EMOJI_ID — שני custom emoji (לפני ואחרי 'ליד חם!')."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        from notifier import send_lead
+        send_lead("קבוצה", "תוכן", "https://m.facebook.com/groups/test/posts/123", "סיבה",
+                  is_hot=True)
+        first_call = mock_post.call_args_list[0]
+        payload = first_call.kwargs.get("json", {})
+        entities = payload["entities"]
+        custom_emoji_ents = [e for e in entities if e["type"] == "custom_emoji"]
+        assert len(custom_emoji_ents) == 2
+        assert custom_emoji_ents[0]["offset"] == 0
+        assert custom_emoji_ents[0]["custom_emoji_id"] == "5368324170671202286"
+        assert custom_emoji_ents[1]["offset"] > 0
+        assert custom_emoji_ents[1]["custom_emoji_id"] == "5368324170671202286"
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {
+        "TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123",
+        "HOT_LEAD_CUSTOM_EMOJI_ID": "5368324170671202286",
+    })
+    def test_custom_emoji_includes_formatting_entities(self, mock_post):
+        """custom emoji path — כולל bold ו-text_link entities (לא רק custom emoji)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        from notifier import send_lead
+        send_lead("קבוצה", "תוכן", "https://m.facebook.com/groups/test/posts/123", "סיבה",
+                  is_hot=True)
+        first_call = mock_post.call_args_list[0]
+        payload = first_call.kwargs.get("json", {})
+        entities = payload["entities"]
+        entity_types = {e["type"] for e in entities}
+        # צריך לכלול bold (עבור כותרות) ו-text_link (עבור הלינק)
+        assert "bold" in entity_types
+        assert "text_link" in entity_types
+        # הטקסט לא צריך לכלול סימני markdown
+        text = payload["text"]
+        assert "*" not in text
+        assert "](" not in text
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {
+        "TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123",
+        "HOT_LEAD_CUSTOM_EMOJI_ID": "5368324170671202286",
+    })
+    def test_custom_emoji_entity_targets_label_not_content(self, mock_post):
+        """entities מכוונים ללייבלים של הבוט, לא לתוכן משתמש שמכיל אותו טקסט."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        from notifier import send_lead, _utf16_len
+        # תוכן שמכיל את טקסט הלייבל "למה רלוונטי:" — ה-entity צריך לפנות לאחרון
+        tricky_content = "שאלה: למה רלוונטי: זה לא ברור לי"
+        send_lead("קבוצה", tricky_content,
+                  "https://m.facebook.com/groups/test/posts/123", "סיבה",
+                  is_hot=True)
+        first_call = mock_post.call_args_list[0]
+        payload = first_call.kwargs.get("json", {})
+        text = payload["text"]
+        entities = payload["entities"]
+        # מוצא את ה-bold entity על "למה רלוונטי:" — המופע האחרון
+        reason_marker = "\U0001f4a1 למה רלוונטי:"
+        last_idx = text.rfind(reason_marker)
+        expected_offset = _utf16_len(text[:last_idx])
+        reason_ents = [e for e in entities if e["type"] == "bold"
+                       and e["offset"] == expected_offset]
+        assert len(reason_ents) == 1, "bold entity צריך להיות על הלייבל האחרון, לא על תוכן המשתמש"
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {
+        "TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123",
+        "HOT_LEAD_CUSTOM_EMOJI_ID": "5368324170671202286",
+    })
+    def test_custom_emoji_fallback_on_failure(self, mock_post):
+        """אם שליחת custom emoji נכשלת — fallback לשליחה רגילה עם markdown."""
+        fail_response = MagicMock()
+        fail_response.status_code = 400
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        mock_post.side_effect = [fail_response, ok_response]
+        from notifier import send_lead
+        result = send_lead("קבוצה", "תוכן", "https://m.facebook.com/groups/test/posts/123", "סיבה",
+                           is_hot=True)
+        assert result is True
+        assert mock_post.call_count == 2
+        # fallback — markdown, ללא entities
+        second_payload = mock_post.call_args_list[1].kwargs.get("json", {})
+        assert "entities" not in second_payload
+        assert second_payload.get("parse_mode") == "Markdown"

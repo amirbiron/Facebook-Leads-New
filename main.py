@@ -87,6 +87,61 @@ def _load_force_send_keywords() -> list[str]:
         pass
     return []
 
+# ── מילים חמות (hot words) — ליד חם עם התראה ────────────────
+
+def _load_hot_words() -> list[str]:
+    """טוען מילים חמות מ-DB. פוסט שמכיל מילה כזו מסומן כ'ליד חם'."""
+    import json as _json
+    try:
+        raw = get_config("hot_words")
+        if raw:
+            return _json.loads(raw)
+    except Exception:
+        pass
+    return []
+
+def _save_hot_words(words: list[str]):
+    """שומר מילים חמות ב-DB."""
+    import json as _json
+    from database import set_config
+    set_config("hot_words", _json.dumps(words))
+
+def add_hot_word(word: str) -> tuple[bool, str]:
+    """מוסיף מילה חמה. מחזיר (success, message)."""
+    word = word.strip().lower()
+    if not word:
+        return False, "מילה ריקה"
+    words = _load_hot_words()
+    if word in words:
+        return False, f"המילה כבר קיימת: {word}"
+    words.append(word)
+    _save_hot_words(words)
+    return True, f"מילה חמה נוספה: {word}"
+
+def remove_hot_word(word: str) -> tuple[bool, str]:
+    """מסיר מילה חמה. מחזיר (success, message)."""
+    word = word.strip().lower()
+    words = _load_hot_words()
+    if word not in words:
+        return False, f"מילה לא נמצאה: {word}"
+    words.remove(word)
+    _save_hot_words(words)
+    return True, f"מילה חמה הוסרה: {word}"
+
+def matches_hot_word(text: str) -> str | None:
+    """בודק אם הפוסט מכיל מילה חמה.
+    מחזיר את המילה שנמצאה או None.
+    """
+    with _kw_lock:
+        hot_words = _keywords_state.get("hot_words", [])
+    if not hot_words:
+        return None
+    text_lower = text.lower()
+    for word in hot_words:
+        if word in text_lower:
+            return word
+    return None
+
 def _save_force_send_keywords(keywords: list[str]):
     """שומר מילות 'שלח תמיד' ב-DB."""
     import json as _json
@@ -244,6 +299,7 @@ _keywords_state: dict = {
     "force_send": _load_force_send_keywords(),
     "group_force_send": get_all_group_force_send(),
     "blocked_users": _load_blocked_users(),
+    "hot_words": _load_hot_words(),
 }
 # aliases — backward-compatible read-only access (שומרים את השמות הישנים לקריאה בלבד)
 BLOCK_KEYWORDS = _keywords_state["block"]
@@ -261,12 +317,14 @@ def reload_keywords():
     new_force = _load_force_send_keywords()
     new_group_force = get_all_group_force_send()
     new_blocked_users = _load_blocked_users()
+    new_hot_words = _load_hot_words()
     with _kw_lock:
         _keywords_state["block"] = new_block
         _keywords_state["pre_filter"] = new_pre
         _keywords_state["force_send"] = new_force
         _keywords_state["group_force_send"] = new_group_force
         _keywords_state["blocked_users"] = new_blocked_users
+        _keywords_state["hot_words"] = new_hot_words
         BLOCK_KEYWORDS = new_block
         PRE_FILTER_KEYWORDS = new_pre
         FORCE_SEND_KEYWORDS = new_force
@@ -1011,6 +1069,7 @@ async def _telegram_control_loop(
                 {"command": "groups", "description": "רשימת קבוצות"},
                 {"command": "keywords", "description": "מילות מפתח"},
                 {"command": "force_send", "description": "מילות 'שלח תמיד' (עוקף AI)"},
+                {"command": "hot_word", "description": "מילים חמות (ליד חם עם התראה)"},
                 {"command": "block_user", "description": "חסימת מפרסם (רשימה שחורה)"},
                 {"command": "unblock_user", "description": "הסרת חסימת מפרסם"},
                 {"command": "blocked_users", "description": "רשימת מפרסמים חסומים"},
@@ -1282,6 +1341,39 @@ async def _telegram_control_loop(
                         text, chat_id_int,
                         remove_force_send_keyword,
                         "שימוש: /unforce <מילה>",
+                        reload_fn=reload_keywords,
+                    )
+                    continue
+
+                # ── מילים חמות — ליד חם עם התראה מיוחדת ────────
+                if cmd in ("/hot_word",):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2 or not parts[1].strip():
+                        with _kw_lock:
+                            hw = _keywords_state.get("hot_words", [])
+                        hw_text = ", ".join(hw) if hw else "(ריק)"
+                        await asyncio.to_thread(
+                            send_message,
+                            f"\U0001f525 מילים חמות ({len(hw)}):\n{hw_text}\n\n"
+                            "שימוש: /hot_word <מילה> — פוסט שמכיל מילה זו יסומן כליד חם\n"
+                            "/unhot <מילה> — הסרת מילה חמה",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    ok, result_msg = add_hot_word(parts[1].strip())
+                    if ok:
+                        reload_keywords()
+                    await asyncio.to_thread(
+                        send_message, result_msg,
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    continue
+
+                if cmd in ("/unhot",):
+                    await _handle_crud_command(
+                        text, chat_id_int,
+                        remove_hot_word,
+                        "שימוש: /unhot <מילה>",
                         reload_fn=reload_keywords,
                     )
                     continue
@@ -2049,6 +2141,7 @@ async def run_cycle():
                     log.debug(f"דילוג על force_send — תוכן זהה כבר נשלח (content_hash)")
                     continue
                 reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
+                hot_kw = matches_hot_word(post["content"])
                 sent_ok = await asyncio.to_thread(
                     send_lead,
                     group_name=post["group"],
@@ -2057,6 +2150,7 @@ async def run_cycle():
                     reason=reason,
                     has_real_url=post.get("has_real_url", True),
                     also_in=post.get("also_in"),
+                    is_hot=bool(hot_kw),
                 )
                 if not sent_ok:
                     log.warning(f"שליחת force_send נכשלה — הליד לא יישמר ב-DB (id={post['id'][:20]})")
@@ -2129,6 +2223,7 @@ async def run_cycle():
             for post, result in zip(to_classify, results):
                 if result.get("relevant"):
                     reason = result.get("reason", "")
+                    hot_kw = matches_hot_word(post["content"])
                     sent_ok = await asyncio.to_thread(
                         send_lead,
                         group_name=post["group"],
@@ -2137,6 +2232,7 @@ async def run_cycle():
                         reason=reason,
                         has_real_url=post.get("has_real_url", True),
                         also_in=post.get("also_in"),
+                        is_hot=bool(hot_kw),
                     )
                     if not sent_ok:
                         log.warning(f"שליחת ליד AI נכשלה — הליד לא יישמר ב-DB (id={post['id'][:20]})")
