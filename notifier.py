@@ -244,8 +244,36 @@ def _to_desktop_url(url: str) -> str:
     """ממיר URL מובייל ל-URL דסקטופ (m.facebook.com → www.facebook.com)."""
     return url.replace("://m.facebook.com", "://www.facebook.com")
 
+def _get_hot_lead_line() -> str:
+    """מחזיר את שורת ההתראה של ליד חם.
+    ברירת מחדל: 🚨 ליד חם! 🚨
+    ניתן לשנות דרך משתנה סביבה HOT_LEAD_LINE.
+    """
+    return os.environ.get("HOT_LEAD_LINE", "\U0001f6a8 ליד חם! \U0001f6a8")
+
+
+def _build_hot_lead_entities(hot_line: str) -> list[dict] | None:
+    """בונה entities עבור custom emoji בשורת ליד חם.
+    HOT_LEAD_CUSTOM_EMOJI_ID — מזהה custom emoji של טלגרם פרימיום.
+    אם מוגדר, ה-custom emoji מחליף את התו הראשון בשורה.
+    """
+    custom_emoji_id = os.environ.get("HOT_LEAD_CUSTOM_EMOJI_ID", "").strip()
+    if not custom_emoji_id:
+        return None
+    # התו הראשון בשורה — ה-custom emoji יחליף אותו ויזואלית
+    first_char = hot_line[0] if hot_line else "\U0001f6a8"
+    utf16_length = len(first_char.encode("utf-16-le")) // 2
+    return [{
+        "type": "custom_emoji",
+        "offset": 0,
+        "length": utf16_length,
+        "custom_emoji_id": custom_emoji_id,
+    }]
+
+
 def send_lead(group_name: str, content: str, post_url: str, reason: str,
-              has_real_url: bool = True, also_in: list[str] | None = None):
+              has_real_url: bool = True, also_in: list[str] | None = None,
+              is_hot: bool = False, hot_keyword: str = ""):
     if not _get_bot_token() or not _get_chat_id():
         log.error("חסרים משתני סביבה של טלגרם (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
         return False
@@ -260,17 +288,51 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
     link_label = "פתח פוסט" if has_real_url else "פתח קבוצה"
 
     # תצוגת קבוצה — אם הפוסט הופיע גם בקבוצות נוספות, מציג אותן
-    group_line = f"📌 *קבוצה:* {group_name}"
+    group_line = f"\U0001f4cc *קבוצה:* {group_name}"
     if also_in:
         group_line += f" (+ {len(also_in)} קבוצות נוספות)"
 
+    # שורת ליד חם — מופיעה בראש ההודעה אם הפוסט מכיל מילה חמה
+    hot_line = ""
+    entities = None
+    if is_hot:
+        hot_line_text = _get_hot_lead_line()
+        hot_line = f"{hot_line_text}\n\n"
+        entities = _build_hot_lead_entities(hot_line_text)
+
     text = (
-        f"🎯 *ליד חדש*\n"
+        f"{hot_line}"
+        f"\U0001f3af *ליד חדש*\n"
         f"{group_line}\n\n"
         f"{short_content}\n\n"
-        f"💡 *למה רלוונטי:* {reason}\n\n"
-        f"🔗 [{link_label}]({desktop_url})"
+        f"\U0001f4a1 *למה רלוונטי:* {reason}\n\n"
+        f"\U0001f517 [{link_label}]({desktop_url})"
     )
+
+    # אם יש custom emoji entities — שולחים דרך API ישירות עם entities
+    if entities:
+        bot_token = _get_bot_token()
+        chat_id = _get_chat_id()
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "entities": entities,
+            "disable_web_page_preview": False,
+        }
+        try:
+            response = requests.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json=payload,
+                timeout=10,
+            )
+            if response.status_code == 200:
+                log.info("הודעת ליד חם נשלחה בהצלחה (custom emoji)")
+                return True
+            # fallback — אם custom emoji נכשל (חשבון לא פרימיום), שולח בלי entities
+            log.warning(f"שליחת custom emoji נכשלה ({response.status_code}), שולח ללא custom emoji")
+        except Exception as e:
+            log.warning(f"שליחת custom emoji נכשלה ({e}), שולח ללא custom emoji")
+
     return send_message(
         text,
         parse_mode="Markdown",
