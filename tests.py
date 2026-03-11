@@ -4138,6 +4138,34 @@ class TestSendLeadHotWord:
         "TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123",
         "HOT_LEAD_CUSTOM_EMOJI_ID": "5368324170671202286",
     })
+    def test_custom_emoji_entity_targets_label_not_content(self, mock_post):
+        """entities מכוונים ללייבלים של הבוט, לא לתוכן משתמש שמכיל אותו טקסט."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+        from notifier import send_lead, _utf16_len
+        # תוכן שמכיל את טקסט הלייבל "למה רלוונטי:" — ה-entity צריך לפנות לאחרון
+        tricky_content = "שאלה: למה רלוונטי: זה לא ברור לי"
+        send_lead("קבוצה", tricky_content,
+                  "https://m.facebook.com/groups/test/posts/123", "סיבה",
+                  is_hot=True)
+        first_call = mock_post.call_args_list[0]
+        payload = first_call.kwargs.get("json", {})
+        text = payload["text"]
+        entities = payload["entities"]
+        # מוצא את ה-bold entity על "למה רלוונטי:" — המופע האחרון
+        reason_marker = "\U0001f4a1 למה רלוונטי:"
+        last_idx = text.rfind(reason_marker)
+        expected_offset = _utf16_len(text[:last_idx])
+        reason_ents = [e for e in entities if e["type"] == "bold"
+                       and e["offset"] == expected_offset]
+        assert len(reason_ents) == 1, "bold entity צריך להיות על הלייבל האחרון, לא על תוכן המשתמש"
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {
+        "TELEGRAM_BOT_TOKEN": "test", "TELEGRAM_CHAT_ID": "123",
+        "HOT_LEAD_CUSTOM_EMOJI_ID": "5368324170671202286",
+    })
     def test_custom_emoji_fallback_on_failure(self, mock_post):
         """אם שליחת custom emoji נכשלת — fallback לשליחה רגילה עם markdown."""
         fail_response = MagicMock()

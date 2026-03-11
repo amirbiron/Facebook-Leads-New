@@ -286,17 +286,20 @@ def _build_hot_lead_entities(hot_line: str) -> list[dict] | None:
     ]
 
 
-def _build_full_entities(hot_line: str, group_label: str, reason_label: str,
+def _build_full_entities(group_label: str, reason_label: str,
                          link_label: str, link_url: str,
                          text: str, hot_entities: list[dict]) -> list[dict]:
     """בונה את כל ה-entities של ההודעה (custom emoji + bold + text_link).
 
     Telegram API: parse_mode ו-entities סותרים — כשיש custom emoji
     צריך לבנות את כל הפורמט ידנית כ-entities.
+
+    משתמש ב-rfind כדי למצוא את הלייבלים שמופיעים **אחרי** תוכן הפוסט,
+    ולא בטעות לתפוס מחרוזת זהה בתוך תוכן המשתמש.
     """
     entities = list(hot_entities)  # מתחילים עם custom emoji entities
 
-    # bold על "ליד חדש"
+    # bold על "ליד חדש" — מופיע לפני התוכן, find בטוח כאן
     lead_title = "\U0001f3af ליד חדש"
     idx = text.find(lead_title)
     if idx >= 0:
@@ -306,7 +309,7 @@ def _build_full_entities(hot_line: str, group_label: str, reason_label: str,
             "length": _utf16_len(lead_title),
         })
 
-    # bold על "קבוצה:"
+    # bold על "קבוצה:" — מופיע לפני התוכן, find בטוח כאן
     idx = text.find(group_label)
     if idx >= 0:
         entities.append({
@@ -315,18 +318,19 @@ def _build_full_entities(hot_line: str, group_label: str, reason_label: str,
             "length": _utf16_len(group_label),
         })
 
-    # bold על "למה רלוונטי:"
-    idx = text.find(reason_label)
+    # bold על "למה רלוונטי:" — מופיע אחרי התוכן, rfind כדי לא לתפוס תוכן משתמש
+    reason_marker = f"\U0001f4a1 {reason_label}"
+    idx = text.rfind(reason_marker)
     if idx >= 0:
         entities.append({
             "type": "bold",
             "offset": _utf16_len(text[:idx]),
-            "length": _utf16_len(reason_label),
+            "length": _utf16_len(reason_marker),
         })
 
-    # text_link על "פתח פוסט/קבוצה"
+    # text_link על "פתח פוסט/קבוצה" — תמיד בסוף, rfind בטוח
     link_marker = f"\U0001f517 {link_label}"
-    idx = text.find(link_marker)
+    idx = text.rfind(link_marker)
     if idx >= 0:
         entities.append({
             "type": "text_link",
@@ -384,7 +388,7 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
             f"\U0001f517 {link_label}"
         )
         all_entities = _build_full_entities(
-            hot_line, group_label, reason_label,
+            group_label, reason_label,
             link_label, desktop_url, text, hot_entities,
         )
         bot_token = _get_bot_token()
