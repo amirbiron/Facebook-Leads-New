@@ -50,6 +50,7 @@ _GOTO_TIMEOUTS = [30_000, 45_000, 60_000]  # timeout עולה בכל ניסיו�
 
 async def _goto_with_retry(page, url: str, **kwargs):
     """page.goto עם retry על timeout — מונע קריסת סייקל בגלל איטיות רשת חולפת."""
+    kwargs.pop("timeout", None)  # timeout מנוהל פנימית — מונע duplicate kwarg
     last_err = None
     for attempt in range(_GOTO_RETRIES):
         timeout = _GOTO_TIMEOUTS[min(attempt, len(_GOTO_TIMEOUTS) - 1)]
@@ -1401,7 +1402,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         log.debug(f"סטטיסטיקה — דולגו: {skipped_short} קצרים")
 
     except PlaywrightTimeout:
-        log.error(f"טיימאאוט בקבוצה: {group['name']} (30 שניות)")
+        log.error(f"טיימאאוט בקבוצה: {group['name']} (אחרי {_GOTO_RETRIES} ניסיונות)")
     except Exception as e:
         log.error(f"שגיאה בקבוצה {group['name']}: {e}", exc_info=True)
 
