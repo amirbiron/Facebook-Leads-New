@@ -1401,8 +1401,8 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
         log.debug(f"סטטיסטיקה — דולגו: {skipped_short} קצרים")
 
-    except PlaywrightTimeout:
-        log.error(f"טיימאאוט בקבוצה: {group['name']} (אחרי {_GOTO_RETRIES} ניסיונות)")
+    except PlaywrightTimeout as e:
+        log.error(f"טיימאאוט בקבוצה: {group['name']} — {e}")
     except Exception as e:
         log.error(f"שגיאה בקבוצה {group['name']}: {e}", exc_info=True)
 
