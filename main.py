@@ -29,6 +29,8 @@ TELEGRAM_CONTROL = os.environ.get("TELEGRAM_CONTROL", "1").strip().lower() not i
 
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", os.environ.get("PORT", "8080")))
 DEVELOPER_CHAT_ID = os.environ.get("DEVELOPER_CHAT_ID", "").strip()
+_panel_url_raw = os.environ.get("PANEL_URL", "").strip()
+PANEL_URL = _panel_url_raw if _panel_url_raw.startswith(("http://", "https://")) else ""
 
 # ── סטטוס סריקה בזמן אמת — נגיש מהפאנל דרך /api/scan-status ──
 # מילון שמתעדכן לאורך כל שלבי הסריקה. Flask קורא אותו (thread-safe לקריאה).
@@ -549,6 +551,10 @@ def _main_menu_buttons() -> list[list[dict]]:
             {"text": "\U0001f4cb דו\"ח יומי", "callback_data": "daily_report"},
             {"text": "\u2699\ufe0f הגדרות", "callback_data": "settings"},
         ],
+        *(
+            [[{"text": "\U0001f310 פאנל", "url": PANEL_URL}]]
+            if PANEL_URL else []
+        ),
     ]
 
 
@@ -1081,6 +1087,21 @@ async def _telegram_control_loop(
                         chat_id=chat_id_int,
                         disable_web_page_preview=True,
                     )
+                    continue
+
+                if cmd in ("/panel",):
+                    if PANEL_URL:
+                        await asyncio.to_thread(
+                            send_message,
+                            f"🔗 פאנל הגדרות:\n{PANEL_URL}",
+                            chat_id=chat_id_int,
+                        )
+                    else:
+                        await asyncio.to_thread(
+                            send_message,
+                            "משתנה סביבה PANEL_URL לא הוגדר.",
+                            chat_id=chat_id_int,
+                        )
                     continue
 
                 if cmd in ("/scan",):
