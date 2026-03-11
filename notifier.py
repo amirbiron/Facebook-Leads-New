@@ -244,36 +244,51 @@ def _to_desktop_url(url: str) -> str:
     """ממיר URL מובייל ל-URL דסקטופ (m.facebook.com → www.facebook.com)."""
     return url.replace("://m.facebook.com", "://www.facebook.com")
 
-def _get_hot_lead_line() -> str:
-    """מחזיר את שורת ההתראה של ליד חם.
-    ברירת מחדל: 🚨 ליד חם! 🚨
-    ניתן לשנות דרך משתנה סביבה HOT_LEAD_LINE.
-    """
-    return os.environ.get("HOT_LEAD_LINE", "\U0001f6a8 ליד חם! \U0001f6a8")
-
-
 def _build_hot_lead_entities(hot_line: str) -> list[dict] | None:
     """בונה entities עבור custom emoji בשורת ליד חם.
+
     HOT_LEAD_CUSTOM_EMOJI_ID — מזהה custom emoji של טלגרם פרימיום.
-    אם מוגדר, ה-custom emoji מחליף את התו הראשון בשורה.
+    כדי לקבל את ה-ID: שלח הודעה עם ה-custom emoji לבוט, ובקוד:
+        entity = update.message.entities[0]
+        custom_emoji_id = entity.custom_emoji_id  # ← זה ה-ID לשמור ב-env
+
+    אם מוגדר, ה-custom emoji מחליף את שני ה-🚨 (לפני ואחרי "ליד חם!").
     """
     custom_emoji_id = os.environ.get("HOT_LEAD_CUSTOM_EMOJI_ID", "").strip()
     if not custom_emoji_id:
         return None
-    # התו הראשון בשורה — ה-custom emoji יחליף אותו ויזואלית
-    first_char = hot_line[0] if hot_line else "\U0001f6a8"
-    utf16_length = len(first_char.encode("utf-16-le")) // 2
-    return [{
-        "type": "custom_emoji",
-        "offset": 0,
-        "length": utf16_length,
-        "custom_emoji_id": custom_emoji_id,
-    }]
+
+    # שורת ליד חם: "🚨 ליד חם! 🚨" — מחליפים את שני ה-🚨 ב-custom emoji
+    # התו הראשון (🚨) — offset 0
+    placeholder = "\U0001f6a8"
+    utf16_length = len(placeholder.encode("utf-16-le")) // 2
+
+    # חישוב offset של האמוג'י השני (בסוף השורה) ביחידות UTF-16
+    last_emoji_offset = len(hot_line.encode("utf-16-le")) // 2 - utf16_length
+
+    return [
+        {
+            "type": "custom_emoji",
+            "offset": 0,
+            "length": utf16_length,
+            "custom_emoji_id": custom_emoji_id,
+        },
+        {
+            "type": "custom_emoji",
+            "offset": last_emoji_offset,
+            "length": utf16_length,
+            "custom_emoji_id": custom_emoji_id,
+        },
+    ]
+
+
+# שורת ברירת מחדל לליד חם — קבועה, לא ניתנת לשינוי
+_HOT_LEAD_LINE = "\U0001f6a8 ליד חם! \U0001f6a8"
 
 
 def send_lead(group_name: str, content: str, post_url: str, reason: str,
               has_real_url: bool = True, also_in: list[str] | None = None,
-              is_hot: bool = False, hot_keyword: str = ""):
+              is_hot: bool = False):
     if not _get_bot_token() or not _get_chat_id():
         log.error("חסרים משתני סביבה של טלגרם (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
         return False
@@ -294,11 +309,10 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
 
     # שורת ליד חם — מופיעה בראש ההודעה אם הפוסט מכיל מילה חמה
     hot_line = ""
-    entities = None
+    hot_entities = None
     if is_hot:
-        hot_line_text = _get_hot_lead_line()
-        hot_line = f"{hot_line_text}\n\n"
-        entities = _build_hot_lead_entities(hot_line_text)
+        hot_line = f"{_HOT_LEAD_LINE}\n\n"
+        hot_entities = _build_hot_lead_entities(_HOT_LEAD_LINE)
 
     text = (
         f"{hot_line}"
@@ -309,14 +323,15 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
         f"\U0001f517 [{link_label}]({desktop_url})"
     )
 
-    # אם יש custom emoji entities — שולחים דרך API ישירות עם entities
-    if entities:
+    # אם יש custom emoji entities — שולחים דרך API ישירות עם entities + parse_mode
+    if hot_entities:
         bot_token = _get_bot_token()
         chat_id = _get_chat_id()
         payload = {
             "chat_id": chat_id,
             "text": text,
-            "entities": entities,
+            "parse_mode": "Markdown",
+            "entities": hot_entities,
             "disable_web_page_preview": False,
         }
         try:
