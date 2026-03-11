@@ -29,7 +29,8 @@ TELEGRAM_CONTROL = os.environ.get("TELEGRAM_CONTROL", "1").strip().lower() not i
 
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", os.environ.get("PORT", "8080")))
 DEVELOPER_CHAT_ID = os.environ.get("DEVELOPER_CHAT_ID", "").strip()
-PANEL_URL = os.environ.get("PANEL_URL", "").strip()
+_panel_url_raw = os.environ.get("PANEL_URL", "").strip()
+PANEL_URL = _panel_url_raw if _panel_url_raw.startswith(("http://", "https://")) else ""
 
 # ── סטטוס סריקה בזמן אמת — נגיש מהפאנל דרך /api/scan-status ──
 # מילון שמתעדכן לאורך כל שלבי הסריקה. Flask קורא אותו (thread-safe לקריאה).
