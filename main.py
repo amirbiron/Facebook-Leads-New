@@ -29,6 +29,9 @@ TELEGRAM_CONTROL = os.environ.get("TELEGRAM_CONTROL", "1").strip().lower() not i
 
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", os.environ.get("PORT", "8080")))
 DEVELOPER_CHAT_ID = os.environ.get("DEVELOPER_CHAT_ID", "").strip()
+# מגבלת זמן אוטומציה יומית (בדקות). 0 = ללא מגבלה.
+# מודד זמן סריקה בפועל (דפדפן פתוח), לא כולל המתנה בין סבבים.
+DAILY_AUTOMATION_LIMIT_MINUTES = int(os.environ.get("DAILY_AUTOMATION_LIMIT_MINUTES", "0"))
 _panel_url_raw = os.environ.get("PANEL_URL", "").strip()
 PANEL_URL = _panel_url_raw if _panel_url_raw.startswith(("http://", "https://")) else ""
 
@@ -1211,6 +1214,28 @@ async def _telegram_control_loop(
                     )
                     continue
 
+                if cmd in ("/stop",):
+                    if str(chat_id_int) not in _get_developer_chat_ids():
+                        await asyncio.to_thread(
+                            send_message, "פקודה זו זמינה רק למפתח (DEVELOPER_CHAT_ID).",
+                            chat_id=chat_id_int,
+                        )
+                        continue
+                    if not shared_state.get("scan_in_progress"):
+                        await asyncio.to_thread(
+                            send_message, "אין סריקה פעילה כרגע.",
+                            chat_id=chat_id_int,
+                        )
+                        continue
+                    from scraper import request_stop_scan
+                    request_stop_scan()
+                    await asyncio.to_thread(
+                        send_message,
+                        "ביקשתי עצירת סריקה — תיעצר אחרי הקבוצה הנוכחית.",
+                        chat_id=chat_id_int,
+                    )
+                    continue
+
                 # ── ניהול קבוצות דינמי ──────────────────────────
                 if cmd in ("/groups",):
                     msg_text = _build_groups_text()
@@ -2298,6 +2323,11 @@ async def main():
         "last_scan_started": None,
         "last_scan_finished": None,
     }
+    # מעקב זמן אוטומציה יומי (בשניות) — מודד זמן סריקה בפועל בלבד
+    daily_automation: dict = {
+        "date": _now_local().date(),
+        "total_seconds": 0.0,
+    }
     # חשיפת shared_state ל-health check endpoint
     global _health_shared_state
     _health_shared_state = shared_state
@@ -2306,15 +2336,43 @@ async def main():
     scan_force_event = asyncio.Event()
     scan_lock = asyncio.Lock()
 
+    def _check_daily_limit() -> bool:
+        """בודק אם חרגנו ממגבלת הזמן היומית. מחזיר True אם מותר לסרוק."""
+        if DAILY_AUTOMATION_LIMIT_MINUTES <= 0:
+            return True
+        today = _now_local().date()
+        if daily_automation["date"] != today:
+            daily_automation["date"] = today
+            daily_automation["total_seconds"] = 0.0
+        limit_secs = DAILY_AUTOMATION_LIMIT_MINUTES * 60
+        if daily_automation["total_seconds"] >= limit_secs:
+            return False
+        return True
+
     async def run_scan_guarded():
+        if not _check_daily_limit():
+            used = int(daily_automation["total_seconds"] / 60)
+            log.info(
+                f"מגבלת אוטומציה יומית הושגה ({used}/{DAILY_AUTOMATION_LIMIT_MINUTES} דקות) — מדלג"
+            )
+            return
         async with scan_lock:
             shared_state["scan_in_progress"] = True
             shared_state["last_scan_started"] = _now_local()
+            scan_start = asyncio.get_event_loop().time()
             try:
                 await run_cycle()
             finally:
+                elapsed = asyncio.get_event_loop().time() - scan_start
+                today = _now_local().date()
+                if daily_automation["date"] != today:
+                    daily_automation["date"] = today
+                    daily_automation["total_seconds"] = 0.0
+                daily_automation["total_seconds"] += elapsed
                 shared_state["scan_in_progress"] = False
                 shared_state["last_scan_finished"] = _now_local()
+                used = int(daily_automation["total_seconds"] / 60)
+                log.debug(f"זמן אוטומציה יומי: {used} דקות מתוך {DAILY_AUTOMATION_LIMIT_MINUTES or '∞'}")
 
     # שמירת רפרנס ל-task כדי למנוע garbage collection
     _control_task = None

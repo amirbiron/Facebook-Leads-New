@@ -747,7 +747,7 @@ async def login(page, email: str, password: str, browser=None):
     # --- בדיקות אחרי לוגין (משותף לשני המסלולים) ---
     # אם השתמשנו בדסקטופ, ננווט למובייל כדי לוודא שה-cookies עובדים
     if browser:
-        await _goto_with_retry(page, "https://m.facebook.com", wait_until="domcontentloaded")
+        await _goto_with_retry(page, "https://m.facebook.com", wait_until="commit")
         await random_delay(1, 3)
         current_url = page.url
     else:
@@ -861,6 +861,18 @@ def _extract_id_from_data_attrs(attrs_json: str) -> str | None:
 _extraction_stats: dict[str, int] = {"success": 0, "fallback": 0}
 # דגל: scrape_group זיהה מצב wui → scrape_all צריך להתחבר מחדש
 _session_needs_refresh = False
+# דגל לעצירת סריקה באמצע — נבדק בלולאת הקבוצות
+_stop_scan_requested = False
+
+
+def request_stop_scan():
+    """נקרא מטלגרם (/stop) — מבקש עצירת סריקה באמצע."""
+    global _stop_scan_requested
+    _stop_scan_requested = True
+
+
+def is_stop_requested() -> bool:
+    return _stop_scan_requested
 
 # JavaScript לסריקת כל הדף — מוצא את כל קישורי הפוסטים לפני עיבוד אלמנטים.
 # מאפשר התאמה גם כשהאלמנט עצמו קטן מדי ואין בו לינקים.
@@ -1133,7 +1145,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
     try:
         log.debug("ניווט לדף הקבוצה...")
-        await _goto_with_retry(page, group["url"], wait_until="domcontentloaded")
+        await _goto_with_retry(page, group["url"], wait_until="commit")
         current_url = page.url
         log.debug(f"הגענו ל: {current_url}")
 
@@ -1238,6 +1250,10 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         seen_texts = set()
         skipped_short = 0
         page_post_urls = []  # קישורי פוסטים שנאספו בסריקת דף (page-level scan)
+
+        # דיאגנוסטיקה — כמה אלמנטי פוסט יש בדף לפני תחילת גלילה
+        initial_articles = await page.query_selector_all(SELECTORS)
+        log.debug(f"אלמנטי פוסט בדף לפני גלילה: {len(initial_articles)} (סלקטור: {SELECTORS})")
 
         log.debug("מתחיל גלילה חכמה...")
 
@@ -1467,7 +1483,8 @@ async def scrape_all(email: str, password: str, seen_checker=None,
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
             viewport={"width": 360, "height": 640},
-            locale="he-IL"
+            locale="he-IL",
+            service_workers="block",  # מונע מ-SW של פייסבוק לתקוע את טעינת הדף
         )
         page = await context.new_page()
         await block_heavy_resources(page)
@@ -1476,7 +1493,7 @@ async def scrape_all(email: str, password: str, seen_checker=None,
 
         if session_loaded:
             log.debug("בודק תקינות סשן...")
-            await _goto_with_retry(page, "https://m.facebook.com", wait_until="domcontentloaded")
+            await _goto_with_retry(page, "https://m.facebook.com", wait_until="commit")
             await random_delay(1, 3)
             await dismiss_cookie_dialog(page)
             is_wui = await _is_wui_page(page)
@@ -1492,10 +1509,15 @@ async def scrape_all(email: str, password: str, seen_checker=None,
             await login(page, email, password, browser=browser)
             await save_session(context)
 
-        global _session_needs_refresh
+        global _session_needs_refresh, _stop_scan_requested
         _session_needs_refresh = False
+        _stop_scan_requested = False
 
         for i, group in enumerate(GROUPS, 1):
+            if _stop_scan_requested:
+                log.info("סריקה נעצרה לפי בקשת המשתמש (/stop)")
+                break
+
             log.info(f"--- קבוצה {i}/{len(GROUPS)} ---")
             posts = await scrape_group(page, group, seen_checker=seen_checker)
 
