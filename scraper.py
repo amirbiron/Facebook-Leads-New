@@ -870,10 +870,6 @@ def request_stop_scan():
     global _stop_scan_requested
     _stop_scan_requested = True
 
-
-def is_stop_requested() -> bool:
-    return _stop_scan_requested
-
 # JavaScript לסריקת כל הדף — מוצא את כל קישורי הפוסטים לפני עיבוד אלמנטים.
 # מאפשר התאמה גם כשהאלמנט עצמו קטן מדי ואין בו לינקים.
 _PAGE_SCAN_JS = """() => {
