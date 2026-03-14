@@ -975,7 +975,7 @@ async def _telegram_control_loop(
             if shared_state.get("scan_in_progress"):
                 await asyncio.to_thread(
                     edit_message_text, chat_id_int, message_id,
-                    "כבר יש סריקה שרצה כרגע. אעדכן כשתסתיים.",
+                    "כבר יש סריקה שרצה כרגע.",
                     _back_to_menu_button(),
                 )
                 return
@@ -1179,7 +1179,7 @@ async def _telegram_control_loop(
                     if shared_state.get("scan_in_progress"):
                         await asyncio.to_thread(
                             send_message,
-                            "כבר יש סריקה שרצה כרגע. אעדכן כשתסתיים.",
+                            "כבר יש סריקה שרצה כרגע.",
                             chat_id=chat_id_int,
                             disable_web_page_preview=True,
                         )
@@ -1531,53 +1531,6 @@ async def _telegram_control_loop(
                         )
                     continue
 
-                if cmd in ("/test_search",):
-                    dev_ids = _parse_developer_chat_ids()
-                    if not dev_ids or chat_id_int not in dev_ids:
-                        await asyncio.to_thread(
-                            send_message, "פקודה זו זמינה רק למפתח (DEVELOPER_CHAT_ID).",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                        continue
-                    parts = text.split(maxsplit=1)
-                    query = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "נדל\"ן"
-                    await asyncio.to_thread(
-                        send_message,
-                        f"בודק חיפוש קבוצות בפייסבוק עם מילת חיפוש: {query}\nזה ייקח כ-30 שניות...",
-                        chat_id=chat_id_int, disable_web_page_preview=True,
-                    )
-                    try:
-                        from scraper import test_group_search
-                        fb_email = get_config("fb_email") or FB_EMAIL
-                        fb_password = get_config_encrypted("fb_password") or FB_PASSWORD
-                        search_results = await test_group_search(fb_email, fb_password, query)
-                        mobile_ok = search_results["mobile"].get("hasResults", False)
-                        desktop_ok = search_results["desktop"].get("hasResults", False)
-                        mobile_groups = search_results["mobile"].get("groupLinks", [])
-                        desktop_groups = search_results["desktop"].get("groupLinks", [])
-                        msg_lines = [
-                            f"תוצאות בדיקת חיפוש קבוצות (q={query}):",
-                            "",
-                            f"מובייל: {'עובד' if mobile_ok else 'לא עובד'} ({len(mobile_groups)} קבוצות)",
-                        ]
-                        if mobile_groups:
-                            msg_lines.extend(f"  • {g}" for g in mobile_groups[:5])
-                        msg_lines.append("")
-                        msg_lines.append(f"דסקטופ: {'עובד' if desktop_ok else 'לא עובד'} ({len(desktop_groups)} קבוצות)")
-                        if desktop_groups:
-                            msg_lines.extend(f"  • {g}" for g in desktop_groups[:5])
-                        msg_lines.append("")
-                        msg_lines.append("צילומי מסך: debug_search_mobile.png, debug_search_desktop.png")
-                        await asyncio.to_thread(
-                            send_message, "\n".join(msg_lines),
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                    except Exception as e:
-                        await asyncio.to_thread(
-                            send_message, f"שגיאה בבדיקת חיפוש:\n{e}",
-                            chat_id=chat_id_int, disable_web_page_preview=True,
-                        )
-                    continue
 
         except requests.HTTPError as e:
             if e.response is not None and e.response.status_code == 409:
