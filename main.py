@@ -1537,7 +1537,9 @@ async def _telegram_control_loop(
                     )
                     try:
                         from scraper import test_group_search
-                        search_results = await test_group_search(FB_EMAIL, FB_PASSWORD, query)
+                        fb_email = get_config("fb_email") or FB_EMAIL
+                        fb_password = get_config_encrypted("fb_password") or FB_PASSWORD
+                        search_results = await test_group_search(fb_email, fb_password, query)
                         mobile_ok = search_results["mobile"].get("hasResults", False)
                         desktop_ok = search_results["desktop"].get("hasResults", False)
                         mobile_groups = search_results["mobile"].get("groupLinks", [])

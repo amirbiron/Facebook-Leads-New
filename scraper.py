@@ -7,6 +7,7 @@ import os
 import random
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from logger import get_logger
@@ -1610,7 +1611,7 @@ async def test_group_search(email: str, password: str, query: str = "נדל\"ן"
             await login(mobile_page, email, password, browser=browser)
             await save_session(mobile_ctx)
 
-        search_url = f"https://m.facebook.com/search/groups/?q={query}"
+        search_url = f"https://m.facebook.com/search/groups/?q={quote(query)}"
         log.info(f"[test_group_search] מנווט ל: {search_url}")
         try:
             await _goto_with_retry(mobile_page, search_url, wait_until="commit")
@@ -1659,7 +1660,7 @@ async def test_group_search(email: str, password: str, query: str = "נדל\"ן"
         await block_heavy_resources(desktop_page)
         await load_session(desktop_ctx)
 
-        desktop_search_url = f"https://www.facebook.com/search/groups/?q={query}"
+        desktop_search_url = f"https://www.facebook.com/search/groups/?q={quote(query)}"
         log.info(f"[test_group_search] מנווט ל: {desktop_search_url}")
         try:
             await _goto_with_retry(desktop_page, desktop_search_url, wait_until="commit")
