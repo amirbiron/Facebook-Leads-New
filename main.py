@@ -2398,13 +2398,14 @@ async def main():
             return False
         return True
 
-    async def run_scan_guarded(force: bool = False):
+    async def run_scan_guarded(force: bool = False) -> bool:
+        """מריץ סריקה. מחזיר True אם הסריקה רצה, False אם דולגה בגלל מגבלה יומית."""
         if not force and not _check_daily_limit():
             used = int(daily_automation["total_seconds"] / 60)
             log.info(
                 f"מגבלת אוטומציה יומית הושגה ({used}/{DAILY_AUTOMATION_LIMIT_MINUTES} דקות) — מדלג"
             )
-            return
+            return False
         async with scan_lock:
             shared_state["scan_in_progress"] = True
             shared_state["last_scan_started"] = _now_local()
@@ -2422,6 +2423,7 @@ async def main():
                 shared_state["last_scan_finished"] = _now_local()
                 used = int(daily_automation["total_seconds"] / 60)
                 log.debug(f"זמן אוטומציה יומי: {used} דקות מתוך {DAILY_AUTOMATION_LIMIT_MINUTES or '∞'}")
+        return True
 
     # שמירת רפרנס ל-task כדי למנוע garbage collection
     _control_task = None
@@ -2453,8 +2455,20 @@ async def main():
                     log.info("בקשת סריקה נדחתה בגלל שעות שקטות")
                 else:
                     log.info(f"מריץ סריקה לפי פקודה (force={force})")
-                    await run_scan_guarded(force=force)
-                    did_scan = True
+                    ran = await run_scan_guarded(force=force)
+                    if ran:
+                        did_scan = True
+                    else:
+                        # מגבלת אוטומציה יומית — עדכון המשתמש בטלגרם
+                        used = int(daily_automation["total_seconds"] / 60)
+                        try:
+                            from notifier import send_message as _notify
+                            await asyncio.to_thread(
+                                _notify,
+                                f"⏳ מגבלת אוטומציה יומית הושגה ({used}/{DAILY_AUTOMATION_LIMIT_MINUTES} דקות). השתמש /scan_force לסריקה בכל זאת.",
+                            )
+                        except Exception:
+                            pass
 
             if not did_scan:
                 now = _now_local()
