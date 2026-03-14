@@ -7,6 +7,7 @@ import os
 import random
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from logger import get_logger
@@ -747,7 +748,11 @@ async def login(page, email: str, password: str, browser=None):
     # --- בדיקות אחרי לוגין (משותף לשני המסלולים) ---
     # אם השתמשנו בדסקטופ, ננווט למובייל כדי לוודא שה-cookies עובדים
     if browser:
-        await _goto_with_retry(page, "https://m.facebook.com", wait_until="domcontentloaded")
+        await _goto_with_retry(page, "https://m.facebook.com", wait_until="commit")
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except PlaywrightTimeout:
+            log.debug("domcontentloaded לא הגיע תוך 15 שניות — ממשיכים")
         await random_delay(1, 3)
         current_url = page.url
     else:
@@ -861,6 +866,14 @@ def _extract_id_from_data_attrs(attrs_json: str) -> str | None:
 _extraction_stats: dict[str, int] = {"success": 0, "fallback": 0}
 # דגל: scrape_group זיהה מצב wui → scrape_all צריך להתחבר מחדש
 _session_needs_refresh = False
+# דגל לעצירת סריקה באמצע — נבדק בלולאת הקבוצות
+_stop_scan_requested = False
+
+
+def request_stop_scan():
+    """נקרא מטלגרם (/stop) — מבקש עצירת סריקה באמצע."""
+    global _stop_scan_requested
+    _stop_scan_requested = True
 
 # JavaScript לסריקת כל הדף — מוצא את כל קישורי הפוסטים לפני עיבוד אלמנטים.
 # מאפשר התאמה גם כשהאלמנט עצמו קטן מדי ואין בו לינקים.
@@ -1133,7 +1146,13 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
     try:
         log.debug("ניווט לדף הקבוצה...")
-        await _goto_with_retry(page, group["url"], wait_until="domcontentloaded")
+        await _goto_with_retry(page, group["url"], wait_until="commit")
+        # commit חוזר מהר אבל ה-DOM עדיין לא מוכן — ממתינים ל-domcontentloaded
+        # עם timeout קצר. אם פג — ממשיכים בכל זאת (עדיף מ-135 שניות תקיעה).
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except PlaywrightTimeout:
+            log.debug("domcontentloaded לא הגיע תוך 15 שניות — ממשיכים")
         current_url = page.url
         log.debug(f"הגענו ל: {current_url}")
 
@@ -1238,6 +1257,10 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         seen_texts = set()
         skipped_short = 0
         page_post_urls = []  # קישורי פוסטים שנאספו בסריקת דף (page-level scan)
+
+        # דיאגנוסטיקה — כמה אלמנטי פוסט יש בדף לפני תחילת גלילה
+        initial_articles = await page.query_selector_all(SELECTORS)
+        log.debug(f"אלמנטי פוסט בדף לפני גלילה: {len(initial_articles)} (סלקטור: {SELECTORS})")
 
         log.debug("מתחיל גלילה חכמה...")
 
@@ -1434,6 +1457,11 @@ async def scrape_all(email: str, password: str, seen_checker=None,
     """
     all_posts = []
 
+    # איפוס דגל עצירה מיד בתחילת הסריקה — לפני כל פעולה async,
+    # כדי למנוע race condition עם /stop שנשלח בזמן הפעלת דפדפן/לוגין.
+    global _stop_scan_requested
+    _stop_scan_requested = False
+
     if not GROUPS:
         log.warning("אין קבוצות מוגדרות — מדלג על סריקה. הוסף קבוצות דרך הפאנל, טלגרם, או FB_GROUPS")
         return all_posts
@@ -1467,7 +1495,8 @@ async def scrape_all(email: str, password: str, seen_checker=None,
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
             viewport={"width": 360, "height": 640},
-            locale="he-IL"
+            locale="he-IL",
+            service_workers="block",  # מונע מ-SW של פייסבוק לתקוע את טעינת הדף
         )
         page = await context.new_page()
         await block_heavy_resources(page)
@@ -1476,7 +1505,11 @@ async def scrape_all(email: str, password: str, seen_checker=None,
 
         if session_loaded:
             log.debug("בודק תקינות סשן...")
-            await _goto_with_retry(page, "https://m.facebook.com", wait_until="domcontentloaded")
+            await _goto_with_retry(page, "https://m.facebook.com", wait_until="commit")
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except PlaywrightTimeout:
+                log.debug("domcontentloaded לא הגיע תוך 15 שניות — ממשיכים")
             await random_delay(1, 3)
             await dismiss_cookie_dialog(page)
             is_wui = await _is_wui_page(page)
@@ -1496,6 +1529,10 @@ async def scrape_all(email: str, password: str, seen_checker=None,
         _session_needs_refresh = False
 
         for i, group in enumerate(GROUPS, 1):
+            if _stop_scan_requested:
+                log.info("סריקה נעצרה לפי בקשת המשתמש (/stop)")
+                break
+
             log.info(f"--- קבוצה {i}/{len(GROUPS)} ---")
             posts = await scrape_group(page, group, seen_checker=seen_checker)
 
@@ -1542,3 +1579,128 @@ async def scrape_all(email: str, password: str, seen_checker=None,
 
     log.info(f"סריקה הסתיימה — סה\"כ {len(all_posts)} פוסטים מ-{len(GROUPS)} קבוצות")
     return all_posts
+
+
+async def test_group_search(email: str, password: str, query: str = "נדל\"ן") -> dict:
+    """בדיקת היתכנות — האם חיפוש קבוצות עובד עם הסשן הקיים?
+
+    מנווט ל-/search/groups/?q=<query> (גם מובייל וגם דסקטופ) ובודק
+    אם יש תוצאות ב-HTML. מחזיר dict עם סיכום הממצאים.
+    """
+    results = {"query": query, "mobile": {}, "desktop": {}}
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+
+        # --- בדיקה במובייל ---
+        mobile_ctx = await browser.new_context(
+            user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            viewport={"width": 360, "height": 640},
+            locale="he-IL",
+            service_workers="block",
+        )
+        mobile_page = await mobile_ctx.new_page()
+        await block_heavy_resources(mobile_page)
+
+        session_loaded = await load_session(mobile_ctx)
+        if not session_loaded:
+            log.info("[test_group_search] אין סשן שמור — מתחבר...")
+            await login(mobile_page, email, password, browser=browser)
+            await save_session(mobile_ctx)
+
+        search_url = f"https://m.facebook.com/search/groups/?q={quote(query)}"
+        log.info(f"[test_group_search] מנווט ל: {search_url}")
+        try:
+            await _goto_with_retry(mobile_page, search_url, wait_until="commit")
+            await mobile_page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception:
+            pass
+        await random_delay(2, 4)
+
+        mobile_info = await mobile_page.evaluate("""() => {
+            const text = document.body?.innerText || '';
+            const links = [...document.querySelectorAll('a[href*="/groups/"]')];
+            const groupLinks = links
+                .map(a => a.href)
+                .filter(h => h.includes('/groups/') && !h.includes('/search/'));
+            return {
+                url: location.href,
+                textLength: text.length,
+                textSnippet: text.substring(0, 800),
+                totalLinks: document.querySelectorAll('a').length,
+                groupLinks: groupLinks.slice(0, 15),
+                hasResults: groupLinks.length > 0,
+            };
+        }""")
+        results["mobile"] = mobile_info
+        log.info(f"[test_group_search] מובייל: {mobile_info['totalLinks']} לינקים, "
+                 f"{len(mobile_info['groupLinks'])} לינקי קבוצות, "
+                 f"hasResults={mobile_info['hasResults']}")
+
+        # שמירת צילום מסך לדיבוג
+        try:
+            await mobile_page.screenshot(path="debug_search_mobile.png")
+            log.info("[test_group_search] צילום מסך: debug_search_mobile.png")
+        except Exception:
+            pass
+
+        await mobile_ctx.close()
+
+        # --- בדיקה בדסקטופ ---
+        desktop_ctx = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 720},
+            locale="he-IL",
+            service_workers="block",
+        )
+        desktop_page = await desktop_ctx.new_page()
+        await block_heavy_resources(desktop_page)
+        await load_session(desktop_ctx)
+
+        desktop_search_url = f"https://www.facebook.com/search/groups/?q={quote(query)}"
+        log.info(f"[test_group_search] מנווט ל: {desktop_search_url}")
+        try:
+            await _goto_with_retry(desktop_page, desktop_search_url, wait_until="commit")
+            await desktop_page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception:
+            pass
+        await random_delay(2, 4)
+
+        desktop_info = await desktop_page.evaluate("""() => {
+            const text = document.body?.innerText || '';
+            const links = [...document.querySelectorAll('a[href*="/groups/"]')];
+            const groupLinks = links
+                .map(a => a.href)
+                .filter(h => h.includes('/groups/') && !h.includes('/search/'));
+            return {
+                url: location.href,
+                textLength: text.length,
+                textSnippet: text.substring(0, 800),
+                totalLinks: document.querySelectorAll('a').length,
+                groupLinks: groupLinks.slice(0, 15),
+                hasResults: groupLinks.length > 0,
+            };
+        }""")
+        results["desktop"] = desktop_info
+        log.info(f"[test_group_search] דסקטופ: {desktop_info['totalLinks']} לינקים, "
+                 f"{len(desktop_info['groupLinks'])} לינקי קבוצות, "
+                 f"hasResults={desktop_info['hasResults']}")
+
+        try:
+            await desktop_page.screenshot(path="debug_search_desktop.png")
+            log.info("[test_group_search] צילום מסך: debug_search_desktop.png")
+        except Exception:
+            pass
+
+        await desktop_ctx.close()
+        await browser.close()
+
+    # סיכום
+    log.info(f"[test_group_search] סיכום: מובייל={'עובד' if results['mobile'].get('hasResults') else 'לא עובד'}, "
+             f"דסקטופ={'עובד' if results['desktop'].get('hasResults') else 'לא עובד'}")
+    return results

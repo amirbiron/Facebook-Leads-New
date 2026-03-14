@@ -29,6 +29,9 @@ TELEGRAM_CONTROL = os.environ.get("TELEGRAM_CONTROL", "1").strip().lower() not i
 
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", os.environ.get("PORT", "8080")))
 DEVELOPER_CHAT_ID = os.environ.get("DEVELOPER_CHAT_ID", "").strip()
+# מגבלת זמן אוטומציה יומית (בדקות). 0 = ללא מגבלה.
+# מודד זמן סריקה בפועל (דפדפן פתוח), לא כולל המתנה בין סבבים.
+DAILY_AUTOMATION_LIMIT_MINUTES = int(os.environ.get("DAILY_AUTOMATION_LIMIT_MINUTES", "0"))
 _panel_url_raw = os.environ.get("PANEL_URL", "").strip()
 PANEL_URL = _panel_url_raw if _panel_url_raw.startswith(("http://", "https://")) else ""
 
@@ -1211,6 +1214,29 @@ async def _telegram_control_loop(
                     )
                     continue
 
+                if cmd in ("/stop",):
+                    dev_ids = _parse_developer_chat_ids()
+                    if not dev_ids or chat_id_int not in dev_ids:
+                        await asyncio.to_thread(
+                            send_message, "פקודה זו זמינה רק למפתח (DEVELOPER_CHAT_ID).",
+                            chat_id=chat_id_int,
+                        )
+                        continue
+                    if not shared_state.get("scan_in_progress"):
+                        await asyncio.to_thread(
+                            send_message, "אין סריקה פעילה כרגע.",
+                            chat_id=chat_id_int,
+                        )
+                        continue
+                    from scraper import request_stop_scan
+                    request_stop_scan()
+                    await asyncio.to_thread(
+                        send_message,
+                        "ביקשתי עצירת סריקה — תיעצר אחרי הקבוצה הנוכחית.",
+                        chat_id=chat_id_int,
+                    )
+                    continue
+
                 # ── ניהול קבוצות דינמי ──────────────────────────
                 if cmd in ("/groups",):
                     msg_text = _build_groups_text()
@@ -1490,6 +1516,54 @@ async def _telegram_control_loop(
                     except Exception as e:
                         await asyncio.to_thread(
                             send_message, f"שגיאה בסריקת debug:\n{e}",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                    continue
+
+                if cmd in ("/test_search",):
+                    dev_ids = _parse_developer_chat_ids()
+                    if not dev_ids or chat_id_int not in dev_ids:
+                        await asyncio.to_thread(
+                            send_message, "פקודה זו זמינה רק למפתח (DEVELOPER_CHAT_ID).",
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                        continue
+                    parts = text.split(maxsplit=1)
+                    query = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "נדל\"ן"
+                    await asyncio.to_thread(
+                        send_message,
+                        f"בודק חיפוש קבוצות בפייסבוק עם מילת חיפוש: {query}\nזה ייקח כ-30 שניות...",
+                        chat_id=chat_id_int, disable_web_page_preview=True,
+                    )
+                    try:
+                        from scraper import test_group_search
+                        fb_email = get_config("fb_email") or FB_EMAIL
+                        fb_password = get_config_encrypted("fb_password") or FB_PASSWORD
+                        search_results = await test_group_search(fb_email, fb_password, query)
+                        mobile_ok = search_results["mobile"].get("hasResults", False)
+                        desktop_ok = search_results["desktop"].get("hasResults", False)
+                        mobile_groups = search_results["mobile"].get("groupLinks", [])
+                        desktop_groups = search_results["desktop"].get("groupLinks", [])
+                        msg_lines = [
+                            f"תוצאות בדיקת חיפוש קבוצות (q={query}):",
+                            "",
+                            f"מובייל: {'עובד' if mobile_ok else 'לא עובד'} ({len(mobile_groups)} קבוצות)",
+                        ]
+                        if mobile_groups:
+                            msg_lines.extend(f"  • {g}" for g in mobile_groups[:5])
+                        msg_lines.append("")
+                        msg_lines.append(f"דסקטופ: {'עובד' if desktop_ok else 'לא עובד'} ({len(desktop_groups)} קבוצות)")
+                        if desktop_groups:
+                            msg_lines.extend(f"  • {g}" for g in desktop_groups[:5])
+                        msg_lines.append("")
+                        msg_lines.append("צילומי מסך: debug_search_mobile.png, debug_search_desktop.png")
+                        await asyncio.to_thread(
+                            send_message, "\n".join(msg_lines),
+                            chat_id=chat_id_int, disable_web_page_preview=True,
+                        )
+                    except Exception as e:
+                        await asyncio.to_thread(
+                            send_message, f"שגיאה בבדיקת חיפוש:\n{e}",
                             chat_id=chat_id_int, disable_web_page_preview=True,
                         )
                     continue
@@ -2298,6 +2372,11 @@ async def main():
         "last_scan_started": None,
         "last_scan_finished": None,
     }
+    # מעקב זמן אוטומציה יומי (בשניות) — מודד זמן סריקה בפועל בלבד
+    daily_automation: dict = {
+        "date": _now_local().date(),
+        "total_seconds": 0.0,
+    }
     # חשיפת shared_state ל-health check endpoint
     global _health_shared_state
     _health_shared_state = shared_state
@@ -2306,15 +2385,47 @@ async def main():
     scan_force_event = asyncio.Event()
     scan_lock = asyncio.Lock()
 
-    async def run_scan_guarded():
+    def _check_daily_limit() -> bool:
+        """בודק אם חרגנו ממגבלת הזמן היומית. מחזיר True אם מותר לסרוק."""
+        if DAILY_AUTOMATION_LIMIT_MINUTES <= 0:
+            return True
+        today = _now_local().date()
+        if daily_automation["date"] != today:
+            daily_automation["date"] = today
+            daily_automation["total_seconds"] = 0.0
+            shared_state["daily_limit_notified"] = False
+        limit_secs = DAILY_AUTOMATION_LIMIT_MINUTES * 60
+        if daily_automation["total_seconds"] >= limit_secs:
+            return False
+        return True
+
+    async def run_scan_guarded(force: bool = False) -> bool:
+        """מריץ סריקה. מחזיר True אם הסריקה רצה, False אם דולגה בגלל מגבלה יומית."""
         async with scan_lock:
+            if not force and not _check_daily_limit():
+                used = int(daily_automation["total_seconds"] / 60)
+                log.info(
+                    f"מגבלת אוטומציה יומית הושגה ({used}/{DAILY_AUTOMATION_LIMIT_MINUTES} דקות) — מדלג"
+                )
+                return False
             shared_state["scan_in_progress"] = True
             shared_state["last_scan_started"] = _now_local()
+            scan_start = asyncio.get_event_loop().time()
             try:
                 await run_cycle()
             finally:
+                elapsed = asyncio.get_event_loop().time() - scan_start
+                today = _now_local().date()
+                if daily_automation["date"] != today:
+                    daily_automation["date"] = today
+                    daily_automation["total_seconds"] = 0.0
+                    shared_state["daily_limit_notified"] = False
+                daily_automation["total_seconds"] += elapsed
                 shared_state["scan_in_progress"] = False
                 shared_state["last_scan_finished"] = _now_local()
+                used = int(daily_automation["total_seconds"] / 60)
+                log.debug(f"זמן אוטומציה יומי: {used} דקות מתוך {DAILY_AUTOMATION_LIMIT_MINUTES or '∞'}")
+        return True
 
     # שמירת רפרנס ל-task כדי למנוע garbage collection
     _control_task = None
@@ -2342,12 +2453,23 @@ async def main():
 
                 if not force and quiet and _is_quiet_now(_now_local(), quiet):
                     # Should not happen (we don't schedule /scan during quiet hours),
-                    # but guard anyway.
+                    # but guard anyway. did_scan stays False → quiet-hours sleep path runs.
                     log.info("בקשת סריקה נדחתה בגלל שעות שקטות")
                 else:
+                    did_scan = True  # פקודה טופלה — לא לנסות סריקה מתוזמנת
                     log.info(f"מריץ סריקה לפי פקודה (force={force})")
-                    await run_scan_guarded()
-                    did_scan = True
+                    ran = await run_scan_guarded(force=force)
+                    if not ran:
+                        # מגבלת אוטומציה יומית — עדכון המשתמש בטלגרם
+                        used = int(daily_automation["total_seconds"] / 60)
+                        try:
+                            from notifier import send_message as _notify
+                            await asyncio.to_thread(
+                                _notify,
+                                f"⏳ מגבלת אוטומציה יומית הושגה ({used}/{DAILY_AUTOMATION_LIMIT_MINUTES} דקות). השתמש /scan_force לסריקה בכל זאת.",
+                            )
+                        except Exception:
+                            pass
 
             if not did_scan:
                 now = _now_local()
@@ -2366,7 +2488,19 @@ async def main():
                         pass
                     continue
 
-                await run_scan_guarded()
+                ran = await run_scan_guarded()
+                if not ran and not shared_state.get("daily_limit_notified"):
+                    # הודעה חד-פעמית ליום שהמגבלה הושגה בסריקות אוטומטיות
+                    shared_state["daily_limit_notified"] = True
+                    used = int(daily_automation["total_seconds"] / 60)
+                    try:
+                        from notifier import send_message as _notify
+                        await asyncio.to_thread(
+                            _notify,
+                            f"⏳ מגבלת אוטומציה יומית הושגה ({used}/{DAILY_AUTOMATION_LIMIT_MINUTES} דקות). סריקות אוטומטיות מופסקות להיום.",
+                        )
+                    except Exception:
+                        pass
         except Exception as e:
             log.error(f"שגיאה לא צפויה: {e}", exc_info=True)
             try:
