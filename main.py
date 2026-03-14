@@ -2350,8 +2350,8 @@ async def main():
             return False
         return True
 
-    async def run_scan_guarded():
-        if not _check_daily_limit():
+    async def run_scan_guarded(force: bool = False):
+        if not force and not _check_daily_limit():
             used = int(daily_automation["total_seconds"] / 60)
             log.info(
                 f"מגבלת אוטומציה יומית הושגה ({used}/{DAILY_AUTOMATION_LIMIT_MINUTES} דקות) — מדלג"
@@ -2405,7 +2405,7 @@ async def main():
                     log.info("בקשת סריקה נדחתה בגלל שעות שקטות")
                 else:
                     log.info(f"מריץ סריקה לפי פקודה (force={force})")
-                    await run_scan_guarded()
+                    await run_scan_guarded(force=force)
                     did_scan = True
 
             if not did_scan:
