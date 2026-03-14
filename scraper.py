@@ -1601,6 +1601,7 @@ async def test_group_search(email: str, password: str, query: str = "נדל\"ן"
                        "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
             viewport={"width": 360, "height": 640},
             locale="he-IL",
+            service_workers="block",
         )
         mobile_page = await mobile_ctx.new_page()
         await block_heavy_resources(mobile_page)
@@ -1655,6 +1656,7 @@ async def test_group_search(email: str, password: str, query: str = "נדל\"ן"
                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 720},
             locale="he-IL",
+            service_workers="block",
         )
         desktop_page = await desktop_ctx.new_page()
         await block_heavy_resources(desktop_page)
