@@ -979,6 +979,18 @@ async def _telegram_control_loop(
                     _back_to_menu_button(),
                 )
                 return
+            # cooldown דקה מסיום סריקה אחרונה
+            last_finished = shared_state.get("last_scan_finished")
+            if last_finished:
+                elapsed = (now - last_finished).total_seconds()
+                if elapsed < 60:
+                    remaining = int(60 - elapsed)
+                    await asyncio.to_thread(
+                        edit_message_text, chat_id_int, message_id,
+                        f"סריקה הסתיימה לפני {int(elapsed)} שניות. נסה שוב בעוד {remaining} שניות.",
+                        _back_to_menu_button(),
+                    )
+                    return
             quiet = shared_state.get("quiet")
             if quiet and _is_quiet_now(now, quiet):
                 qh_db = get_config("quiet_hours", _CONFIG_NOT_SET)
