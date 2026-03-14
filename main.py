@@ -2393,6 +2393,7 @@ async def main():
         if daily_automation["date"] != today:
             daily_automation["date"] = today
             daily_automation["total_seconds"] = 0.0
+            shared_state["daily_limit_notified"] = False
         limit_secs = DAILY_AUTOMATION_LIMIT_MINUTES * 60
         if daily_automation["total_seconds"] >= limit_secs:
             return False
@@ -2418,6 +2419,7 @@ async def main():
                 if daily_automation["date"] != today:
                     daily_automation["date"] = today
                     daily_automation["total_seconds"] = 0.0
+                    shared_state["daily_limit_notified"] = False
                 daily_automation["total_seconds"] += elapsed
                 shared_state["scan_in_progress"] = False
                 shared_state["last_scan_finished"] = _now_local()
@@ -2448,13 +2450,13 @@ async def main():
                 force = scan_force_event.is_set()
                 scan_now_event.clear()
                 scan_force_event.clear()
-                did_scan = True  # פקודה טופלה — לא לנסות סריקה מתוזמנת
 
                 if not force and quiet and _is_quiet_now(_now_local(), quiet):
                     # Should not happen (we don't schedule /scan during quiet hours),
-                    # but guard anyway.
+                    # but guard anyway. did_scan stays False → quiet-hours sleep path runs.
                     log.info("בקשת סריקה נדחתה בגלל שעות שקטות")
                 else:
+                    did_scan = True  # פקודה טופלה — לא לנסות סריקה מתוזמנת
                     log.info(f"מריץ סריקה לפי פקודה (force={force})")
                     ran = await run_scan_guarded(force=force)
                     if not ran:
@@ -2486,7 +2488,19 @@ async def main():
                         pass
                     continue
 
-                await run_scan_guarded()
+                ran = await run_scan_guarded()
+                if not ran and not shared_state.get("daily_limit_notified"):
+                    # הודעה חד-פעמית ליום שהמגבלה הושגה בסריקות אוטומטיות
+                    shared_state["daily_limit_notified"] = True
+                    used = int(daily_automation["total_seconds"] / 60)
+                    try:
+                        from notifier import send_message as _notify
+                        await asyncio.to_thread(
+                            _notify,
+                            f"⏳ מגבלת אוטומציה יומית הושגה ({used}/{DAILY_AUTOMATION_LIMIT_MINUTES} דקות). סריקות אוטומטיות מופסקות להיום.",
+                        )
+                    except Exception:
+                        pass
         except Exception as e:
             log.error(f"שגיאה לא צפויה: {e}", exc_info=True)
             try:
