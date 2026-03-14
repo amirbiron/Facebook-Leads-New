@@ -2448,6 +2448,7 @@ async def main():
                 force = scan_force_event.is_set()
                 scan_now_event.clear()
                 scan_force_event.clear()
+                did_scan = True  # פקודה טופלה — לא לנסות סריקה מתוזמנת
 
                 if not force and quiet and _is_quiet_now(_now_local(), quiet):
                     # Should not happen (we don't schedule /scan during quiet hours),
@@ -2456,9 +2457,7 @@ async def main():
                 else:
                     log.info(f"מריץ סריקה לפי פקודה (force={force})")
                     ran = await run_scan_guarded(force=force)
-                    if ran:
-                        did_scan = True
-                    else:
+                    if not ran:
                         # מגבלת אוטומציה יומית — עדכון המשתמש בטלגרם
                         used = int(daily_automation["total_seconds"] / 60)
                         try:
