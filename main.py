@@ -2400,13 +2400,13 @@ async def main():
 
     async def run_scan_guarded(force: bool = False) -> bool:
         """מריץ סריקה. מחזיר True אם הסריקה רצה, False אם דולגה בגלל מגבלה יומית."""
-        if not force and not _check_daily_limit():
-            used = int(daily_automation["total_seconds"] / 60)
-            log.info(
-                f"מגבלת אוטומציה יומית הושגה ({used}/{DAILY_AUTOMATION_LIMIT_MINUTES} דקות) — מדלג"
-            )
-            return False
         async with scan_lock:
+            if not force and not _check_daily_limit():
+                used = int(daily_automation["total_seconds"] / 60)
+                log.info(
+                    f"מגבלת אוטומציה יומית הושגה ({used}/{DAILY_AUTOMATION_LIMIT_MINUTES} דקות) — מדלג"
+                )
+                return False
             shared_state["scan_in_progress"] = True
             shared_state["last_scan_started"] = _now_local()
             scan_start = asyncio.get_event_loop().time()
