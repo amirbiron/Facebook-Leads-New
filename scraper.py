@@ -748,6 +748,10 @@ async def login(page, email: str, password: str, browser=None):
     # אם השתמשנו בדסקטופ, ננווט למובייל כדי לוודא שה-cookies עובדים
     if browser:
         await _goto_with_retry(page, "https://m.facebook.com", wait_until="commit")
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except PlaywrightTimeout:
+            log.debug("domcontentloaded לא הגיע תוך 15 שניות — ממשיכים")
         await random_delay(1, 3)
         current_url = page.url
     else:
@@ -1142,6 +1146,12 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
     try:
         log.debug("ניווט לדף הקבוצה...")
         await _goto_with_retry(page, group["url"], wait_until="commit")
+        # commit חוזר מהר אבל ה-DOM עדיין לא מוכן — ממתינים ל-domcontentloaded
+        # עם timeout קצר. אם פג — ממשיכים בכל זאת (עדיף מ-135 שניות תקיעה).
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except PlaywrightTimeout:
+            log.debug("domcontentloaded לא הגיע תוך 15 שניות — ממשיכים")
         current_url = page.url
         log.debug(f"הגענו ל: {current_url}")
 
@@ -1490,6 +1500,10 @@ async def scrape_all(email: str, password: str, seen_checker=None,
         if session_loaded:
             log.debug("בודק תקינות סשן...")
             await _goto_with_retry(page, "https://m.facebook.com", wait_until="commit")
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except PlaywrightTimeout:
+                log.debug("domcontentloaded לא הגיע תוך 15 שניות — ממשיכים")
             await random_delay(1, 3)
             await dismiss_cookie_dialog(page)
             is_wui = await _is_wui_page(page)
