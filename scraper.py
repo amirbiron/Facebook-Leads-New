@@ -1456,6 +1456,11 @@ async def scrape_all(email: str, password: str, seen_checker=None,
     """
     all_posts = []
 
+    # איפוס דגל עצירה מיד בתחילת הסריקה — לפני כל פעולה async,
+    # כדי למנוע race condition עם /stop שנשלח בזמן הפעלת דפדפן/לוגין.
+    global _stop_scan_requested
+    _stop_scan_requested = False
+
     if not GROUPS:
         log.warning("אין קבוצות מוגדרות — מדלג על סריקה. הוסף קבוצות דרך הפאנל, טלגרם, או FB_GROUPS")
         return all_posts
@@ -1519,9 +1524,8 @@ async def scrape_all(email: str, password: str, seen_checker=None,
             await login(page, email, password, browser=browser)
             await save_session(context)
 
-        global _session_needs_refresh, _stop_scan_requested
+        global _session_needs_refresh
         _session_needs_refresh = False
-        _stop_scan_requested = False
 
         for i, group in enumerate(GROUPS, 1):
             if _stop_scan_requested:
