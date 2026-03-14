@@ -1171,8 +1171,11 @@ async def _telegram_control_loop(
                         )
                     continue
 
-                if cmd in ("/scan",):
+                if cmd in ("/scan", "/scan_force"):
+                    is_force = cmd == "/scan_force"
                     now = _now_local()
+
+                    # הגנה 1: סריקה כבר רצה כרגע
                     if shared_state.get("scan_in_progress"):
                         await asyncio.to_thread(
                             send_message,
@@ -1182,33 +1185,41 @@ async def _telegram_control_loop(
                         )
                         continue
 
-                    quiet = shared_state.get("quiet")
-                    qh_db = get_config("quiet_hours", _CONFIG_NOT_SET)
-                    quiet_spec = qh_db if qh_db is not _CONFIG_NOT_SET else QUIET_HOURS
-                    if quiet and _is_quiet_now(now, quiet):
-                        await asyncio.to_thread(
-                            send_message,
-                            f"שעות שקטות פעילות עכשיו ({quiet_spec}, {TIMEZONE_NAME}). אם בכל זאת צריך, השתמש /scan_force.",
-                            chat_id=chat_id_int,
-                            disable_web_page_preview=True,
-                        )
-                        continue
+                    # הגנה 2: cooldown דקה מסיום סריקה אחרונה
+                    last_finished = shared_state.get("last_scan_finished")
+                    if last_finished:
+                        elapsed = (now - last_finished).total_seconds()
+                        if elapsed < 60:
+                            remaining = int(60 - elapsed)
+                            await asyncio.to_thread(
+                                send_message,
+                                f"סריקה הסתיימה לפני {int(elapsed)} שניות. נסה שוב בעוד {remaining} שניות.",
+                                chat_id=chat_id_int,
+                                disable_web_page_preview=True,
+                            )
+                            continue
 
+                    # בדיקת שעות שקטות (רק ל-/scan רגיל)
+                    if not is_force:
+                        quiet = shared_state.get("quiet")
+                        qh_db = get_config("quiet_hours", _CONFIG_NOT_SET)
+                        quiet_spec = qh_db if qh_db is not _CONFIG_NOT_SET else QUIET_HOURS
+                        if quiet and _is_quiet_now(now, quiet):
+                            await asyncio.to_thread(
+                                send_message,
+                                f"שעות שקטות פעילות עכשיו ({quiet_spec}, {TIMEZONE_NAME}). אם בכל זאת צריך, השתמש /scan_force.",
+                                chat_id=chat_id_int,
+                                disable_web_page_preview=True,
+                            )
+                            continue
+
+                    if is_force:
+                        scan_force_event.set()
                     scan_now_event.set()
+                    label = "forced" if is_force else "רגילה"
                     await asyncio.to_thread(
                         send_message,
-                        "מתזמן סריקה עכשיו.",
-                        chat_id=chat_id_int,
-                        disable_web_page_preview=True,
-                    )
-                    continue
-
-                if cmd in ("/scan_force",):
-                    scan_force_event.set()
-                    scan_now_event.set()
-                    await asyncio.to_thread(
-                        send_message,
-                        "מתזמן סריקה עכשיו (forced).",
+                        f"מתזמן סריקה עכשיו ({label}).",
                         chat_id=chat_id_int,
                         disable_web_page_preview=True,
                     )
