@@ -136,6 +136,11 @@
 - fallback חכם: אם באצ' נכשל (שגיאת API, JSON לא תקין, אורך שגוי, אלמנט null) — נופל לסיווג בודד פוסט-פוסט.
 - **פרומפט סיווג**: `_CLASSIFICATION_CRITERIA_DEFAULT` נטען מ-env var `CLASSIFICATION_CRITERIA`. המשתמש יכול להגדיר פרומפט מותאם דרך הפאנל (נשמר ב-DB כ-`classification_criteria`, עדיפות על env). אם שניהם ריקים — הבוט לא יסווג.
 
+## פקודות טלגרם — ארכיטקטורה
+- **כל פקודה מטופלת בשני מקומות**: (1) כפקודת טקסט (`cmd == "/something"`) בלולאת הפקודות, (2) ככפתור callback (`cb_data == "something"`) ב-`handle_callback`. **כששינוי לוגיקה של פקודה — לעדכן בשניהם**.
+- **רישום בשלושה מקומות**: (1) `setMyCommands` — רשימת פקודות בתפריט `/`, (2) `_main_menu_buttons` או `_settings_menu_buttons` — כפתורי inline, (3) handler בלולאת הפקודות. **הוספת פקודה חדשה מחייבת עדכון בכל השלושה**.
+- כפתורי תפריט ב-`_main_menu_buttons()` נקראים מחדש בכל הצגה — אפשר להשתמש במצב דינמי (כמו vacation toggle).
+
 ## מצב חופשה (Vacation Mode)
 - **`/vacation on`** — עוצר סריקות אוטומטיות. נשמר ב-DB (`_config.vacation_mode = "on"`), שורד restart.
 - **`/vacation off`** — מחזיר לפעולה רגילה. חייב לקרוא `scan_now_event.set()` כדי להעיר את הלולאה הראשית מיד.
