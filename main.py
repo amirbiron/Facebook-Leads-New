@@ -2206,6 +2206,7 @@ async def run_cycle():
                     has_real_url=post.get("has_real_url", True),
                     also_in=post.get("also_in"),
                     is_hot=bool(hot_kw),
+                    author_url=post.get("author_url", ""),
                 )
                 if not sent_ok:
                     log.warning(f"שליחת force_send נכשלה — הליד לא יישמר ב-DB (id={post['id'][:20]})")
@@ -2288,6 +2289,7 @@ async def run_cycle():
                         has_real_url=post.get("has_real_url", True),
                         also_in=post.get("also_in"),
                         is_hot=bool(hot_kw),
+                        author_url=post.get("author_url", ""),
                     )
                     if not sent_ok:
                         log.warning(f"שליחת ליד AI נכשלה — הליד לא יישמר ב-DB (id={post['id'][:20]})")
