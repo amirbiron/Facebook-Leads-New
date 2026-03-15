@@ -9,7 +9,7 @@
 | קובץ | תפקיד |
 |-------|--------|
 | `scraper.py` | גלישה בפייסבוק עם Playwright (אתר מובייל) |
-| `main.py` | אורקסטרציה, לולאת טלגרם, שעות שקטות |
+| `main.py` | אורקסטרציה, לולאת טלגרם, שעות שקטות, מצב חופשה |
 | `classifier.py` | סיווג פוסטים עם OpenAI gpt-4.1-mini — תומך סיווג באצ'ים (`classify_batch`) + auto-fallback למודל הבא |
 | `notifier.py` | שליחת הודעות טלגרם |
 | `database.py` | SQLite — seen_posts, sent_leads, groups, keywords, _config |
@@ -136,6 +136,13 @@
 - fallback חכם: אם באצ' נכשל (שגיאת API, JSON לא תקין, אורך שגוי, אלמנט null) — נופל לסיווג בודד פוסט-פוסט.
 - **פרומפט סיווג**: `_CLASSIFICATION_CRITERIA_DEFAULT` נטען מ-env var `CLASSIFICATION_CRITERIA`. המשתמש יכול להגדיר פרומפט מותאם דרך הפאנל (נשמר ב-DB כ-`classification_criteria`, עדיפות על env). אם שניהם ריקים — הבוט לא יסווג.
 
+## מצב חופשה (Vacation Mode)
+- **`/vacation on`** — עוצר סריקות אוטומטיות. נשמר ב-DB (`_config.vacation_mode = "on"`), שורד restart.
+- **`/vacation off`** — מחזיר לפעולה רגילה. חייב לקרוא `scan_now_event.set()` כדי להעיר את הלולאה הראשית מיד.
+- סריקות ידניות (`/scan`, `/scan_force`, כפתור סריקה) **עובדות גם בזמן חופשה** — לא חוסמים את המשתמש.
+- מצב חופשה מוצג ב-`/status` וככפתור toggle בתפריט הראשי (טקסט דינמי).
+- **כלל חשוב**: כשמכבים מצב השהיה (חופשה, שעות שקטות וכו'), תמיד לירות `scan_now_event.set()` — אחרת הלולאה ישנה עד ה-timeout הבא.
+
 ## async
 - כל הקוד async. Playwright משתמש ב-async API.
 - קריאות סינכרוניות (requests, sqlite) חייבות `asyncio.to_thread()`.
@@ -145,7 +152,7 @@
 ```bash
 python -m pytest tests.py -v
 ```
-339 טסטים ב-`tests.py` מכסים:
+447 טסטים ב-`tests.py` מכסים:
 - `passes_keyword_filter()` — סינון לפי מילות מפתח (כולל רשימה ריקה)
 - `is_blocked()` — חסימת מילים אסורות
 - `extract_post_id()` — חילוץ ID מ-URLs בפורמטים שונים
@@ -156,6 +163,7 @@ python -m pytest tests.py -v
 - Groups CRUD — הוספה, מחיקה, נרמול URLs, fallback ל-None
 - Keywords CRUD — הוספה, מחיקה, הפרדת סוגים, fallback ל-defaults
 - `reload_keywords()` — טעינה מ-DB עם fallback
+- Vacation Mode — הפעלה/כיבוי, שמירה ב-DB, סטטוס, כפתורי תפריט
 
 ## התאמה ללקוח (`client_checklist.md`)
 - קובץ `client_checklist.md` מפרט את כל המקומות בקוד שצריך לערוך כשמשכפלים את הפרויקט ללקוח חדש.
