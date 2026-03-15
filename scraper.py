@@ -1342,7 +1342,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                                 // אסטרטגיה 2: לינק פרופיל על תמונה או ליד השם (header)
                                 // ב-m.facebook.com השם לא תמיד עטוף ב-<a> — הלינק על האווטר
                                 if (!url) {
-                                    const skip = /\/(groups|posts|story|wui|share|photo|video|watch|hashtag|events|pages|marketplace|gaming|reel)\\b/;
+                                    const skip = /\/(groups|posts|stor(y|ies)|wui|shar(e|ing)|photos?|videos?|watch|hashtag|events?|pages?|marketplace|gaming|reels?)(\/|$|\?)/;
                                     const allLinks = el.querySelectorAll('a[href]');
                                     for (const link of allLinks) {
                                         const h = link.getAttribute('href') || '';
