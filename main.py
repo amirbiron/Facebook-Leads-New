@@ -1072,6 +1072,7 @@ async def _telegram_control_loop(
             if is_on:
                 set_config("vacation_mode", "off")
                 shared_state["vacation"] = False
+                scan_now_event.set()  # להעיר את הלולאה הראשית מיד
                 msg_text = "✅ מצב חופשה כובה — הסריקות חוזרות לפעול."
             else:
                 set_config("vacation_mode", "on")
@@ -1220,6 +1221,7 @@ async def _telegram_control_loop(
                     elif arg == "off":
                         set_config("vacation_mode", "off")
                         shared_state["vacation"] = False
+                        scan_now_event.set()  # להעיר את הלולאה הראשית מיד
                         await asyncio.to_thread(
                             send_message,
                             "✅ מצב חופשה כובה — הסריקות חוזרות לפעול.",
