@@ -1342,13 +1342,14 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                                 // אסטרטגיה 2: לינק פרופיל על תמונה או ליד השם (header)
                                 // ב-m.facebook.com השם לא תמיד עטוף ב-<a> — הלינק על האווטר
                                 if (!url) {
-                                    const skip = /\/(groups|posts|stor(y|ies)(\.php)?|permalink|wui|shar(e|ing)|photos?(\.php)?|videos?(\.php)?|watch|hashtag|events?|pages?|marketplace|gaming|reels?|pfbid|multi_permalinks)(\/|$|\?)/;
+                                    const skip = /\/(groups|posts|stor(y|ies)(\.php)?|permalink|wui|shar(e|ing)|photos?(\.php)?|videos?(\.php)?|watch|hashtag|events?|pages?|marketplace|gaming|reels?|multi_permalinks)(\/|$|\?)/;
                                     const allLinks = el.querySelectorAll('a[href]');
                                     for (const link of allLinks) {
                                         const href = link.getAttribute('href') || '';
                                         if (!href || href === '#') continue;
                                         // דילוג על לינקים פנימיים של פייסבוק שאינם פרופיל
-                                        if (skip.test(href)) continue;
+                                        // pfbid נבדק בנפרד כי ה-ID מודבק ישירות: /pfbid02Kabc123
+                                        if (skip.test(href) || href.includes('/pfbid')) continue;
                                         // דילוג על לינקים חיצוניים (lm.facebook.com/l.php)
                                         if (href.includes('/l.php') || href.includes('lm.facebook.com')) continue;
                                         // לינק פרופיל: /profile.php?id=, /username, או פשוט /שם
