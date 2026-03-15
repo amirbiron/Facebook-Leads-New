@@ -1956,21 +1956,22 @@ from main import (
 
 
 class TestMenuButtons:
-    def test_main_menu_structure(self):
-        """תפריט ראשי — 2 שורות, 2 כפתורים בכל שורה."""
+    def test_main_menu_structure(self, tmp_db):
+        """תפריט ראשי — 3 שורות (סריקה+סטטוס, דוח+הגדרות, חופשה)."""
         buttons = _main_menu_buttons()
-        assert len(buttons) == 2
+        assert len(buttons) == 3
         assert len(buttons[0]) == 2
         assert len(buttons[1]) == 2
+        assert len(buttons[2]) == 1
 
-    def test_main_menu_callback_data(self):
+    def test_main_menu_callback_data(self, tmp_db):
         """כל כפתור בתפריט ראשי מכיל callback_data תקין."""
         buttons = _main_menu_buttons()
-        expected = {"scan", "status", "daily_report", "settings"}
+        expected = {"scan", "status", "daily_report", "settings", "vacation_toggle"}
         actual = {btn["callback_data"] for row in buttons for btn in row}
         assert actual == expected
 
-    def test_main_menu_buttons_have_text(self):
+    def test_main_menu_buttons_have_text(self, tmp_db):
         """כל כפתור מכיל שדה text."""
         buttons = _main_menu_buttons()
         for row in buttons:
@@ -4119,3 +4120,78 @@ class TestSendLeadAuthorUrl:
                   "סיבה", author_url="")
         payload = mock_post.call_args.kwargs.get("json", {})
         assert "פרופיל המפרסם" not in payload["text"]
+
+
+# ──────────────────────────────────────────────────────────────
+# מצב חופשה (Vacation Mode)
+# ──────────────────────────────────────────────────────────────
+
+from database import get_config, set_config
+
+
+class TestVacationMode:
+    """בדיקות למצב חופשה — on/off דרך _config."""
+
+    def test_vacation_off_by_default(self, tmp_db):
+        """ברירת מחדל — מצב חופשה כבוי."""
+        assert get_config("vacation_mode") != "on"
+
+    def test_vacation_on(self, tmp_db):
+        """הפעלת מצב חופשה שומרת 'on' ב-DB."""
+        set_config("vacation_mode", "on")
+        assert get_config("vacation_mode") == "on"
+
+    def test_vacation_off(self, tmp_db):
+        """כיבוי מצב חופשה שומר 'off' ב-DB."""
+        set_config("vacation_mode", "on")
+        set_config("vacation_mode", "off")
+        assert get_config("vacation_mode") == "off"
+
+    def test_status_text_vacation_off(self, tmp_db):
+        """סטטוס מציג חופשה כבויה."""
+        set_config("vacation_mode", "off")
+        shared = {
+            "quiet": None,
+            "scan_in_progress": False,
+            "last_scan_started": None,
+            "last_scan_finished": None,
+            "vacation": False,
+        }
+        text = _build_status_text(shared)
+        assert "מצב חופשה: כבוי" in text
+
+    def test_status_text_vacation_on(self, tmp_db):
+        """סטטוס מציג חופשה פעילה."""
+        set_config("vacation_mode", "on")
+        shared = {
+            "quiet": None,
+            "scan_in_progress": False,
+            "last_scan_started": None,
+            "last_scan_finished": None,
+            "vacation": True,
+        }
+        text = _build_status_text(shared)
+        assert "מצב חופשה" in text
+        assert "פעיל" in text
+
+    def test_main_menu_vacation_toggle_button(self, tmp_db):
+        """תפריט ראשי מכיל כפתור חופשה."""
+        buttons = _main_menu_buttons()
+        all_cb = {btn.get("callback_data") for row in buttons for btn in row}
+        assert "vacation_toggle" in all_cb
+
+    def test_main_menu_vacation_label_when_off(self, tmp_db):
+        """כשחופשה כבויה — כפתור מציג 'מצב חופשה'."""
+        set_config("vacation_mode", "off")
+        buttons = _main_menu_buttons()
+        vacation_btn = [btn for row in buttons for btn in row
+                        if btn.get("callback_data") == "vacation_toggle"][0]
+        assert "מצב חופשה" in vacation_btn["text"]
+
+    def test_main_menu_vacation_label_when_on(self, tmp_db):
+        """כשחופשה פעילה — כפתור מציג 'כבה חופשה'."""
+        set_config("vacation_mode", "on")
+        buttons = _main_menu_buttons()
+        vacation_btn = [btn for row in buttons for btn in row
+                        if btn.get("callback_data") == "vacation_toggle"][0]
+        assert "כבה חופשה" in vacation_btn["text"]
