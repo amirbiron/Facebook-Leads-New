@@ -603,6 +603,8 @@ def _parse_allowed_chat_ids(spec: str | None) -> set[int]:
 # ── כפתורי תפריט (Inline Keyboard) ──────────────────────────
 def _main_menu_buttons() -> list[list[dict]]:
     """מחזיר כפתורי תפריט ראשי."""
+    vacation_on = get_config("vacation_mode") == "on"
+    vacation_label = "🏖️ כבה חופשה" if vacation_on else "🏖️ מצב חופשה"
     return [
         [
             {"text": "\U0001f50d סריקה עכשיו", "callback_data": "scan"},
@@ -611,6 +613,9 @@ def _main_menu_buttons() -> list[list[dict]]:
         [
             {"text": "\U0001f4cb דו\"ח יומי", "callback_data": "daily_report"},
             {"text": "\u2699\ufe0f הגדרות", "callback_data": "settings"},
+        ],
+        [
+            {"text": vacation_label, "callback_data": "vacation_toggle"},
         ],
         *(
             [[{"text": "\U0001f310 פאנל", "url": PANEL_URL}]]
@@ -650,6 +655,7 @@ def _build_status_text(shared_state: dict) -> str:
     qh_db = get_config("quiet_hours", _CONFIG_NOT_SET)
     quiet_spec = qh_db if qh_db is not _CONFIG_NOT_SET else QUIET_HOURS
     quiet_desc = f"{quiet_spec} ({TIMEZONE_NAME})" if quiet_spec else "(disabled)"
+    vacation_on = bool(shared_state.get("vacation"))
     last_started = shared_state.get("last_scan_started")
     last_finished = shared_state.get("last_scan_finished")
     in_progress = bool(shared_state.get("scan_in_progress"))
@@ -663,6 +669,7 @@ def _build_status_text(shared_state: dict) -> str:
     return (
         "סטטוס בוט:\n"
         f"- שעה מקומית: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+        f"- מצב חופשה: {'🏖️ פעיל' if vacation_on else 'כבוי'}\n"
         f"- שעות שקטות: {quiet_desc} | עכשיו: {'פעיל' if quiet_now else 'לא'}\n"
         f"- קבוצות פעילות: {groups_count}\n"
         f"- מילות סינון: {pf_count} | מילים חוסמות: {block_desc}\n"
@@ -1060,6 +1067,22 @@ async def _telegram_control_loop(
                 [[{"text": "\U0001f519 חזרה להגדרות", "callback_data": "settings"}]],
             )
 
+        elif cb_data == "vacation_toggle":
+            is_on = shared_state.get("vacation", False)
+            if is_on:
+                set_config("vacation_mode", "off")
+                shared_state["vacation"] = False
+                scan_now_event.set()  # להעיר את הלולאה הראשית מיד
+                msg_text = "✅ מצב חופשה כובה — הסריקות חוזרות לפעול."
+            else:
+                set_config("vacation_mode", "on")
+                shared_state["vacation"] = True
+                msg_text = "🏖️ מצב חופשה הופעל — כל הסריקות מושהות עד שתכבה."
+            await asyncio.to_thread(
+                edit_message_text, chat_id_int, message_id,
+                msg_text, _main_menu_buttons(),
+            )
+
     # ניקוי webhook קודם וביטול polling תקוע מאינסטנס ישן
     try:
         await asyncio.to_thread(
@@ -1078,23 +1101,24 @@ async def _telegram_control_loop(
             requests.post,
             f"https://api.telegram.org/bot{bot_token}/setMyCommands",
             json={"commands": [
-                {"command": "menu", "description": "תפריט ראשי עם כפתורים"},
-                {"command": "scan", "description": "סריקה עכשיו"},
-                {"command": "status", "description": "סטטוס הבוט"},
-                {"command": "groups", "description": "רשימת קבוצות"},
-                {"command": "keywords", "description": "מילות מפתח"},
-                {"command": "force_send", "description": "מילות 'שלח תמיד' (עוקף AI)"},
-                {"command": "unforce", "description": "הסרת מילת 'שלח תמיד'"},
-                {"command": "hot_word", "description": "מילים חמות (ליד חם עם התראה)"},
-                {"command": "unhot", "description": "הסרת מילה חמה"},
-                {"command": "block", "description": "הוספת מילה חוסמת"},
-                {"command": "unblock", "description": "הסרת מילה חוסמת"},
-                {"command": "block_user", "description": "חסימת מפרסם (רשימה שחורה)"},
-                {"command": "unblock_user", "description": "הסרת חסימת מפרסם"},
-                {"command": "blocked_users", "description": "רשימת מפרסמים חסומים"},
-                {"command": "max_age", "description": "סינון פוסטים ישנים (לפי ימים)"},
-                {"command": "health", "description": "בריאות קבוצות — סטטיסטיקות"},
-                {"command": "panel", "description": "לינק לפאנל ניהול"},
+                {"command": "menu", "description": "📋 תפריט ראשי עם כפתורים"},
+                {"command": "scan", "description": "🔍 סריקה עכשיו"},
+                {"command": "status", "description": "📊 סטטוס הבוט"},
+                {"command": "groups", "description": "👥 רשימת קבוצות"},
+                {"command": "keywords", "description": "🔑 מילות מפתח"},
+                {"command": "force_send", "description": "⚡ מילות 'שלח תמיד' (עוקף AI)"},
+                {"command": "unforce", "description": "↩️ הסרת מילת 'שלח תמיד'"},
+                {"command": "hot_word", "description": "🔥 מילים חמות (ליד חם עם התראה)"},
+                {"command": "unhot", "description": "❄️ הסרת מילה חמה"},
+                {"command": "block", "description": "🚫 הוספת מילה חוסמת"},
+                {"command": "unblock", "description": "✅ הסרת מילה חוסמת"},
+                {"command": "block_user", "description": "🛑 חסימת מפרסם (רשימה שחורה)"},
+                {"command": "unblock_user", "description": "🔓 הסרת חסימת מפרסם"},
+                {"command": "blocked_users", "description": "📛 רשימת מפרסמים חסומים"},
+                {"command": "max_age", "description": "⏳ סינון פוסטים ישנים (לפי ימים)"},
+                {"command": "health", "description": "💚 בריאות קבוצות — סטטיסטיקות"},
+                {"command": "panel", "description": "🔗 לינק לפאנל ניהול"},
+                {"command": "vacation", "description": "🏖️ מצב חופשה — on/off"},
             ]},
             timeout=10,
         )
@@ -1179,6 +1203,36 @@ async def _telegram_control_loop(
                         await asyncio.to_thread(
                             send_message,
                             "משתנה סביבה PANEL_URL לא הוגדר.",
+                            chat_id=chat_id_int,
+                        )
+                    continue
+
+                if cmd in ("/vacation",):
+                    parts = text.split(maxsplit=1)
+                    arg = parts[1].strip().lower() if len(parts) > 1 else ""
+                    if arg == "on":
+                        set_config("vacation_mode", "on")
+                        shared_state["vacation"] = True
+                        await asyncio.to_thread(
+                            send_message,
+                            "🏖️ מצב חופשה הופעל — כל הסריקות מושהות עד /vacation off.",
+                            chat_id=chat_id_int,
+                        )
+                    elif arg == "off":
+                        set_config("vacation_mode", "off")
+                        shared_state["vacation"] = False
+                        scan_now_event.set()  # להעיר את הלולאה הראשית מיד
+                        await asyncio.to_thread(
+                            send_message,
+                            "✅ מצב חופשה כובה — הסריקות חוזרות לפעול.",
+                            chat_id=chat_id_int,
+                        )
+                    else:
+                        is_on = shared_state.get("vacation", False)
+                        status = "מופעל 🏖️" if is_on else "כבוי"
+                        await asyncio.to_thread(
+                            send_message,
+                            f"מצב חופשה: {status}\nשימוש: /vacation on או /vacation off",
                             chat_id=chat_id_int,
                         )
                     continue
@@ -2349,6 +2403,7 @@ async def main():
         "scan_in_progress": False,
         "last_scan_started": None,
         "last_scan_finished": None,
+        "vacation": get_config("vacation_mode") == "on",
     }
     # מעקב זמן אוטומציה יומי (בשניות) — מודד זמן סריקה בפועל בלבד
     daily_automation: dict = {
@@ -2421,6 +2476,18 @@ async def main():
         interval = _load_interval_from_db()
         quiet = _load_quiet_hours_from_db()
         shared_state["quiet"] = quiet  # עדכון כדי שגם לולאת טלגרם תראה את הערך החדש
+
+        # מצב חופשה — מושהה עד /vacation off
+        if shared_state.get("vacation"):
+            log.info("מצב חופשה פעיל — מדלג על סריקה. ישן 5 דקות.")
+            # מנקים events שהצטברו כדי שלא ירוצו כשמכבים חופשה
+            scan_now_event.clear()
+            scan_force_event.clear()
+            try:
+                await asyncio.wait_for(scan_now_event.wait(), timeout=300)
+            except asyncio.TimeoutError:
+                pass
+            continue
 
         try:
             did_scan = False
