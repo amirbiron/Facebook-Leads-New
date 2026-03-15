@@ -1342,22 +1342,22 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                                 // אסטרטגיה 2: לינק פרופיל על תמונה או ליד השם (header)
                                 // ב-m.facebook.com השם לא תמיד עטוף ב-<a> — הלינק על האווטר
                                 if (!url) {
-                                    const skip = /\/(groups|posts|stor(y|ies)|wui|shar(e|ing)|photos?|videos?|watch|hashtag|events?|pages?|marketplace|gaming|reels?)(\/|$|\?)/;
+                                    const skip = /\/(groups|posts|stor(y|ies)(\.php)?|wui|shar(e|ing)|photos?|videos?|watch|hashtag|events?|pages?|marketplace|gaming|reels?)(\/|$|\?)/;
                                     const allLinks = el.querySelectorAll('a[href]');
                                     for (const link of allLinks) {
-                                        const h = link.getAttribute('href') || '';
-                                        if (!h || h === '#') continue;
+                                        const href = link.getAttribute('href') || '';
+                                        if (!href || href === '#') continue;
                                         // דילוג על לינקים פנימיים של פייסבוק שאינם פרופיל
-                                        if (skip.test(h)) continue;
+                                        if (skip.test(href)) continue;
                                         // דילוג על לינקים חיצוניים (lm.facebook.com/l.php)
-                                        if (h.includes('/l.php') || h.includes('lm.facebook.com')) continue;
+                                        if (href.includes('/l.php') || href.includes('lm.facebook.com')) continue;
                                         // לינק פרופיל: /profile.php?id=, /username, או פשוט /שם
-                                        if (h.includes('/profile.php') || h.includes('facebook.com/')) {
+                                        if (href.includes('/profile.php') || href.includes('facebook.com/')) {
                                             url = link.href;
                                             break;
                                         }
                                         // לינק יחסי שמתחיל ב-/ ולא ב-// (לא פרוטוקול)
-                                        if (h.startsWith('/') && !h.startsWith('//') && h.length > 1) {
+                                        if (href.startsWith('/') && !href.startsWith('//') && href.length > 1) {
                                             url = link.href;
                                             break;
                                         }
