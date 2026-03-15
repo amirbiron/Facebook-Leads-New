@@ -4080,3 +4080,42 @@ class TestSendLeadHotWord:
         payload = call_args.kwargs.get("json", {})
         assert payload.get("parse_mode") == "Markdown"
         assert "ליד חם" in payload["text"]
+
+
+class TestSendLeadAuthorUrl:
+    """בדיקות ל-send_lead עם פרמטר author_url."""
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "123"})
+    def test_author_url_shown(self, mock_post):
+        """כשיש author_url — מציג קישור לפרופיל המפרסם."""
+        mock_post.return_value = MagicMock(status_code=200)
+        from notifier import send_lead
+        send_lead("קבוצה", "תוכן הפוסט כאן", "https://m.facebook.com/groups/g/posts/1",
+                  "סיבה", author_url="https://m.facebook.com/profile.php?id=999")
+        payload = mock_post.call_args.kwargs.get("json", {})
+        assert "פרופיל המפרסם" in payload["text"]
+        # URL ממומר לדסקטופ
+        assert "www.facebook.com/profile.php?id=999" in payload["text"]
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "123"})
+    def test_no_author_url(self, mock_post):
+        """כשאין author_url — לא מציג שורת פרופיל."""
+        mock_post.return_value = MagicMock(status_code=200)
+        from notifier import send_lead
+        send_lead("קבוצה", "תוכן הפוסט כאן", "https://m.facebook.com/groups/g/posts/1",
+                  "סיבה")
+        payload = mock_post.call_args.kwargs.get("json", {})
+        assert "פרופיל המפרסם" not in payload["text"]
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "123"})
+    def test_empty_author_url(self, mock_post):
+        """author_url ריק — לא מציג שורת פרופיל."""
+        mock_post.return_value = MagicMock(status_code=200)
+        from notifier import send_lead
+        send_lead("קבוצה", "תוכן הפוסט כאן", "https://m.facebook.com/groups/g/posts/1",
+                  "סיבה", author_url="")
+        payload = mock_post.call_args.kwargs.get("json", {})
+        assert "פרופיל המפרסם" not in payload["text"]

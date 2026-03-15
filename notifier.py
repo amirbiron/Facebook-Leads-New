@@ -246,7 +246,7 @@ def _to_desktop_url(url: str) -> str:
 
 def send_lead(group_name: str, content: str, post_url: str, reason: str,
               has_real_url: bool = True, also_in: list[str] | None = None,
-              is_hot: bool = False):
+              is_hot: bool = False, author_url: str = ""):
     if not _get_bot_token() or not _get_chat_id():
         log.error("חסרים משתני סביבה של טלגרם (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
         return False
@@ -270,6 +270,12 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
     if is_hot:
         hot_line = "\U0001f6a8 ליד חם! \U0001f6a8\n\n"
 
+    # שורת פרופיל — מוצגת רק אם יש קישור לפרופיל המחבר
+    profile_line = ""
+    if author_url:
+        desktop_author = _to_desktop_url(author_url)
+        profile_line = f"\n\U0001f464 [פרופיל המפרסם]({desktop_author})"
+
     text = (
         f"{hot_line}"
         f"\U0001f3af *ליד חדש*\n"
@@ -277,6 +283,7 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
         f"{short_content}\n\n"
         f"\U0001f4a1 *למה רלוונטי:* {reason}\n\n"
         f"\U0001f517 [{link_label}]({desktop_url})"
+        f"{profile_line}"
     )
     return send_message(
         text,
