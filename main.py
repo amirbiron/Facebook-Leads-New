@@ -978,13 +978,6 @@ async def _telegram_control_loop(
             )
 
         elif cb_data == "scan":
-            if shared_state.get("vacation"):
-                await asyncio.to_thread(
-                    edit_message_text, chat_id_int, message_id,
-                    "🏖️ מצב חופשה פעיל — סריקות מושהות. כבה עם /vacation off.",
-                    _back_to_menu_button(),
-                )
-                return
             now = _now_local()
             if shared_state.get("scan_in_progress"):
                 await asyncio.to_thread(
@@ -1245,16 +1238,6 @@ async def _telegram_control_loop(
                 if cmd in ("/scan", "/scan_force"):
                     is_force = cmd == "/scan_force"
                     now = _now_local()
-
-                    # הגנה: מצב חופשה חוסם סריקות (גם force)
-                    if shared_state.get("vacation"):
-                        await asyncio.to_thread(
-                            send_message,
-                            "🏖️ מצב חופשה פעיל — סריקות מושהות. כבה עם /vacation off.",
-                            chat_id=chat_id_int,
-                            disable_web_page_preview=True,
-                        )
-                        continue
 
                     # הגנה 1: סריקה כבר רצה כרגע
                     if shared_state.get("scan_in_progress"):
