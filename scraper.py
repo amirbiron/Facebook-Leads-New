@@ -1335,9 +1335,34 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                                 const nameEl = s || h;
                                 if (nameEl) {
                                     name = (nameEl.innerText || '').trim();
-                                    // הלינק לפרופיל עוטף את ה-strong/h3
+                                    // אסטרטגיה 1: הלינק לפרופיל עוטף את ה-strong/h3
                                     const a = nameEl.closest('a') || nameEl.querySelector('a');
                                     if (a && a.href) url = a.href;
+                                }
+                                // אסטרטגיה 2: לינק פרופיל על תמונה או ליד השם (header)
+                                // ב-m.facebook.com השם לא תמיד עטוף ב-<a> — הלינק על האווטר
+                                if (!url) {
+                                    const skip = /\/(groups|posts|stor(y|ies)(\.php)?|permalink|wui|shar(e|ing)|photos?(\.php)?|videos?(\.php)?|watch|hashtag|events?|pages?|marketplace|gaming|reels?|multi_permalinks)(\/|$|\?)/;
+                                    const allLinks = el.querySelectorAll('a[href]');
+                                    for (const link of allLinks) {
+                                        const href = link.getAttribute('href') || '';
+                                        if (!href || href === '#') continue;
+                                        // דילוג על לינקים פנימיים של פייסבוק שאינם פרופיל
+                                        // pfbid נבדק בנפרד כי ה-ID מודבק ישירות: /pfbid02Kabc123
+                                        if (skip.test(href) || href.includes('/pfbid')) continue;
+                                        // דילוג על לינקים חיצוניים (lm.facebook.com/l.php)
+                                        if (href.includes('/l.php') || href.includes('lm.facebook.com')) continue;
+                                        // לינק פרופיל: /profile.php?id=, /username, או פשוט /שם
+                                        if (href.includes('/profile.php') || href.includes('facebook.com/')) {
+                                            url = link.href;
+                                            break;
+                                        }
+                                        // לינק יחסי שמתחיל ב-/ ולא ב-// (לא פרוטוקול)
+                                        if (href.startsWith('/') && !href.startsWith('//') && href.length > 1) {
+                                            url = link.href;
+                                            break;
+                                        }
+                                    }
                                 }
                                 return {name, url};
                             }"""),
@@ -1345,6 +1370,8 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         )
                         author = author_info.get("name", "")
                         author_url = author_info.get("url", "")
+                        if author and not author_url:
+                            log.debug(f"[AUTHOR] שם נמצא ({author}) אבל אין קישור לפרופיל")
                     except Exception:
                         pass
 
