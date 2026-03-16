@@ -1108,7 +1108,7 @@ async def _telegram_control_loop(
                 {"command": "keywords", "description": "🔑 מילות מפתח"},
                 {"command": "force_send", "description": "⚡ מילות 'שלח תמיד' (עוקף AI)"},
                 {"command": "unforce", "description": "↩️ הסרת מילת 'שלח תמיד'"},
-                {"command": "hot_word", "description": "🔥 מילים חמות (ליד חם עם התראה)"},
+                {"command": "hot_word", "description": "🔥 מילים חמות (הפוסט יופיע מודגש)"},
                 {"command": "unhot", "description": "❄️ הסרת מילה חמה"},
                 {"command": "block", "description": "🚫 הוספת מילה חוסמת"},
                 {"command": "unblock", "description": "✅ הסרת מילה חוסמת"},
