@@ -1343,10 +1343,19 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                                 // ב-m.facebook.com השם לא תמיד עטוף ב-<a> — הלינק על האווטר
                                 if (!url) {
                                     const skip = /\/(groups|posts|stor(y|ies)(\.php)?|permalink|wui|shar(e|ing)|photos?(\.php)?|videos?(\.php)?|watch|hashtag|events?|pages?|marketplace|gaming|reels?|multi_permalinks)(\/|$|\?)/;
+                                    // לינק פרופיל דרך קבוצה: /groups/XXX/user/YYY/
+                                    const groupUserRe = /\/groups\/[^/]+\/user\/(\d+)/;
                                     const allLinks = el.querySelectorAll('a[href]');
                                     for (const link of allLinks) {
                                         const href = link.getAttribute('href') || '';
                                         if (!href || href === '#') continue;
+                                        // בדיקה מיוחדת: /groups/XXX/user/YYY/ — זה לינק פרופיל דרך קבוצה
+                                        const gum = groupUserRe.exec(href);
+                                        if (gum) {
+                                            // ממיר ל-URL פרופיל ישיר
+                                            url = 'https://m.facebook.com/profile.php?id=' + gum[1];
+                                            break;
+                                        }
                                         // דילוג על לינקים פנימיים של פייסבוק שאינם פרופיל
                                         // pfbid נבדק בנפרד כי ה-ID מודבק ישירות: /pfbid02Kabc123
                                         if (skip.test(href) || href.includes('/pfbid')) continue;

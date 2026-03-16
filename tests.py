@@ -3065,6 +3065,37 @@ class TestExtractPostAgeDays:
         age = extract_post_age_days("דוגמה: לפני 10 שניות קיבלתי הודעה וזה לא timestamp")
         assert age is None
 
+    # ── גיל מקסימלי — פוסט ישן עם פעילות חדשה ──
+
+    def test_max_age_old_post_with_recent_comment(self):
+        """פוסט שנוצר לפני שבוע עם תגובה לפני שעה — הגיל הוא שבוע (המקסימום)."""
+        text = "שם המפרסם\nלפני שבוע\nתוכן הפוסט\nלפני שעה\nתגובה כלשהי"
+        age = extract_post_age_days(text)
+        assert age == 7.0  # שבוע, לא שעה
+
+    def test_max_age_old_post_with_just_now_activity(self):
+        """פוסט ישן שנבמפ ע״י תגובה עכשיו — הגיל לפי timestamp הישן."""
+        text = "שם\nלפני 10 ימים\nתוכן\nעכשיו"
+        age = extract_post_age_days(text)
+        assert age == 10.0  # 10 ימים, לא 0
+
+    def test_max_age_multiple_timestamps_english(self):
+        """מספר timestamps באנגלית — מחזיר את הישן ביותר."""
+        text = "Author\n2 weeks\nPost content\n3 hours\nComment"
+        age = extract_post_age_days(text)
+        assert age == 14.0  # 2 שבועות, לא 3 שעות
+
+    def test_max_age_single_timestamp_unchanged(self):
+        """timestamp יחיד — ההתנהגות לא משתנה."""
+        age = extract_post_age_days("שם\nלפני 3 שעות\nתוכן הפוסט")
+        assert age is not None
+        assert 0.1 < age < 0.2  # 3/24 ≈ 0.125
+
+    def test_max_age_filters_old_post_with_recent_activity(self):
+        """פוסט ישן שנבמפ ע״י תגובה — צריך להיות מסונן לפי גיל מקסימלי."""
+        text = "שם\nלפני 2 שבועות\nתוכן\nלפני שעה"
+        assert is_post_too_old(text, max_days=5) is True  # 14 ימים > 5
+
 
 class TestIsPostTooOld:
     """בדיקות לפונקציית is_post_too_old."""
