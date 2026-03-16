@@ -373,6 +373,40 @@ def is_user_blocked(author_url: str) -> bool:
 
 # ── סינון לפי גיל פוסט ──────────────────────────────────────
 
+# חודשים עבריים ואנגליים — למיפוי תאריכים מוחלטים
+_HEBREW_MONTHS = {
+    "ינואר": 1, "פברואר": 2, "מרץ": 3, "מרס": 3, "אפריל": 4,
+    "מאי": 5, "יוני": 6, "יולי": 7, "אוגוסט": 8, "ספטמבר": 9,
+    "אוקטובר": 10, "נובמבר": 11, "דצמבר": 12,
+}
+_ENGLISH_MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "september": 9, "oct": 10, "october": 10,
+    "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+# תאריכים עבריים: "4 במרץ", "15 בינואר 2024"
+_AGE_DATE_HEBREW_RE = re.compile(
+    r'^(\d{1,2})\s+ב('
+    + '|'.join(_HEBREW_MONTHS.keys())
+    + r')(?:\s+(\d{4}))?'
+    + r'(?:\s+בשעה\s+\d{1,2}:\d{2})?'
+    + r'(?:\s*[·•].*)?$',
+    re.IGNORECASE
+)
+
+# תאריכים אנגליים: "March 4", "Jan 15, 2024"
+_AGE_DATE_ENGLISH_RE = re.compile(
+    r'^('
+    + '|'.join(_ENGLISH_MONTHS.keys())
+    + r')\s+(\d{1,2})(?!\d)'
+    + r'(?:[,\s]+(\d{4}))?'
+    + r'(?:\s+at\s+\d{1,2}:\d{2}(?:\s*[ap]m)?)?'
+    + r'(?:\s*[·•].*)?$',
+    re.IGNORECASE
+)
+
 # ביטויים לחילוץ גיל פוסט מתוך הטקסט (עברית + אנגלית)
 _AGE_HEBREW_RE = re.compile(
     # חשוב: בלי prefixים אמביוולנטיים (למשל "שנ" = "שניות" וגם "שנים").
@@ -477,13 +511,70 @@ def _parse_age_from_line(s: str) -> float | None:
         if word == "שנתיים":
             return 730.0
 
+    # תאריך מוחלט עברי — "4 במרץ", "15 בינואר 2024"
+    # פייסבוק עובר לתאריך מוחלט לפוסטים ישנים מ-~7 ימים
+    m = _AGE_DATE_HEBREW_RE.fullmatch(s)
+    if m:
+        day = int(m.group(1))
+        month_name = m.group(2)
+        year_str = m.group(3)
+        month = _HEBREW_MONTHS.get(month_name)
+        if month:
+            return _date_to_age_days(day, month, int(year_str) if year_str else None)
+
+    # תאריך מוחלט אנגלי — "March 4", "Jan 15, 2024"
+    m = _AGE_DATE_ENGLISH_RE.fullmatch(s)
+    if m:
+        month_name = m.group(1).lower()
+        day = int(m.group(2))
+        year_str = m.group(3)
+        month = _ENGLISH_MONTHS.get(month_name)
+        if month:
+            return _date_to_age_days(day, month, int(year_str) if year_str else None)
+
     return None
+
+
+def _date_to_age_days(day: int, month: int, year: int | None) -> float | None:
+    """ממיר תאריך מוחלט לגיל בימים. מחזיר None אם התאריך לא תקין."""
+    now = _now_local()
+    if year is None:
+        # ללא שנה — מניחים את המופע האחרון של התאריך
+        year = now.year
+        try:
+            candidate = now.replace(year=year, month=month, day=day,
+                                    hour=0, minute=0, second=0, microsecond=0)
+        except ValueError:
+            return None
+        if candidate > now:
+            # התאריך בעתיד → כנראה השנה שעברה
+            year -= 1
+            try:
+                candidate = now.replace(year=year, month=month, day=day,
+                                        hour=0, minute=0, second=0, microsecond=0)
+            except ValueError:
+                return None
+    else:
+        try:
+            candidate = now.replace(year=year, month=month, day=day,
+                                    hour=0, minute=0, second=0, microsecond=0)
+        except ValueError:
+            return None
+
+    delta = now - candidate
+    age = delta.total_seconds() / 86400.0
+    # אם הגיל שלילי (תאריך בעתיד) — לא הגיוני, מדלגים
+    return age if age >= 0 else None
 
 
 def extract_post_age_days(text: str) -> float | None:
     """מחלץ גיל פוסט (בימים) מתוך הטקסט. מחזיר None אם לא נמצא timestamp.
 
-    פייסבוק מובייל מציג timestamps כמו "לפני 3 שעות", "לפני 2 ימים", "3h", "2d".
+    תומך בשני סוגי timestamps:
+    1. **יחסיים**: "לפני 3 שעות", "2 days ago", "3h", "2d"
+    2. **מוחלטים**: "4 במרץ", "March 4", "15 בינואר 2024" — פייסבוק עובר לפורמט
+       זה לפוסטים ישנים מ-~7 ימים.
+
     הפונקציה סורקת את **כל** השורות ומחזירה את הגיל **המקסימלי** (הפוסט הישן ביותר).
 
     למה מקסימום? כי innerText של אלמנט הפוסט כולל גם timestamps של תגובות

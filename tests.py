@@ -3096,6 +3096,97 @@ class TestExtractPostAgeDays:
         text = "שם\nלפני 2 שבועות\nתוכן\nלפני שעה"
         assert is_post_too_old(text, max_days=5) is True  # 14 ימים > 5
 
+    # ── תאריכים מוחלטים — פייסבוק עובר לפורמט זה לפוסטים ישנים ──
+
+    def test_hebrew_absolute_date(self):
+        """תאריך עברי מוחלט '4 במרץ' — צריך לחלץ גיל."""
+        from unittest.mock import patch
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        # מדמים שהיום הוא 16 במרץ 2026
+        fake_now = datetime(2026, 3, 16, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("main._now_local", return_value=fake_now):
+            age = extract_post_age_days("שם המפרסם\n4 במרץ\nתוכן הפוסט")
+        assert age is not None
+        assert 11 < age < 13  # 16 - 4 = 12 ימים
+
+    def test_english_absolute_date(self):
+        """תאריך אנגלי 'March 4' — צריך לחלץ גיל."""
+        from unittest.mock import patch
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        fake_now = datetime(2026, 3, 16, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("main._now_local", return_value=fake_now):
+            age = extract_post_age_days("Author Name\nMarch 4\nPost content")
+        assert age is not None
+        assert 11 < age < 13
+
+    def test_hebrew_absolute_date_with_year(self):
+        """תאריך עברי עם שנה '15 בינואר 2026'."""
+        from unittest.mock import patch
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        fake_now = datetime(2026, 3, 16, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("main._now_local", return_value=fake_now):
+            age = extract_post_age_days("שם\n15 בינואר 2026\nתוכן")
+        assert age is not None
+        assert 59 < age < 61  # ~60 ימים
+
+    def test_english_absolute_date_with_year(self):
+        """תאריך אנגלי עם שנה 'Jan 15, 2026'."""
+        from unittest.mock import patch
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        fake_now = datetime(2026, 3, 16, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("main._now_local", return_value=fake_now):
+            age = extract_post_age_days("Name\nJan 15, 2026\nContent")
+        assert age is not None
+        assert 59 < age < 61
+
+    def test_absolute_date_last_year_when_future(self):
+        """תאריך ללא שנה שנופל בעתיד → מניח שנה קודמת."""
+        from unittest.mock import patch
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        fake_now = datetime(2026, 3, 16, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("main._now_local", return_value=fake_now):
+            # דצמבר 1 — בעתיד ב-2026, אז צריך להניח 2025
+            age = extract_post_age_days("שם\n1 בדצמבר\nתוכן")
+        assert age is not None
+        assert age > 100  # ~105 ימים (16 מרץ 2026 - 1 דצמבר 2025)
+
+    def test_absolute_date_filters_old_post(self):
+        """פוסט עם תאריך מוחלט ישן — מסונן לפי max_post_age_days."""
+        from unittest.mock import patch
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        fake_now = datetime(2026, 3, 16, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("main._now_local", return_value=fake_now):
+            # "4 במרץ" = לפני 12 ימים → עם סף 5 ימים צריך לסנן
+            assert is_post_too_old("שם\n4 במרץ\nתוכן", max_days=5) is True
+
+    def test_absolute_date_with_time(self):
+        """תאריך עברי עם שעה '4 במרץ בשעה 10:30'."""
+        from unittest.mock import patch
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        fake_now = datetime(2026, 3, 16, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("main._now_local", return_value=fake_now):
+            age = extract_post_age_days("שם\n4 במרץ בשעה 10:30\nתוכן")
+        assert age is not None
+        assert 11 < age < 13
+
+    def test_english_date_short_month(self):
+        """תאריך אנגלי מקוצר 'Jan 4'."""
+        from unittest.mock import patch
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        fake_now = datetime(2026, 3, 16, 12, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("main._now_local", return_value=fake_now):
+            age = extract_post_age_days("Name\nJan 4\nContent")
+        assert age is not None
+        assert 70 < age < 72  # ~71 ימים
+
 
 class TestIsPostTooOld:
     """בדיקות לפונקציית is_post_too_old."""
