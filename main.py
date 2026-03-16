@@ -396,14 +396,105 @@ _AGE_ENGLISH_RE = re.compile(
 )
 
 
+def _parse_age_from_line(s: str) -> float | None:
+    """מנתח שורה בודדת ומחזיר גיל בימים, או None אם אין timestamp."""
+    # מילים עצמאיות
+    if s in ("עכשיו", "Just now"):
+        return 0.0
+    if s in ("אתמול", "Yesterday"):
+        return 1.0
+
+    # פורמט קצר — "3h", "2d" וכו' (שורה עצמאית)
+    m = _AGE_SHORT_RE.fullmatch(s)
+    if m:
+        num = int(m.group(1))
+        unit = m.group(2).lower()
+        if unit == 'm':    # minutes
+            return num / 1440.0
+        if unit == 'h':    # hours
+            return num / 24.0
+        if unit == 'd':    # days
+            return float(num)
+        if unit == 'w':    # weeks
+            return num * 7.0
+
+    # אנגלית — "3 hours", "2 days" וכו' (שורה עצמאית)
+    m = _AGE_ENGLISH_RE.fullmatch(s)
+    if m:
+        num = int(m.group(1))
+        unit = m.group(2).lower()
+        if unit in ("min", "mins", "minute", "minutes"):
+            return num / 1440.0
+        if unit in ("hr", "hrs", "hour", "hours"):
+            return num / 24.0
+        if unit in ("day", "days"):
+            return float(num)
+        if unit in ("wk", "wks", "week", "weeks"):
+            return num * 7.0
+        if unit in ("month", "months"):
+            return num * 30.0
+
+    # עברית — "לפני X [יחידה]" (שורה עצמאית)
+    m = _AGE_HEBREW_RE.fullmatch(s)
+    if m:
+        num = int(m.group(1))
+        unit = m.group(2)
+        if unit.startswith("שני"):       # שניות
+            return num / 86400.0
+        if unit.startswith("דק"):        # דקות
+            return num / 1440.0
+        if unit.startswith("שע"):        # שעות
+            return num / 24.0
+        if unit.startswith("י"):         # יום/ימים
+            return float(num)
+        if unit.startswith("שבוע"):      # שבוע/שבועות
+            return num * 7.0
+        if unit.startswith("חודש"):      # חודש/חודשים
+            return num * 30.0
+        if unit.startswith("שנ"):        # שנה/שנים
+            return num * 365.0
+
+    # עברית — יחידות בודדות ללא מספר ("לפני דקה", "לפני שעה", "לפני יומיים")
+    m = _AGE_HEBREW_SINGLE_RE.fullmatch(s)
+    if m:
+        word = m.group(1)
+        if word in ("שנייה", "שניות"):
+            return 1 / 86400.0
+        if word == "דקה":
+            return 1 / 1440.0
+        if word == "שעה":
+            return 1 / 24.0
+        if word == "יום":
+            return 1.0
+        if word == "יומיים":
+            return 2.0
+        if word == "שבוע":
+            return 7.0
+        if word == "חודש":
+            return 30.0
+        if word == "שנה":
+            return 365.0
+        if word == "שנתיים":
+            return 730.0
+
+    return None
+
+
 def extract_post_age_days(text: str) -> float | None:
     """מחלץ גיל פוסט (בימים) מתוך הטקסט. מחזיר None אם לא נמצא timestamp.
 
     פייסבוק מובייל מציג timestamps כמו "לפני 3 שעות", "לפני 2 ימים", "3h", "2d".
-    הפונקציה סורקת את התוכן ומחזירה את הגיל בימים (float).
+    הפונקציה סורקת את **כל** השורות ומחזירה את הגיל **המקסימלי** (הפוסט הישן ביותר).
+
+    למה מקסימום? כי innerText של אלמנט הפוסט כולל גם timestamps של תגובות
+    ופעילות אחרונה. timestamp של יצירת הפוסט הוא תמיד הישן ביותר (הגדול ביותר),
+    ו-timestamps של תגובות/פעילות הם חדשים יותר (קטנים יותר).
+    אם היינו לוקחים את הראשון/הקטן, פוסט ישן עם תגובה חדשה היה נחשב "חדש".
     """
     if not text:
         return None
+
+    max_age: float | None = None
 
     # חשוב: כדי להימנע מ-false positives מתוך גוף הפוסט, מחפשים רק בשורות עצמאיות.
     # (בדומה ל-_TIMESTAMP_RE ב-scraper.py שמוגדר כ-line-anchored)
@@ -412,86 +503,12 @@ def extract_post_age_days(text: str) -> float | None:
         if not s:
             continue
 
-        # מילים עצמאיות
-        if s in ("עכשיו", "Just now"):
-            return 0.0
-        if s in ("אתמול", "Yesterday"):
-            return 1.0
+        age = _parse_age_from_line(s)
+        if age is not None:
+            if max_age is None or age > max_age:
+                max_age = age
 
-        # פורמט קצר — "3h", "2d" וכו' (שורה עצמאית)
-        m = _AGE_SHORT_RE.fullmatch(s)
-        if m:
-            num = int(m.group(1))
-            unit = m.group(2).lower()
-            if unit == 'm':    # minutes
-                return num / 1440.0
-            if unit == 'h':    # hours
-                return num / 24.0
-            if unit == 'd':    # days
-                return float(num)
-            if unit == 'w':    # weeks
-                return num * 7.0
-
-        # אנגלית — "3 hours", "2 days" וכו' (שורה עצמאית)
-        m = _AGE_ENGLISH_RE.fullmatch(s)
-        if m:
-            num = int(m.group(1))
-            unit = m.group(2).lower()
-            if unit in ("min", "mins", "minute", "minutes"):
-                return num / 1440.0
-            if unit in ("hr", "hrs", "hour", "hours"):
-                return num / 24.0
-            if unit in ("day", "days"):
-                return float(num)
-            if unit in ("wk", "wks", "week", "weeks"):
-                return num * 7.0
-            if unit in ("month", "months"):
-                return num * 30.0
-
-        # עברית — "לפני X [יחידה]" (שורה עצמאית)
-        m = _AGE_HEBREW_RE.fullmatch(s)
-        if m:
-            num = int(m.group(1))
-            unit = m.group(2)
-            if unit.startswith("שני"):       # שניות
-                return num / 86400.0
-            if unit.startswith("דק"):        # דקות
-                return num / 1440.0
-            if unit.startswith("שע"):        # שעות
-                return num / 24.0
-            if unit.startswith("י"):         # יום/ימים
-                return float(num)
-            if unit.startswith("שבוע"):      # שבוע/שבועות
-                return num * 7.0
-            if unit.startswith("חודש"):      # חודש/חודשים
-                return num * 30.0
-            if unit.startswith("שנ"):        # שנה/שנים
-                return num * 365.0
-
-        # עברית — יחידות בודדות ללא מספר ("לפני דקה", "לפני שעה", "לפני יומיים")
-        m = _AGE_HEBREW_SINGLE_RE.fullmatch(s)
-        if m:
-            word = m.group(1)
-            if word in ("שנייה", "שניות"):
-                return 1 / 86400.0
-            if word == "דקה":
-                return 1 / 1440.0
-            if word == "שעה":
-                return 1 / 24.0
-            if word == "יום":
-                return 1.0
-            if word == "יומיים":
-                return 2.0
-            if word == "שבוע":
-                return 7.0
-            if word == "חודש":
-                return 30.0
-            if word == "שנה":
-                return 365.0
-            if word == "שנתיים":
-                return 730.0
-
-    return None
+    return max_age
 
 
 def _load_max_post_age() -> int | None:
