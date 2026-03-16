@@ -1330,6 +1330,8 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         author_info = await asyncio.wait_for(
                             el.evaluate("""(el) => {
                                 let name = '', url = '';
+                                const skip = /\/(groups|posts|stor(y|ies)(\.php)?|permalink|wui|shar(e|ing)|photos?(\.php)?|videos?(\.php)?|watch|hashtag|events?|pages?|marketplace|gaming|reels?|multi_permalinks)(\/|$|\?)/;
+                                const groupUserRe = /\/groups\/[^/]+\/user\/(\d+)/;
                                 const s = el.querySelector('strong');
                                 const h = el.querySelector('h3');
                                 const nameEl = s || h;
@@ -1337,14 +1339,22 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                                     name = (nameEl.innerText || '').trim();
                                     // אסטרטגיה 1: הלינק לפרופיל עוטף את ה-strong/h3
                                     const a = nameEl.closest('a') || nameEl.querySelector('a');
-                                    if (a && a.href) url = a.href;
+                                    if (a && a.href) {
+                                        const aHref = a.getAttribute('href') || '';
+                                        // בדיקה: /groups/XXX/user/YYY/ — לינק פרופיל דרך קבוצה
+                                        const gum = groupUserRe.exec(aHref);
+                                        if (gum) {
+                                            url = 'https://m.facebook.com/profile.php?id=' + gum[1];
+                                        } else if (!skip.test(aHref) && !aHref.includes('/pfbid')) {
+                                            // לינק תקין שאינו פוסט/סטורי/קבוצה — כנראה פרופיל
+                                            url = a.href;
+                                        }
+                                        // אם skip תפס — url נשאר ריק, אסטרטגיה 2 תרוץ
+                                    }
                                 }
                                 // אסטרטגיה 2: לינק פרופיל על תמונה או ליד השם (header)
                                 // ב-m.facebook.com השם לא תמיד עטוף ב-<a> — הלינק על האווטר
                                 if (!url) {
-                                    const skip = /\/(groups|posts|stor(y|ies)(\.php)?|permalink|wui|shar(e|ing)|photos?(\.php)?|videos?(\.php)?|watch|hashtag|events?|pages?|marketplace|gaming|reels?|multi_permalinks)(\/|$|\?)/;
-                                    // לינק פרופיל דרך קבוצה: /groups/XXX/user/YYY/
-                                    const groupUserRe = /\/groups\/[^/]+\/user\/(\d+)/;
                                     const allLinks = el.querySelectorAll('a[href]');
                                     for (const link of allLinks) {
                                         const href = link.getAttribute('href') || '';
