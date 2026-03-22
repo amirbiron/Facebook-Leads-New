@@ -334,12 +334,11 @@ raw posts
   ├─ [2] Dedup (seen_posts DB)               ← חינם
   ├─ [3] Early Content Dedup (hash תוכן)     ← חינם, תופס כפילויות כש-post_id השתנה
   ├─ [4] Age Filter (גיל הפוסט)             ← חינם
-  ├─ [5] Blocked Users (חסימת מפרסמים)      ← חינם
-  ├─ [6] Block Filter (מילים חסומות)         ← חינם
-  ├─ [7] Pre-filter (מילות מפתח)             ← חינם
-  ├─ [8] Content Dedup (hash תוכן)           ← חינם
-  ├─ [9] Cross-Group Dedup (כפילויות בין קבוצות) ← חינם
-  └─ [10] AI Classification                  ← $$$  ← רק מה שעבר הכל
+  ├─ [5] Block Filter (מילים חסומות)         ← חינם
+  ├─ [6] Pre-filter (מילות מפתח)             ← חינם
+  ├─ [7] Content Dedup (hash תוכן)           ← חינם
+  ├─ [8] Cross-Group Dedup (כפילויות בין קבוצות) ← חינם
+  └─ [9] AI Classification                  ← $$$  ← רק מה שעבר הכל
 ```
 
 כל שלב חינמי מפחית את כמות הקריאות ל-AI. סדר קריטי!
@@ -423,48 +422,6 @@ def _parse_age_from_line(s: str) -> float | None:
 - timestamp ראשון יכול להיות של תגובה חדשה ("לפני שעה")
 - timestamp של יצירת הפוסט תמיד הישן ביותר
 - פוסט ישן עם תגובה חדשה → בלי מקסימום, עובר את הסינון בטעות
-
-### מילים חמות (Hot Words)
-
-מנגנון שמסמן לידים כ"חמים" כשהם מכילים מילת מפתח מיוחדת — ללא תלות בסיווג AI:
-
-```python
-def matches_hot_word(text: str, hot_words: list[str]) -> str | None:
-    """בודק אם הטקסט מכיל מילה חמה. מחזיר את המילה או None."""
-    if not hot_words:
-        return None
-    text_lower = text.lower()
-    for word in hot_words:
-        if word in text_lower:
-            return word
-    return None
-```
-
-- ליד עם מילה חמה מקבל prefix מיוחד ("🔥 ליד חם!") בהודעת טלגרם.
-- המילים מנוהלות דרך פקודת `/hot_word` (הוספה/הסרה) ונשמרות ב-DB.
-- שונה מ-Force Send: force send שולח בלי AI, hot word רק מסמן את הליד.
-
-### חסימת מפרסמים (Blocked Users)
-
-רשימה שחורה של מפרסמים שהלידים שלהם תמיד נחסמים:
-
-```python
-def is_user_blocked(author_url: str, author_name: str) -> bool:
-    """בודק אם המפרסם חסום — לפי URL פרופיל או שם."""
-    if not author_url and not author_name:
-        return False
-    # בדיקה לפי URL פרופיל (מדויק)
-    if author_url and is_blocked_user_url(author_url):
-        return True
-    # בדיקה לפי שם (normalized)
-    if author_name and is_blocked_user_name(author_name.lower()):
-        return True
-    return False
-```
-
-- נמצא בפיפליין **לפני** סינון מילות מפתח — מפרסם חסום לא מגיע ל-AI.
-- ניהול דרך `/block_user` ו-`/unblock_user` בטלגרם.
-- חסימה לפי URL פרופיל עדיפה (ייחודית), שם הוא fallback.
 
 ### Dedup בין קבוצות (Cross-Group)
 
@@ -669,28 +626,6 @@ async def send_lead(item: dict, reason: str):
     success = await asyncio.to_thread(send_message, text)
     if success:
         save_lead(item["id"], item["text"])
-```
-
-### הצגת פרופיל המפרסם
-
-כשסורקים אתר שמציג את שם/פרופיל המפרסם, כדאי לכלול קישור לפרופיל בהודעת הליד. זה חוסך ללקוח את הצורך לחפש את המפרסם ידנית.
-
-```python
-def format_lead(item: dict, reason: str) -> str:
-    """מעצב הודעת ליד לטלגרם — כולל קישור לפרופיל אם זמין."""
-    lines = [
-        f"📌 ליד חדש!",
-        f"📝 {item['text'][:300]}",
-        f"🔗 {item['url']}",
-        f"💡 {reason}",
-    ]
-    # קישור לפרופיל המפרסם (אם חולץ)
-    if item.get("author_url"):
-        lines.append(f"👤 פרופיל: {item['author_url']}")
-    # מידע על קבוצות נוספות (cross-group dedup)
-    if item.get("also_in"):
-        lines.append(f"📂 נמצא גם ב-{len(item['also_in'])} קבוצות נוספות")
-    return "\n".join(lines)
 ```
 
 ### הפרדת ערוצי הודעות
@@ -959,25 +894,6 @@ def is_quiet_now(quiet_hours: tuple[time, time] | None) -> bool:
         return now >= start or now < end
 ```
 
-### מצב חופשה (Vacation Mode)
-
-מנגנון שמאפשר ללקוח להשהות את הסריקות האוטומטיות — בלי לכבות את הבוט:
-
-```python
-# הפעלה/כיבוי דרך טלגרם — נשמר ב-DB, שורד restart
-async def set_vacation(on: bool):
-    set_config("vacation_mode", "on" if on else "off")
-    shared_state["vacation"] = on
-    if not on:
-        scan_event.set()  # חשוב! מעיר את הלולאה מיד
-```
-
-**כללים:**
-- נשמר ב-DB (טבלת `_config`, מפתח `vacation_mode`) — שורד restart.
-- סריקות ידניות (`/scan`, `/scan_force`, כפתור סריקה) **עובדות גם בזמן חופשה** — לא חוסמים את המשתמש.
-- **כשמכבים מצב השהיה — תמיד לירות `scan_event.set()`** — אחרת הלולאה ישנה עד ה-timeout הבא.
-- מוצג ב-`/status` וככפתור toggle בתפריט הראשי (טקסט דינמי).
-
 ### הגנות סריקה (Scan Guards)
 
 מניעת עומס יתר מסריקות חוזרות:
@@ -1004,22 +920,6 @@ async def run_scan_guarded(force=False):
 1. **מניעת ריצה מקבילה** — `asyncio.Lock()` + flag `scan_in_progress`.
 2. **cooldown של 60 שניות** — בין סריקות רצופות, מונע לחיצה חוזרת.
 3. **מגבלת זמן יומית** — סך שניות סריקה ביום. `scan_force` עוקף.
-
-### פקודת עצירה (/stop)
-
-מאפשרת למפתח לעצור סריקה שרצה:
-
-```python
-# flag גלובלי שהסקרייפר בודק בכל גלילה
-_stop_flag = False
-
-async def stop_scan():
-    global _stop_flag
-    _stop_flag = True
-    # הסקרייפר בודק את ה-flag בכל איטרציה ועוצר
-```
-
-**חשוב:** הפקודה מוגבלת למפתח בלבד (`DEVELOPER_CHAT_ID`).
 
 ### סיגנלים ו-Graceful Shutdown
 
@@ -1113,41 +1013,6 @@ async def handle_update(update: dict):
 1. `setMyCommands` — רשימת פקודות בתפריט `/`
 2. `main_menu_buttons()` או `settings_menu_buttons()` — כפתורי inline
 3. Handler בלולאת הפקודות
-
-### פקודות מתקדמות
-
-```python
-# מצב חופשה — on/off
-elif text.startswith("/vacation"):
-    arg = text.split()[-1] if len(text.split()) > 1 else ""
-    if arg == "on":
-        set_config("vacation_mode", "on")
-        reply = "🏖️ מצב חופשה הופעל — סריקות אוטומטיות מושהות."
-    elif arg == "off":
-        set_config("vacation_mode", "off")
-        scan_event.set()  # מעיר את הלולאה מיד!
-        reply = "מצב חופשה כבוי — סריקות חוזרות."
-
-# עצירת סריקה (מפתח בלבד)
-elif text == "/stop":
-    if chat_id not in DEVELOPER_IDS:
-        reply = "פקודה זו זמינה רק למפתח."
-    elif not shared_state.get("scan_in_progress"):
-        reply = "אין סריקה שרצה כרגע."
-    else:
-        stop_flag.set()
-        reply = "עוצר סריקה..."
-
-# מילים חמות
-elif text.startswith("/hot_word"):
-    # /hot_word add מילה | /hot_word remove מילה | /hot_word list
-
-# חסימת מפרסמים
-elif text.startswith("/block_user"):
-    # /block_user https://facebook.com/profile.php?id=123
-elif text.startswith("/unblock_user"):
-    # /unblock_user https://facebook.com/profile.php?id=123
-```
 
 ### כפתורים (Inline Keyboard)
 
@@ -1633,15 +1498,15 @@ core = ' '.join(words)
 
 ```python
 # שגוי — עדכון רק בטיפול בטקסט, שכחת callback
-elif text == "/vacation on":
-    set_vacation(True)  # ✓
+elif text == "/pause on":
+    set_paused(True)  # ✓
 
-# אבל: callback_data="vacation_toggle" — לא עודכן!
+# אבל: callback_data="pause_toggle" — לא עודכן!
 
 # נכון — לעדכן בשני המקומות:
-# 1. handler טקסט
-# 2. handler callback
-# 3. רישום ב-setMyCommands
+# 1. handler טקסט (פקודה כטקסט)
+# 2. handler callback (לחיצה על כפתור)
+# 3. רישום ב-setMyCommands (תפריט /)
 ```
 
 ---
@@ -1672,9 +1537,7 @@ elif text == "/vacation on":
 ### שלב 4: בקרה
 - [ ] לולאת טלגרם — פקודות בסיסיות (/status, /scan)
 - [ ] שעות שקטות
-- [ ] מצב חופשה (vacation mode)
 - [ ] הגנות סריקה (lock + cooldown + daily limit)
-- [ ] פקודת עצירה (/stop) למפתח
 - [ ] Health check endpoint
 
 ### שלב 5: Production
@@ -1691,10 +1554,7 @@ elif text == "/vacation on":
 - [ ] מעקב עלויות API
 - [ ] פאנל ווב (Flask)
 - [ ] Force-send keywords (עוקף AI)
-- [ ] מילים חמות (hot words) — סימון לידים מיוחדים
-- [ ] חסימת מפרסמים (blocked users)
 - [ ] Cross-group dedup — מניעת כפילויות בין קבוצות
-- [ ] לינק פרופיל מפרסם בהודעת ליד
 - [ ] סינון גיל פוסט (עם תמיכה בתאריכים מוחלטים)
 - [ ] לוגין בדסקטופ + העברת cookies (לאתרים בעייתיים)
 - [ ] ערוץ שגיאות נפרד למפתח
