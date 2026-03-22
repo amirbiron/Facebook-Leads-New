@@ -209,6 +209,48 @@ async def load_session(context):
         await context.add_cookies(cookies)
 ```
 
+### לוגין בדסקטופ — העברת Cookies למובייל
+
+כשסורקים אתר מובייל אבל הלוגין לא עובד בגרסת המובייל (overlays, React rendering, security checkpoints), אפשר להתחבר בגרסת הדסקטופ ולהעביר cookies:
+
+```python
+async def login(browser):
+    """לוגין בדסקטופ → העברת cookies → סריקה במובייל."""
+    # context דסקטופ זמני (UA: Chrome/Windows, viewport: 1280x720)
+    desktop_ctx = await browser.new_context(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...",
+        viewport={"width": 1280, "height": 720},
+    )
+    desktop_page = await desktop_ctx.new_page()
+
+    # לוגין בדסקטופ — form HTML אמיתי עם email+password
+    await desktop_page.goto("https://www.site.com/login/",
+                             wait_until="domcontentloaded")
+    await desktop_page.fill('input[name="email"]', email)
+    await desktop_page.fill('input[name="pass"]', password)
+    await desktop_page.click('button[type="submit"]')
+    await desktop_page.wait_for_load_state("domcontentloaded")
+
+    # בדיקת security checkpoint
+    CHECKPOINT_MARKERS = ("checkpoint", "two_step_verification", "approvals")
+    if any(m in desktop_page.url for m in CHECKPOINT_MARKERS):
+        await desktop_page.screenshot(path="data/debug_checkpoint.png")
+        raise RuntimeError("Security checkpoint — צריך אישור ידני")
+
+    # העברת cookies למובייל context
+    cookies = await desktop_ctx.cookies()
+    await mobile_context.add_cookies(cookies)  # cookies של .site.com עובדים cross-subdomain
+
+    # סגירת desktop context — חסכון זיכרון
+    await desktop_ctx.close()
+```
+
+**למה?**
+- אתרי מובייל לפעמים לא מציגים form HTML אמיתי (React SPA, overlays "הורד אפליקציה")
+- IP חדש + headless → אתרים דורשים אימות נוסף (security checkpoint)
+- cookies של דומיין ראשי (`.site.com`) עובדים גם ב-subdomain (`m.site.com`)
+- desktop context נסגר מיד אחרי העברת cookies — לא צורך זיכרון מתמשך
+
 ### זיהוי Session פג — כללים
 
 **סף מחמיר + בדיקה כפולה** — כי false positive שובר את כל הסריקה:
@@ -290,11 +332,14 @@ raw posts
   │
   ├─ [1] Force Send (מילות "שלח תמיד")     ← חינם, עוקף הכל
   ├─ [2] Dedup (seen_posts DB)               ← חינם
-  ├─ [3] Age Filter (גיל הפוסט)             ← חינם
-  ├─ [4] Block Filter (מילים חסומות)         ← חינם
-  ├─ [5] Pre-filter (מילות מפתח)             ← חינם
-  ├─ [6] Content Dedup (hash תוכן)           ← חינם
-  └─ [7] AI Classification                   ← $$$  ← רק מה שעבר הכל
+  ├─ [3] Early Content Dedup (hash תוכן)     ← חינם, תופס כפילויות כש-post_id השתנה
+  ├─ [4] Age Filter (גיל הפוסט)             ← חינם
+  ├─ [5] Blocked Users (חסימת מפרסמים)      ← חינם
+  ├─ [6] Block Filter (מילים חסומות)         ← חינם
+  ├─ [7] Pre-filter (מילות מפתח)             ← חינם
+  ├─ [8] Content Dedup (hash תוכן)           ← חינם
+  ├─ [9] Cross-Group Dedup (כפילויות בין קבוצות) ← חינם
+  └─ [10] AI Classification                  ← $$$  ← רק מה שעבר הכל
 ```
 
 כל שלב חינמי מפחית את כמות הקריאות ל-AI. סדר קריטי!
@@ -325,6 +370,122 @@ def is_blocked(text: str, block_words: list[str]) -> bool:
 ```
 
 > **כלל: רשימה ריקה = אין סינון = מעביר הכל.** `any()` על `[]` מחזיר `False` — בלי guard, רשימת מילות מפתח ריקה תחסום *הכל* בשקט.
+
+### סינון גיל פוסט (Post Age Filter)
+
+סינון פוסטים ישנים מדי — למשל "רק פוסטים מ-7 הימים האחרונים":
+
+```python
+import re
+from datetime import datetime, date
+
+def extract_post_age_days(text: str) -> float | None:
+    """מחלץ גיל פוסט בימים. מחזיר את הגיל המקסימלי (הישן ביותר).
+
+    חשוב: סורקים את *כל* השורות ומחזירים את הגיל הישן ביותר.
+    למה? timestamp של יצירת הפוסט הוא תמיד הישן ביותר.
+    timestamps של תגובות/פעילות הם חדשים יותר.
+    """
+    max_age = None
+    for line in text.split('\n'):
+        age = _parse_age_from_line(line.strip())
+        if age is not None:
+            if max_age is None or age > max_age:
+                max_age = age
+    return max_age
+
+def _parse_age_from_line(s: str) -> float | None:
+    """מפרש שורה בודדת לגיל בימים.
+
+    תומך בשני פורמטים:
+    1. יחסי: "לפני 3 שעות", "2h", "5 days ago"
+    2. מוחלט: "4 במרץ", "March 4", "Jan 15, 2024"
+    """
+    # פורמט יחסי — "לפני X שעות", "3h", "5 days ago"
+    # ...
+
+    # פורמט מוחלט — "4 במרץ", "March 4"
+    # כשהתאריך ללא שנה — מניחים את המופע האחרון
+    # (אם התאריך בעתיד → שנה קודמת)
+    hebrew_match = HEBREW_DATE_RE.search(s)
+    if hebrew_match:
+        return _date_to_age_days(hebrew_match)
+
+    english_match = ENGLISH_DATE_RE.search(s)
+    if english_match:
+        return _date_to_age_days(english_match)
+
+    return None
+```
+
+**למה גיל מקסימלי ולא ראשון?**
+- `innerText` כולל גם timestamps של תגובות ופעילות אחרונה
+- timestamp ראשון יכול להיות של תגובה חדשה ("לפני שעה")
+- timestamp של יצירת הפוסט תמיד הישן ביותר
+- פוסט ישן עם תגובה חדשה → בלי מקסימום, עובר את הסינון בטעות
+
+### מילים חמות (Hot Words)
+
+מנגנון שמסמן לידים כ"חמים" כשהם מכילים מילת מפתח מיוחדת — ללא תלות בסיווג AI:
+
+```python
+def matches_hot_word(text: str, hot_words: list[str]) -> str | None:
+    """בודק אם הטקסט מכיל מילה חמה. מחזיר את המילה או None."""
+    if not hot_words:
+        return None
+    text_lower = text.lower()
+    for word in hot_words:
+        if word in text_lower:
+            return word
+    return None
+```
+
+- ליד עם מילה חמה מקבל prefix מיוחד ("🔥 ליד חם!") בהודעת טלגרם.
+- המילים מנוהלות דרך פקודת `/hot_word` (הוספה/הסרה) ונשמרות ב-DB.
+- שונה מ-Force Send: force send שולח בלי AI, hot word רק מסמן את הליד.
+
+### חסימת מפרסמים (Blocked Users)
+
+רשימה שחורה של מפרסמים שהלידים שלהם תמיד נחסמים:
+
+```python
+def is_user_blocked(author_url: str, author_name: str) -> bool:
+    """בודק אם המפרסם חסום — לפי URL פרופיל או שם."""
+    if not author_url and not author_name:
+        return False
+    # בדיקה לפי URL פרופיל (מדויק)
+    if author_url and is_blocked_user_url(author_url):
+        return True
+    # בדיקה לפי שם (normalized)
+    if author_name and is_blocked_user_name(author_name.lower()):
+        return True
+    return False
+```
+
+- נמצא בפיפליין **לפני** סינון מילות מפתח — מפרסם חסום לא מגיע ל-AI.
+- ניהול דרך `/block_user` ו-`/unblock_user` בטלגרם.
+- חסימה לפי URL פרופיל עדיפה (ייחודית), שם הוא fallback.
+
+### Dedup בין קבוצות (Cross-Group)
+
+כשאותו תוכן מופיע בכמה קבוצות, שולחים פעם אחת עם ציון הקבוצות הנוספות:
+
+```python
+def cross_group_dedup(all_posts: list[dict]) -> list[dict]:
+    """מאחד פוסטים זהים מקבוצות שונות — שולח פעם אחת."""
+    by_hash = {}
+    for post in all_posts:
+        h = content_dedup_hash(post["content"])
+        if h in by_hash:
+            by_hash[h]["also_in"].append(post["group_name"])
+        else:
+            post["also_in"] = []
+            by_hash[h] = post
+    return list(by_hash.values())
+```
+
+- הליד שנשלח מראה "נמצא גם ב-N קבוצות נוספות".
+- חוסך כפילויות כשמפרסמים מפרסמים באותן קבוצות.
 
 ### סיווג עם AI — באצ'ים + Fallback
 
@@ -485,6 +646,28 @@ async def send_lead(item: dict, reason: str):
     success = await asyncio.to_thread(send_message, text)
     if success:
         save_lead(item["id"], item["text"])
+```
+
+### הצגת פרופיל המפרסם
+
+כשסורקים אתר שמציג את שם/פרופיל המפרסם, כדאי לכלול קישור לפרופיל בהודעת הליד. זה חוסך ללקוח את הצורך לחפש את המפרסם ידנית.
+
+```python
+def format_lead(item: dict, reason: str) -> str:
+    """מעצב הודעת ליד לטלגרם — כולל קישור לפרופיל אם זמין."""
+    lines = [
+        f"📌 ליד חדש!",
+        f"📝 {item['text'][:300]}",
+        f"🔗 {item['url']}",
+        f"💡 {reason}",
+    ]
+    # קישור לפרופיל המפרסם (אם חולץ)
+    if item.get("author_url"):
+        lines.append(f"👤 פרופיל: {item['author_url']}")
+    # מידע על קבוצות נוספות (cross-group dedup)
+    if item.get("also_in"):
+        lines.append(f"📂 נמצא גם ב-{len(item['also_in'])} קבוצות נוספות")
+    return "\n".join(lines)
 ```
 
 ### הפרדת ערוצי הודעות
@@ -753,6 +936,68 @@ def is_quiet_now(quiet_hours: tuple[time, time] | None) -> bool:
         return now >= start or now < end
 ```
 
+### מצב חופשה (Vacation Mode)
+
+מנגנון שמאפשר ללקוח להשהות את הסריקות האוטומטיות — בלי לכבות את הבוט:
+
+```python
+# הפעלה/כיבוי דרך טלגרם — נשמר ב-DB, שורד restart
+async def set_vacation(on: bool):
+    set_config("vacation_mode", "on" if on else "off")
+    shared_state["vacation"] = on
+    if not on:
+        scan_event.set()  # חשוב! מעיר את הלולאה מיד
+```
+
+**כללים:**
+- נשמר ב-DB (טבלת `_config`, מפתח `vacation_mode`) — שורד restart.
+- סריקות ידניות (`/scan`, `/scan_force`, כפתור סריקה) **עובדות גם בזמן חופשה** — לא חוסמים את המשתמש.
+- **כשמכבים מצב השהיה — תמיד לירות `scan_event.set()`** — אחרת הלולאה ישנה עד ה-timeout הבא.
+- מוצג ב-`/status` וככפתור toggle בתפריט הראשי (טקסט דינמי).
+
+### הגנות סריקה (Scan Guards)
+
+מניעת עומס יתר מסריקות חוזרות:
+
+```python
+scan_lock = asyncio.Lock()
+
+async def run_scan_guarded(force=False):
+    """מריץ סריקה עם הגנות — מונע ריצה מקבילה + cooldown."""
+    async with scan_lock:
+        # הגנה 1: מגבלת זמן יומית (למשל 2 שעות סריקה ביום)
+        if not force and not check_daily_limit():
+            return False
+
+        shared_state["scan_in_progress"] = True
+        try:
+            await run_scan_cycle()
+        finally:
+            shared_state["scan_in_progress"] = False
+            shared_state["last_scan_finished"] = datetime.now()
+```
+
+**שלוש הגנות:**
+1. **מניעת ריצה מקבילה** — `asyncio.Lock()` + flag `scan_in_progress`.
+2. **cooldown של 60 שניות** — בין סריקות רצופות, מונע לחיצה חוזרת.
+3. **מגבלת זמן יומית** — סך שניות סריקה ביום. `scan_force` עוקף.
+
+### פקודת עצירה (/stop)
+
+מאפשרת למפתח לעצור סריקה שרצה:
+
+```python
+# flag גלובלי שהסקרייפר בודק בכל גלילה
+_stop_flag = False
+
+async def stop_scan():
+    global _stop_flag
+    _stop_flag = True
+    # הסקרייפר בודק את ה-flag בכל איטרציה ועוצר
+```
+
+**חשוב:** הפקודה מוגבלת למפתח בלבד (`DEVELOPER_CHAT_ID`).
+
 ### סיגנלים ו-Graceful Shutdown
 
 ```python
@@ -833,6 +1078,54 @@ async def handle_update(update: dict):
         )
 ```
 
+### ארכיטקטורת פקודות — כלל חשוב
+
+כל פקודת טלגרם מטופלת בשני מקומות:
+1. **כפקודת טקסט** (`/something`) — בלולאת הפקודות
+2. **ככפתור callback** (`callback_data: "something"`) — ב-`handle_callback`
+
+**כששינוי לוגיקה של פקודה — לעדכן בשניהם!**
+
+רישום פקודה חדשה מחייב עדכון בשלושה מקומות:
+1. `setMyCommands` — רשימת פקודות בתפריט `/`
+2. `main_menu_buttons()` או `settings_menu_buttons()` — כפתורי inline
+3. Handler בלולאת הפקודות
+
+### פקודות מתקדמות
+
+```python
+# מצב חופשה — on/off
+elif text.startswith("/vacation"):
+    arg = text.split()[-1] if len(text.split()) > 1 else ""
+    if arg == "on":
+        set_config("vacation_mode", "on")
+        reply = "🏖️ מצב חופשה הופעל — סריקות אוטומטיות מושהות."
+    elif arg == "off":
+        set_config("vacation_mode", "off")
+        scan_event.set()  # מעיר את הלולאה מיד!
+        reply = "מצב חופשה כבוי — סריקות חוזרות."
+
+# עצירת סריקה (מפתח בלבד)
+elif text == "/stop":
+    if chat_id not in DEVELOPER_IDS:
+        reply = "פקודה זו זמינה רק למפתח."
+    elif not shared_state.get("scan_in_progress"):
+        reply = "אין סריקה שרצה כרגע."
+    else:
+        stop_flag.set()
+        reply = "עוצר סריקה..."
+
+# מילים חמות
+elif text.startswith("/hot_word"):
+    # /hot_word add מילה | /hot_word remove מילה | /hot_word list
+
+# חסימת מפרסמים
+elif text.startswith("/block_user"):
+    # /block_user https://facebook.com/profile.php?id=123
+elif text.startswith("/unblock_user"):
+    # /unblock_user https://facebook.com/profile.php?id=123
+```
+
 ### כפתורים (Inline Keyboard)
 
 ```python
@@ -862,18 +1155,30 @@ def main_menu_buttons():
 
 ## 9. Deduplication — מניעת כפילויות
 
-### הגנה תלת-שכבתית
+### הגנה רבת-שכבות
 
 ```
-שכבה 1: Item ID
+שכבה 1: Item ID (מוקדם)
   └── "ראינו את הפריט הזה?" → seen_items table
 
-שכבה 2: Content Hash (לפני שליחה)
+שכבה 2: Early Content Hash (מוקדם — לפני סינון מילות מפתח!)
+  └── "שלחנו תוכן דומה?" → sent_items.content_hash
+  └── תופס כפילויות כש-post_id השתנה בין סשנים
+
+שכבה 3: Cross-Group Dedup (אחרי סינון)
+  └── "אותו תוכן מקבוצות שונות?" → hash בזיכרון
+
+שכבה 4: Content Hash (לפני שליחה)
   └── "שלחנו תוכן דומה?" → sent_items.content_hash
 
-שכבה 3: Item ID (לפני שליחה)
+שכבה 5: Item ID (לפני שליחה)
   └── "שלחנו את הפריט הזה?" → sent_items.item_id
 ```
+
+**למה Early Content Hash?**
+- חילוץ URL לא דטרמיניסטי (7 אסטרטגיות) — post_id יכול להשתנות בין סשנים
+- בדיקת content_hash מוקדמת (לפני סינון מילות מפתח) תופסת כפילויות שנפלו דרך שכבה 1
+- אינדקס DB על `sent_items.content_hash` חיוני לביצועים
 
 ### Content Hash יציב
 
@@ -918,17 +1223,22 @@ def stable_text_for_hash(text: str) -> str:
     return result
 
 def content_dedup_hash(text: str) -> str:
-    """Hash של 150 התווים הראשונים בלבד.
+    """Hash של 12 המילים הראשונות בלבד.
 
-    למה 150 ולא הכל?
+    למה 12 מילים ולא 150 תווים?
     - ליבת הפריט (כותרת + תחילת גוף) תמיד בהתחלה
     - תוכן דינמי (תגובות, engagement) בסוף
-    - חיתוך ל-150 מבטיח hash יציב
+    - בפריטים קצרים (~19 מילים / ~100 תווים) חיתוך לפי תווים
+      כולל חלק מתגובות — שמשתנות בין סריקות
+    - ספירת מילים לא מושפעת מאורך פריט או רווחים
 
-    למה לא 200? בפריטים קצרים (~180 תווים), 200 כולל חלק מתגובות.
+    12 מילים = ~60-80 תווים של ליבת הפריט (שם + משפט ראשון).
     """
     normalized = stable_text_for_hash(text)
-    core = normalized[:150]
+    if not normalized:
+        return ""
+    words = normalized.split()[:12]
+    core = ' '.join(words)
     return hashlib.md5(core.encode()).hexdigest()
 ```
 
@@ -1265,6 +1575,52 @@ if login_ratio > 0.75 AND no_content_elements AND link_count >= 3:
     re_login()
 ```
 
+### 11. גיל פוסט לפי פעילות אחרונה
+
+```python
+# שגוי — לוקחים את ה-timestamp הראשון
+def extract_age(text):
+    for line in text.split('\n'):
+        age = parse_age(line)
+        if age is not None:
+            return age  # יכול להיות תגובה חדשה!
+
+# נכון — לוקחים את הישן ביותר (= תאריך יצירת הפוסט)
+def extract_age(text):
+    max_age = None
+    for line in text.split('\n'):
+        age = parse_age(line)
+        if age is not None and (max_age is None or age > max_age):
+            max_age = age
+    return max_age
+```
+
+### 12. Content hash לפי תווים במקום מילים
+
+```python
+# שגוי — 150 תווים כוללים חלק מתגובות בפוסטים קצרים
+core = normalized[:150]
+
+# נכון — 12 מילים = ליבת הפוסט בלבד
+words = normalized.split()[:12]
+core = ' '.join(words)
+```
+
+### 13. פקודת טלגרם מעודכנת רק במקום אחד
+
+```python
+# שגוי — עדכון רק בטיפול בטקסט, שכחת callback
+elif text == "/vacation on":
+    set_vacation(True)  # ✓
+
+# אבל: callback_data="vacation_toggle" — לא עודכן!
+
+# נכון — לעדכן בשני המקומות:
+# 1. handler טקסט
+# 2. handler callback
+# 3. רישום ב-setMyCommands
+```
+
 ---
 
 ## 14. Checklist לפרויקט חדש
@@ -1293,6 +1649,9 @@ if login_ratio > 0.75 AND no_content_elements AND link_count >= 3:
 ### שלב 4: בקרה
 - [ ] לולאת טלגרם — פקודות בסיסיות (/status, /scan)
 - [ ] שעות שקטות
+- [ ] מצב חופשה (vacation mode)
+- [ ] הגנות סריקה (lock + cooldown + daily limit)
+- [ ] פקודת עצירה (/stop) למפתח
 - [ ] Health check endpoint
 
 ### שלב 5: Production
@@ -1309,6 +1668,12 @@ if login_ratio > 0.75 AND no_content_elements AND link_count >= 3:
 - [ ] מעקב עלויות API
 - [ ] פאנל ווב (Flask)
 - [ ] Force-send keywords (עוקף AI)
+- [ ] מילים חמות (hot words) — סימון לידים מיוחדים
+- [ ] חסימת מפרסמים (blocked users)
+- [ ] Cross-group dedup — מניעת כפילויות בין קבוצות
+- [ ] לינק פרופיל מפרסם בהודעת ליד
+- [ ] סינון גיל פוסט (עם תמיכה בתאריכים מוחלטים)
+- [ ] לוגין בדסקטופ + העברת cookies (לאתרים בעייתיים)
 - [ ] ערוץ שגיאות נפרד למפתח
 
 ---
@@ -1316,8 +1681,8 @@ if login_ratio > 0.75 AND no_content_elements AND link_count >= 3:
 ## סיכום עקרונות זהב
 
 1. **פיפליין מהזול ליקר** — סינון חינמי לפני AI
-2. **Dedup תלת-שכבתי** — ID + content hash + בדיקה לפני שליחה
-3. **Hash יציב** — נרמול עמוק, 150 תווים ראשונים בלבד
+2. **Dedup רב-שכבתי** — ID + early content hash + cross-group + בדיקה לפני שליחה
+3. **Hash יציב** — נרמול עמוק, **12 מילים** ראשונות בלבד (לא 150 תווים)
 4. **רשימה ריקה = אין סינון** — guard על `any([])`
 5. **מעקב לפי תוכן, לא אינדקס** — DOM וירטואלי שובר אינדקסים
 6. **Async בכל מקום** — `asyncio.to_thread()` לקריאות sync
@@ -1325,3 +1690,8 @@ if login_ratio > 0.75 AND no_content_elements AND link_count >= 3:
 8. **Session detection שמרני** — false positive שובר הכל
 9. **Flag על ID אמיתי** — fallback ID לא מתאים ל-dedup
 10. **גרסת מובייל + חסימת משאבים** — חוסך 60%+ זיכרון
+11. **לוגין בדסקטופ** — כשמובייל לא עובד, login בדסקטופ + העברת cookies
+12. **גיל פוסט = מקסימום** — timestamp ישן ביותר = יצירת הפוסט, לא פעילות אחרונה
+13. **פקודות בשני מקומות** — טקסט + callback, עדכון בשניהם
+14. **כיבוי השהיה = scan_event.set()** — מעיר את הלולאה מיד
+15. **הגנות סריקה** — lock + cooldown + daily limit מונעים עומס
