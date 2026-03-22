@@ -538,6 +538,29 @@ def classify_batch(items: list[dict], batch_size=5) -> list[dict]:
 
 אם אלמנט בתשובת JSON לא תקין, הלולאה שמוסיפה תוצאות זורקת exception אחרי הוספה **חלקית**. ה-fallback מוסיף את כל הבאצ' שוב → `all_results` ארוך מ-`items` → `zip()` מתאים תוצאות לפריטים לא נכונים.
 
+### פרומפט סיווג מותאם אישית
+
+אפשר לאפשר ללקוח לשנות את קריטריוני הסיווג בלי לגעת בקוד:
+
+```python
+def get_classification_criteria() -> str:
+    """טוען קריטריוני סיווג — DB עדיף על env var."""
+    # מקור 1: DB (הלקוח הגדיר דרך פאנל/טלגרם)
+    custom = get_config("classification_criteria")
+    if custom and custom.strip():
+        return custom.strip()
+
+    # מקור 2: env var (ברירת מחדל של המפתח)
+    default = os.environ.get("CLASSIFICATION_CRITERIA", "")
+    return default.strip()
+
+    # אם שניהם ריקים — לא מסווגים (לוג שגיאה)
+```
+
+**סדר עדיפויות:** DB > env var > ריק (לא מסווג).
+
+הלקוח יכול לשנות את הפרומפט דרך פאנל ווב או פקודת טלגרם, בלי restart.
+
 ### Auto-Fallback למודל
 
 ```python
