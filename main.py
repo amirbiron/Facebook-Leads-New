@@ -2523,7 +2523,10 @@ async def main():
     except ValueError:
         _da_saved_date = None
     if _da_saved_date == _da_today:
-        _da_total = float(_da_secs_str)
+        try:
+            _da_total = float(_da_secs_str)
+        except (ValueError, TypeError):
+            _da_total = 0.0
     else:
         _da_total = 0.0
     daily_automation: dict = {
@@ -2581,9 +2584,12 @@ async def main():
                     daily_automation["total_seconds"] = 0.0
                     shared_state["daily_limit_notified"] = False
                 daily_automation["total_seconds"] += elapsed
-                _persist_daily_automation()
                 shared_state["scan_in_progress"] = False
                 shared_state["last_scan_finished"] = _now_local()
+                try:
+                    _persist_daily_automation()
+                except Exception:
+                    log.warning("שמירת זמן אוטומציה יומי ב-DB נכשלה", exc_info=True)
                 used = int(daily_automation["total_seconds"] / 60)
                 log.debug(f"זמן אוטומציה יומי: {used} דקות מתוך {DAILY_AUTOMATION_LIMIT_MINUTES or '∞'}")
         return True
