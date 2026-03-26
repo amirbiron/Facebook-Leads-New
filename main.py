@@ -2514,10 +2514,23 @@ async def main():
         "vacation": get_config("vacation_mode") == "on",
     }
     # מעקב זמן אוטומציה יומי (בשניות) — מודד זמן סריקה בפועל בלבד
+    # נשמר ב-DB כדי לשרוד restart
+    _da_date_str = get_config("daily_automation_date", "")
+    _da_secs_str = get_config("daily_automation_seconds", "0")
+    _da_today = _now_local().date()
+    try:
+        _da_saved_date = datetime.strptime(_da_date_str, "%Y-%m-%d").date() if _da_date_str else None
+    except ValueError:
+        _da_saved_date = None
+    if _da_saved_date == _da_today:
+        _da_total = float(_da_secs_str)
+    else:
+        _da_total = 0.0
     daily_automation: dict = {
-        "date": _now_local().date(),
-        "total_seconds": 0.0,
+        "date": _da_today,
+        "total_seconds": _da_total,
     }
+    log.info(f"טעינת זמן אוטומציה יומי מ-DB: {int(_da_total / 60)} דקות ({_da_today})")
     # חשיפת shared_state ל-health check endpoint
     global _health_shared_state
     _health_shared_state = shared_state
@@ -2525,6 +2538,11 @@ async def main():
     scan_now_event = asyncio.Event()
     scan_force_event = asyncio.Event()
     scan_lock = asyncio.Lock()
+
+    def _persist_daily_automation():
+        """שומר את מונה הזמן היומי ב-DB כדי לשרוד restart."""
+        set_config("daily_automation_date", daily_automation["date"].isoformat())
+        set_config("daily_automation_seconds", str(daily_automation["total_seconds"]))
 
     def _check_daily_limit() -> bool:
         """בודק אם חרגנו ממגבלת הזמן היומית. מחזיר True אם מותר לסרוק."""
@@ -2535,6 +2553,7 @@ async def main():
             daily_automation["date"] = today
             daily_automation["total_seconds"] = 0.0
             shared_state["daily_limit_notified"] = False
+            _persist_daily_automation()
         limit_secs = DAILY_AUTOMATION_LIMIT_MINUTES * 60
         if daily_automation["total_seconds"] >= limit_secs:
             return False
@@ -2562,6 +2581,7 @@ async def main():
                     daily_automation["total_seconds"] = 0.0
                     shared_state["daily_limit_notified"] = False
                 daily_automation["total_seconds"] += elapsed
+                _persist_daily_automation()
                 shared_state["scan_in_progress"] = False
                 shared_state["last_scan_finished"] = _now_local()
                 used = int(daily_automation["total_seconds"] / 60)
