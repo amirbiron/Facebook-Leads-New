@@ -431,11 +431,6 @@
       color: var(--success);
     }
 
-    .badge-muted {
-      background: var(--secondary);
-      color: var(--text-secondary);
-    }
-
     .badge-warning {
       background: #fef3cd;
       color: #856404;
@@ -1713,7 +1708,7 @@
         criteriaDefault = currentSettings.classification_criteria_default || '';
 
         renderSourceBadge('criteria-source',
-          currentSettings.criteria_is_default ? 'default' : 'custom');
+          currentSettings.criteria_is_default ? 'none' : 'custom');
 
         // באנר — ברירת מחדל עודכנה מאז שהמשתמש שמר פרומפט מותאם
         const banner = document.getElementById('criteria-updated-banner');
@@ -1774,7 +1769,7 @@
           body: { classification_criteria: '' },
         });
         toast('קריטריונים אופסו לברירת מחדל');
-        renderSourceBadge('criteria-source', 'default');
+        renderSourceBadge('criteria-source', 'none');
         document.getElementById('criteria-updated-banner').style.display = 'none';
       } catch (e) {
         toast('שגיאה: ' + e.message, 'error');

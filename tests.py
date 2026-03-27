@@ -1735,7 +1735,7 @@ class TestPanelAPI:
     def test_get_keywords_default(self, panel_client):
         resp = panel_client.get("/api/keywords/pre_filter")
         data = resp.get_json()
-        assert data["source"] == "default"
+        assert data["source"] == "none"
         # ברירת מחדל מגיעה מ-env var — ייתכן שריקה אם לא הוגדר
         assert isinstance(data["keywords"], list)
 
@@ -2287,7 +2287,7 @@ class TestEnsureKeywordsMigrated:
             # שלב 2: לפני הוספה — ברירות מחדל
             resp = panel_client.get("/api/keywords/pre_filter")
             data = resp.get_json()
-            assert data["source"] == "default"
+            assert data["source"] == "none"
             default_count = len(data["keywords"])
             assert default_count == 3
 
