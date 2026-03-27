@@ -1712,7 +1712,7 @@ class TestPanelAPI:
         """כשאין קבוצות מוגדרות — מחזיר רשימה ריקה עם source: none."""
         resp = panel_client.get("/api/groups")
         data = resp.get_json()
-        assert data["source"] == "none"
+        assert data["source"] == "default"
         assert data["groups"] == []
 
     def test_add_and_list_groups(self, panel_client):
@@ -1735,7 +1735,7 @@ class TestPanelAPI:
     def test_get_keywords_default(self, panel_client):
         resp = panel_client.get("/api/keywords/pre_filter")
         data = resp.get_json()
-        assert data["source"] == "none"
+        assert data["source"] == "default"
         # ברירת מחדל מגיעה מ-env var — ייתכן שריקה אם לא הוגדר
         assert isinstance(data["keywords"], list)
 
@@ -2287,7 +2287,7 @@ class TestEnsureKeywordsMigrated:
             # שלב 2: לפני הוספה — ברירות מחדל
             resp = panel_client.get("/api/keywords/pre_filter")
             data = resp.get_json()
-            assert data["source"] == "none"
+            assert data["source"] == "default"
             default_count = len(data["keywords"])
             assert default_count == 3
 
@@ -2309,7 +2309,7 @@ class TestEnsureKeywordsMigrated:
         # שלב 1: לפני הוספה — אין קבוצות
         resp = panel_client.get("/api/groups")
         data = resp.get_json()
-        assert data["source"] == "none"
+        assert data["source"] == "default"
         assert data["groups"] == []
 
         # שלב 2: הוספת קבוצה חדשה דרך הפאנל

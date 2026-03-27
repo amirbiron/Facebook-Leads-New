@@ -400,10 +400,10 @@ def create_app() -> Flask:
             # fallback לברירות מחדל
             if kw_type == "pre_filter":
                 from main import _PRE_FILTER_KEYWORDS_DEFAULT
-                return jsonify({"keywords": _PRE_FILTER_KEYWORDS_DEFAULT, "source": "none"})
+                return jsonify({"keywords": _PRE_FILTER_KEYWORDS_DEFAULT, "source": "default"})
             else:
                 from main import _BLOCK_KEYWORDS_ENV
-                return jsonify({"keywords": _BLOCK_KEYWORDS_ENV, "source": "none"})
+                return jsonify({"keywords": _BLOCK_KEYWORDS_ENV, "source": "default"})
         return jsonify({"keywords": kws, "source": "custom"})
 
     @app.route("/api/keywords/<kw_type>", methods=["POST"])

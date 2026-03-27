@@ -1681,6 +1681,8 @@
       const el = document.getElementById(containerId);
       if (source === 'none') {
         el.innerHTML = '<span class="badge badge-warning">לא הוגדר — יש להוסיף כדי להתחיל סריקה</span>';
+      } else if (source === 'default') {
+        el.innerHTML = '';
       } else {
         el.innerHTML = '<span class="badge badge-success">מותאם אישית</span>';
       }
@@ -1713,7 +1715,7 @@
         criteriaDefault = currentSettings.classification_criteria_default || '';
 
         renderSourceBadge('criteria-source',
-          currentSettings.criteria_is_default ? 'none' : 'custom');
+          currentSettings.criteria_is_default ? 'default' : 'custom');
 
         // באנר — ברירת מחדל עודכנה מאז שהמשתמש שמר פרומפט מותאם
         const banner = document.getElementById('criteria-updated-banner');
@@ -1774,7 +1776,7 @@
           body: { classification_criteria: '' },
         });
         toast('קריטריונים אופסו לברירת מחדל');
-        renderSourceBadge('criteria-source', 'none');
+        renderSourceBadge('criteria-source', 'default');
         document.getElementById('criteria-updated-banner').style.display = 'none';
       } catch (e) {
         toast('שגיאה: ' + e.message, 'error');
