@@ -47,16 +47,35 @@ _DESKTOP_UA = (
 _GOTO_RETRIES = 3
 _GOTO_TIMEOUTS = [30_000, 45_000, 60_000]  # timeout עולה בכל ניסיון
 
+# מצבור זמן שהתבזבז על ניסיונות ניווט כושלים (בשניות).
+# מאופס בתחילת כל סייקל, נקרא מ-main.py כדי לנכות מהמונה היומי.
+_timeout_waste_seconds: float = 0.0
+
+
+def get_timeout_waste() -> float:
+    """מחזיר את הזמן שהתבזבז על טיימאוטים בסייקל הנוכחי (שניות)."""
+    return _timeout_waste_seconds
+
+
+def reset_timeout_waste():
+    """מאפס את מצבור הזמן המבוזבז — קוראים בתחילת כל סייקל."""
+    global _timeout_waste_seconds
+    _timeout_waste_seconds = 0.0
+
 
 async def _goto_with_retry(page, url: str, **kwargs):
     """page.goto עם retry על timeout — מונע קריסת סייקל בגלל איטיות רשת חולפת."""
+    global _timeout_waste_seconds
     kwargs.pop("timeout", None)  # timeout מנוהל פנימית — מונע duplicate kwarg
     last_err = None
     for attempt in range(_GOTO_RETRIES):
         timeout = _GOTO_TIMEOUTS[min(attempt, len(_GOTO_TIMEOUTS) - 1)]
+        t0 = asyncio.get_event_loop().time()
         try:
             return await page.goto(url, timeout=timeout, **kwargs)
         except PlaywrightTimeout as e:
+            wasted = asyncio.get_event_loop().time() - t0
+            _timeout_waste_seconds += wasted
             last_err = e
             log.warning(f"timeout בניווט ל-{url[:60]} (ניסיון {attempt + 1}/{_GOTO_RETRIES}, "
                         f"timeout={timeout}ms) — {'מנסה שוב' if attempt + 1 < _GOTO_RETRIES else 'נכשל'}")
@@ -72,8 +91,10 @@ async def _has_login_overlay(page) -> bool:
     הבחנה מבאנר UI רגיל: overlay חוסם = דף כמעט ריק (< 500 תווים),
     באנר רגיל = דף מלא בתוכן קבוצה (הרבה יותר מ-500 תווים)."""
     try:
+        # textContent במקום innerText — לא מפעיל layout computation,
+        # חוסך 72-154 שניות לכל קבוצה על VM עם 512MB RAM.
         result = await page.evaluate("""() => {
-            const text = document.body?.innerText || '';
+            const text = document.body?.textContent || '';
             return { top: text.substring(0, 500), len: text.length };
         }""")
         top_text = result["top"]
@@ -899,7 +920,7 @@ _PAGE_SCAN_JS = """() => {
         for (let i = 0; i < 30; i++) {
             if (!node.parentElement || node.parentElement === document.body) break;
             node = node.parentElement;
-            text = (node.innerText || '').trim();
+            text = (node.textContent || '').trim();
             if (text.length > 100) break;
         }
 
@@ -1283,7 +1304,8 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             # סריקת דף — מציאת כל קישורי הפוסטים לשימוש באסטרטגיה 7.
             # רץ בכל סיבוב גלילה כי תוכן חדש נטען אחרי גלילה.
             try:
-                scan = await page.evaluate(_PAGE_SCAN_JS)
+                scan = await asyncio.wait_for(
+                    page.evaluate(_PAGE_SCAN_JS), timeout=8)
                 existing = {e['url'] for e in page_post_urls}
                 new_count = 0
                 for entry in scan.get('postLinks', []):
@@ -1396,10 +1418,15 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
                     post_url = group["url"]
                     try:
-                        post_url = await _extract_post_url(
-                            el, group["url"], page_urls=page_post_urls
+                        # timeout מונע תקיעה של 30+ שניות על אלמנטים שפייסבוק
+                        # הסיר מה-DOM אחרי גלילה (virtualization)
+                        post_url = await asyncio.wait_for(
+                            _extract_post_url(
+                                el, group["url"], page_urls=page_post_urls
+                            ),
+                            timeout=8,
                         )
-                    except Exception:
+                    except (asyncio.TimeoutError, Exception):
                         pass
 
                     has_real_url = post_url != group["url"]

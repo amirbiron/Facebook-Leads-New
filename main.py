@@ -2143,10 +2143,11 @@ async def run_cycle():
     import gc
     # Lazy imports to keep startup light and allow running parts of the codebase
     # (like quiet-hours logic) without Playwright installed.
-    from scraper import scrape_all
+    from scraper import scrape_all, reset_timeout_waste, get_timeout_waste
     from classifier import classify_batch
     from notifier import send_lead, send_error_alert, send_message
 
+    reset_timeout_waste()
     _reset_scan_progress()
 
     log.info(f"===== סבב חדש: {_now_local().strftime('%Y-%m-%d %H:%M:%S %Z')} =====")
@@ -2578,12 +2579,25 @@ async def main():
                 await run_cycle()
             finally:
                 elapsed = asyncio.get_event_loop().time() - scan_start
+                # ניכוי זמן שהתבזבז על טיימאוטים (ניווט כושל, אלמנטים מנותקים)
+                # כדי שרק זמן עבודה אמיתי ייספר במגבלה היומית
+                try:
+                    from scraper import get_timeout_waste
+                    waste = get_timeout_waste()
+                except Exception:
+                    waste = 0.0
+                effective = max(0.0, elapsed - waste)
+                if waste > 5:
+                    log.debug(
+                        f"זמן סריקה: {elapsed:.0f}s כולל | {waste:.0f}s טיימאוטים | "
+                        f"{effective:.0f}s נטו"
+                    )
                 today = _now_local().date()
                 if daily_automation["date"] != today:
                     daily_automation["date"] = today
                     daily_automation["total_seconds"] = 0.0
                     shared_state["daily_limit_notified"] = False
-                daily_automation["total_seconds"] += elapsed
+                daily_automation["total_seconds"] += effective
                 shared_state["scan_in_progress"] = False
                 shared_state["last_scan_finished"] = _now_local()
                 try:
