@@ -72,7 +72,6 @@ def reset_timeout_waste():
 
 async def _goto_with_retry(page, url: str, **kwargs):
     """page.goto עם retry על timeout — מונע קריסת סייקל בגלל איטיות רשת חולפת."""
-    global _timeout_waste_seconds
     kwargs.pop("timeout", None)  # timeout מנוהל פנימית — מונע duplicate kwarg
     last_err = None
     for attempt in range(_GOTO_RETRIES):
@@ -81,8 +80,7 @@ async def _goto_with_retry(page, url: str, **kwargs):
         try:
             return await page.goto(url, timeout=timeout, **kwargs)
         except PlaywrightTimeout as e:
-            wasted = asyncio.get_event_loop().time() - t0
-            _timeout_waste_seconds += wasted
+            _add_timeout_waste(asyncio.get_event_loop().time() - t0)
             last_err = e
             log.warning(f"timeout בניווט ל-{url[:60]} (ניסיון {attempt + 1}/{_GOTO_RETRIES}, "
                         f"timeout={timeout}ms) — {'מנסה שוב' if attempt + 1 < _GOTO_RETRIES else 'נכשל'}")
