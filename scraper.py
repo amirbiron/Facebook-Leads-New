@@ -47,9 +47,16 @@ _DESKTOP_UA = (
 _GOTO_RETRIES = 3
 _GOTO_TIMEOUTS = [30_000, 45_000, 60_000]  # timeout עולה בכל ניסיון
 
-# מצבור זמן שהתבזבז על ניסיונות ניווט כושלים (בשניות).
+# מצבור זמן שהתבזבז על טיימאוטים בסייקל הנוכחי (שניות):
+# ניווט כושל, אלמנטים מנותקים, סריקת דף איטית, זיהוי overlay.
 # מאופס בתחילת כל סייקל, נקרא מ-main.py כדי לנכות מהמונה היומי.
 _timeout_waste_seconds: float = 0.0
+
+
+def _add_timeout_waste(seconds: float):
+    """מוסיף זמן מבוזבז למצבור (נקרא מכל מקום שתופס timeout)."""
+    global _timeout_waste_seconds
+    _timeout_waste_seconds += seconds
 
 
 def get_timeout_waste() -> float:
@@ -94,6 +101,7 @@ async def _has_login_overlay(page) -> bool:
     שיפור ביצועים: innerText מפעיל layout computation מלא, שלוקח 72-154
     שניות על VM עם 512MB. אבל דף overlay ריק (< 500 תווים) מחשב innerText
     מיידית. לכן timeout של 3 שניות: אם פג — הדף מלא בתוכן = לא overlay."""
+    t0 = asyncio.get_event_loop().time()
     try:
         result = await asyncio.wait_for(
             page.evaluate("""() => {
@@ -110,6 +118,9 @@ async def _has_login_overlay(page) -> bool:
         if total_len > 500:
             return False
         return True
+    except asyncio.TimeoutError:
+        _add_timeout_waste(asyncio.get_event_loop().time() - t0)
+        return False
     except Exception:
         return False
 
@@ -1308,6 +1319,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
             # סריקת דף — מציאת כל קישורי הפוסטים לשימוש באסטרטגיה 7.
             # רץ בכל סיבוב גלילה כי תוכן חדש נטען אחרי גלילה.
+            _scan_t0 = asyncio.get_event_loop().time()
             try:
                 # timeout מגן מפני תקיעה אינסופית. innerText על אלמנטי פוסט
                 # (לא document.body) צריך להספיק ב-15 שניות גם ב-VM איטי.
@@ -1329,6 +1341,9 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         log.debug(f"דוגמאות hrefs (ללא קישורי פוסט): {scan['sampleHrefs'][:5]}")
                 elif new_count > 0:
                     log.debug(f"סריקת דף — {new_count} קישורים חדשים (סה\"כ {len(page_post_urls)})")
+            except asyncio.TimeoutError:
+                _add_timeout_waste(asyncio.get_event_loop().time() - _scan_t0)
+                log.debug("סריקת דף — timeout (אסטרטגיה 7 לא זמינה בסיבוב זה)")
             except Exception as e:
                 log.debug(f"שגיאה בסריקת דף: {e}")
 
@@ -1424,6 +1439,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         pass
 
                     post_url = group["url"]
+                    _url_t0 = asyncio.get_event_loop().time()
                     try:
                         # timeout מונע תקיעה של 30+ שניות על אלמנטים שפייסבוק
                         # הסיר מה-DOM אחרי גלילה (virtualization)
@@ -1433,6 +1449,8 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                             ),
                             timeout=8,
                         )
+                    except asyncio.TimeoutError:
+                        _add_timeout_waste(asyncio.get_event_loop().time() - _url_t0)
                     except Exception:
                         pass
 
