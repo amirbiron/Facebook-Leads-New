@@ -89,14 +89,19 @@ async def _has_login_overlay(page) -> bool:
     בלי redirect, כך שבדיקת URL לא מספיקה.
 
     הבחנה מבאנר UI רגיל: overlay חוסם = דף כמעט ריק (< 500 תווים),
-    באנר רגיל = דף מלא בתוכן קבוצה (הרבה יותר מ-500 תווים)."""
+    באנר רגיל = דף מלא בתוכן קבוצה (הרבה יותר מ-500 תווים).
+
+    שיפור ביצועים: innerText מפעיל layout computation מלא, שלוקח 72-154
+    שניות על VM עם 512MB. אבל דף overlay ריק (< 500 תווים) מחשב innerText
+    מיידית. לכן timeout של 3 שניות: אם פג — הדף מלא בתוכן = לא overlay."""
     try:
-        # textContent במקום innerText — לא מפעיל layout computation,
-        # חוסך 72-154 שניות לכל קבוצה על VM עם 512MB RAM.
-        result = await page.evaluate("""() => {
-            const text = document.body?.textContent || '';
-            return { top: text.substring(0, 500), len: text.length };
-        }""")
+        result = await asyncio.wait_for(
+            page.evaluate("""() => {
+                const text = document.body?.innerText || '';
+                return { top: text.substring(0, 500), len: text.length };
+            }"""),
+            timeout=3,
+        )
         top_text = result["top"]
         total_len = result["len"]
         if not all(m in top_text for m in _LOGIN_OVERLAY_MARKERS):
@@ -920,7 +925,7 @@ _PAGE_SCAN_JS = """() => {
         for (let i = 0; i < 30; i++) {
             if (!node.parentElement || node.parentElement === document.body) break;
             node = node.parentElement;
-            text = (node.textContent || '').trim();
+            text = (node.innerText || '').trim();
             if (text.length > 100) break;
         }
 
