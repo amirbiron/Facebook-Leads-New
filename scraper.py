@@ -1433,7 +1433,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                             ),
                             timeout=8,
                         )
-                    except (asyncio.TimeoutError, Exception):
+                    except Exception:
                         pass
 
                     has_real_url = post_url != group["url"]
