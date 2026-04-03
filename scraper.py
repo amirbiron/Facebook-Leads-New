@@ -1309,8 +1309,10 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             # סריקת דף — מציאת כל קישורי הפוסטים לשימוש באסטרטגיה 7.
             # רץ בכל סיבוב גלילה כי תוכן חדש נטען אחרי גלילה.
             try:
+                # timeout מגן מפני תקיעה אינסופית. innerText על אלמנטי פוסט
+                # (לא document.body) צריך להספיק ב-15 שניות גם ב-VM איטי.
                 scan = await asyncio.wait_for(
-                    page.evaluate(_PAGE_SCAN_JS), timeout=8)
+                    page.evaluate(_PAGE_SCAN_JS), timeout=15)
                 existing = {e['url'] for e in page_post_urls}
                 new_count = 0
                 for entry in scan.get('postLinks', []):

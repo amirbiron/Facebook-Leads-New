@@ -2143,7 +2143,7 @@ async def run_cycle():
     import gc
     # Lazy imports to keep startup light and allow running parts of the codebase
     # (like quiet-hours logic) without Playwright installed.
-    from scraper import scrape_all, reset_timeout_waste, get_timeout_waste
+    from scraper import scrape_all, reset_timeout_waste
     from classifier import classify_batch
     from notifier import send_lead, send_error_alert, send_message
 
