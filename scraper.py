@@ -1295,6 +1295,11 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         log.debug("מתחיל גלילה חכמה...")
 
         for scroll_i in range(MAX_SCROLLS + 1):
+            # בקשת עצירה (/stop) — יוצאים מיד גם באמצע גלילת הקבוצה
+            if _stop_scan_requested:
+                log.info(f"סריקת {group_name} נעצרה לפי בקשת המשתמש (/stop)")
+                break
+
             # בסיבוב הראשון לא גוללים — מעבדים מה שכבר נטען
             if scroll_i > 0:
                 await page.evaluate("window.scrollBy(0, Math.random() * 300 + 200)")
@@ -1351,6 +1356,9 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
             prev_seen_count = len(seen_texts)
 
             for el in post_elements:
+                # בקשת עצירה (/stop) — יוצאים מיד גם באמצע עיבוד פוסטים
+                if _stop_scan_requested:
+                    break
                 try:
                     text = await asyncio.wait_for(el.inner_text(), timeout=5)
                     # הסרת תגיות HTML שדלפו (כולל <img> עם base64)

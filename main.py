@@ -1417,7 +1417,7 @@ async def _telegram_control_loop(
                     request_stop_scan()
                     await asyncio.to_thread(
                         send_message,
-                        "ביקשתי עצירת סריקה — תיעצר אחרי הקבוצה הנוכחית.",
+                        "ביקשתי עצירת סריקה — תיעצר בהקדם (גם באמצע קבוצה).",
                         chat_id=chat_id_int,
                     )
                     continue
