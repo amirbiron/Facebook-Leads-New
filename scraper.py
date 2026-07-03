@@ -1378,7 +1378,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                     author_url = ""
                     try:
                         author_info = await asyncio.wait_for(
-                            el.evaluate("""(el) => {
+                            el.evaluate(r"""(el) => {
                                 let name = '', url = '';
                                 const skip = /\/(groups|posts|stor(y|ies)(\.php)?|permalink|wui|shar(e|ing)|photos?(\.php)?|videos?(\.php)?|watch|hashtag|events?|pages?|marketplace|gaming|reels?|multi_permalinks)(\/|$|\?)/;
                                 const groupUserRe = /\/groups\/[^/]+\/user\/(\d+)/;
