@@ -2489,30 +2489,47 @@ async def run_cycle():
 _CONTENT_HASH_VERSION = "2"
 _CONTENT_HASH_VERSION_KEY = "content_hash_version"
 
+# גודל עמוד במיגרציה — sent_leads מחזיק את תוכן הפוסט המלא בכל שורה,
+# ועל VM עם 512MB אסור לטעון את כל ההיסטוריה לזיכרון בבת אחת.
+_MIGRATION_PAGE_SIZE = 500
+
 def _migrate_content_hashes():
     """מחשב מחדש content_hash לכל הלידים שנשלחו, אחרי שינוי בשיטת החישוב.
 
     בלי זה, בפריסה הראשונה אחרי השינוי אף ליד ותיק לא יזוהה ככפילות
     (ה-hash שמור ב-DB לפי השיטה הישנה) → גל הודעות כפולות בטלגרם.
     ה-content המקורי שמור ב-sent_leads, ולכן אפשר לחשב מחדש במדויק.
+
+    **לא זורק בשקט**: אם המיגרציה נכשלה, ה-DB לא במצב שמאפשר לזהות
+    כפילויות, והמשך ריצה פירושו הצפת טלגרם בלידים שכבר נשלחו. עדיף
+    להיכשל ברעש בעלייה — הגרסה לא נשמרת, אז ההפעלה הבאה תנסה שוב.
+
+    **מה לא ניתן למגר**: `seen_posts.post_id` לא שומר את טקסט המקור, ולכן
+    IDים ישנים של פוסטים ללא URL אמיתי לא ניתנים לחישוב מחדש. הסבב הראשון
+    אחרי הפריסה יראה אותם כחדשים ויגלול את הקבוצות במלואן — פעם אחת.
+    כפילויות בשליחה עדיין נחסמות, כי content_hash כן מוגר.
     """
-    try:
-        if get_config(_CONTENT_HASH_VERSION_KEY, "") == _CONTENT_HASH_VERSION:
-            return
-        rows = get_sent_leads_content()
+    if get_config(_CONTENT_HASH_VERSION_KEY, "") == _CONTENT_HASH_VERSION:
+        return
+    total = updated = offset = 0
+    while True:
+        rows = get_sent_leads_content(_MIGRATION_PAGE_SIZE, offset)
+        if not rows:
+            break
         changed = [
             (post_id, new_hash)
             for post_id, content in rows
             if content and (new_hash := _content_dedup_hash(content))
         ]
         update_content_hashes(changed)
-        set_config(_CONTENT_HASH_VERSION_KEY, _CONTENT_HASH_VERSION)
-        log.info(
-            f"מיגרציית content_hash לגרסה {_CONTENT_HASH_VERSION} — "
-            f"חושבו מחדש {len(changed)} מתוך {len(rows)} לידים"
-        )
-    except Exception:
-        log.warning("מיגרציית content_hash נכשלה — ייתכנו כפילויות בסבב הראשון", exc_info=True)
+        total += len(rows)
+        updated += len(changed)
+        offset += _MIGRATION_PAGE_SIZE
+    set_config(_CONTENT_HASH_VERSION_KEY, _CONTENT_HASH_VERSION)
+    log.info(
+        f"מיגרציית content_hash לגרסה {_CONTENT_HASH_VERSION} — "
+        f"חושבו מחדש {updated} מתוך {total} לידים"
+    )
 
 async def main():
     log.info("מאתחל מסד נתונים...")

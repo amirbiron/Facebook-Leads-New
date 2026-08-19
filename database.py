@@ -197,16 +197,22 @@ def is_content_hash_sent(content_hash: str) -> bool:
     ).fetchone()
     return row is not None
 
-def get_sent_leads_content() -> list[tuple[str, str]]:
-    """מחזיר (post_id, content) לכל ליד שנשלח — לחישוב מחדש של content_hash.
+def get_sent_leads_content(limit: int, offset: int) -> list[tuple[str, str]]:
+    """מחזיר (post_id, content) לעמוד אחד מתוך sent_leads — לחישוב מחדש של content_hash.
 
     נדרש כששיטת חישוב ה-hash משתנה: בלי חישוב מחדש, לידים שכבר נשלחו לא
     יתאימו ל-hash החדש וייחשבו חדשים → גל כפילויות בפריסה הראשונה.
+
+    עובד בעמודים ולא בבת אחת: sent_leads לא נמחק לעולם וכל שורה מחזיקה את
+    תוכן הפוסט המלא, אז טעינת הטבלה כולה לזיכרון עלולה להפיל את ה-VM
+    (512MB) בדיוק בעלייה. המיון לפי post_id יציב — המיגרציה מעדכנת רק את
+    content_hash ולא את המפתח שלפיו ממיינים.
     """
     return [
         (row[0], row[1] or "")
         for row in _get_conn().execute(
-            "SELECT post_id, content FROM sent_leads"
+            "SELECT post_id, content FROM sent_leads ORDER BY post_id LIMIT ? OFFSET ?",
+            (limit, offset)
         ).fetchall()
     ]
 

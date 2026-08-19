@@ -1088,6 +1088,30 @@ class TestPostCoreAndStableId:
         text = "דני כהן\n" + " ".join(f"מילה{i}" for i in range(40))
         assert len(_post_core_text(text).split()) == _CORE_MAX_WORDS
 
+    def test_no_boundary_fallback_is_not_comment_proof(self):
+        """מקבע מגבלה ידועה: בלי גבול מבני, פוסט קצר עדיין לא יציב.
+
+        חלון 12 המילים הוא רשת ביטחון, לא פתרון — בפוסט קצר הוא נוגע
+        בתגובות. הטסט הזה לא מתאר התנהגות רצויה אלא מתעד את גבול התיקון,
+        כדי ששינוי עתידי בנתיב הזה יהיה מודע.
+
+        בפועל הנתיב כמעט לא נדרש: פוסט עם תגובות מרנדר ספירת תגובות,
+        שהיא עצמה גבול — ראו test_engagement_line_alone_is_a_boundary.
+        """
+        from scraper import stable_post_id
+        bare = "דני כהן\nלפני 20 דקות\nמחפש שיפוצניק, ממליצים?"
+        assert stable_post_id(bare) != stable_post_id(bare + self.COMMENTS)
+
+    def test_short_post_with_comments_is_stable_in_practice(self):
+        """אותו פוסט קצר, אבל כפי שפייסבוק באמת מרנדר אותו — יציב.
+
+        משלים את הטסט שמעליו: ברגע שיש ספירת תגובות (וזה המצב תמיד
+        כשיש תגובות), הזהות יציבה.
+        """
+        from scraper import stable_post_id
+        real = "דני כהן\nלפני 20 דקות\nמחפש שיפוצניק, ממליצים?\n2 תגובות"
+        assert stable_post_id(real) == stable_post_id(real + self.COMMENTS)
+
     def test_post_id_prefix_marks_content_derived_id(self):
         """ID מבוסס-תוכן שומר על התחילית c_ — כדי שיהיה נבדל מ-ID מ-URL."""
         from scraper import stable_post_id
@@ -1132,6 +1156,32 @@ class TestContentHashMigration:
         row = database._get_conn().execute(
             "SELECT content_hash FROM sent_leads WHERE post_id = 'p2'").fetchone()
         assert row[0] == "לא_נגעו_בי"
+
+    def test_migration_raises_and_keeps_version_unset_on_failure(self, tmp_db):
+        """כישלון מיגרציה זורח החוצה ולא מסמן גרסה — ההפעלה הבאה תנסה שוב.
+
+        המשך ריצה עם hashים לא תואמים פירושו שכל ליד ותיק ייראה חדש
+        וטלגרם יוצף בכפילויות. עדיף להיכשל ברעש בעלייה.
+        """
+        import main as main_mod
+        from unittest.mock import patch
+        with patch.object(main_mod, "get_sent_leads_content", side_effect=sqlite3.OperationalError("disk I/O error")):
+            with pytest.raises(sqlite3.OperationalError):
+                main_mod._migrate_content_hashes()
+        assert database.get_config(main_mod._CONTENT_HASH_VERSION_KEY) is None
+
+    def test_migration_pages_through_large_history(self, tmp_db):
+        """היסטוריה גדולה מגודל העמוד מוגרת במלואה, בלי לטעון הכל לזיכרון."""
+        from main import _content_dedup_hash, _migrate_content_hashes, _MIGRATION_PAGE_SIZE
+        n = _MIGRATION_PAGE_SIZE * 2 + 7
+        texts = [f"משתמש {i}\nמחפש בעל מקצוע מספר {i}?\nאהבתי · תגובה · שיתוף\n2 תגובות"
+                 for i in range(n)]
+        for i, t in enumerate(texts):
+            database.save_lead(f"p{i:05d}", "ג", t, "ליד", content_hash="ישן")
+
+        _migrate_content_hashes()
+
+        assert all(database.is_content_hash_sent(_content_dedup_hash(t)) for t in texts)
 
     def test_migration_survives_empty_table(self, tmp_db):
         """טבלה ריקה — המיגרציה עוברת בלי שגיאה ומסמנת גרסה."""
