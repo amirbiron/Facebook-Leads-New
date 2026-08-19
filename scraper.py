@@ -304,13 +304,26 @@ _INVISIBLE_AND_PUA_RE = re.compile(
 )
 
 
-@functools.lru_cache(maxsize=512)
-def _stable_text_for_hash(text: str) -> str:
-    """מנרמל טקסט לחישוב hash יציב — מסיר timestamps, מספרים בודדים, ורעשי UI.
+# ── גבול התגובות ──
+# ה-innerText של אלמנט פוסט כולל גם את התגובות שמתחתיו. תגובות מתווספות בין
+# סריקות ומשנות את הטקסט — ולכן כל hash שמבוסס על הטקסט המלא לא יציב.
+# הפתרון: לחתוך מבנית בגבול שבין גוף הפוסט לתגובות. פייסבוק מרנדר שני
+# אותות בלתי-תלויים בגבול הזה, ומספיק שאחד מהם יופיע:
+#   1. בר פעולות — "אהבתי · תגובה · שיתוף"
+#   2. שורת engagement — "5 תגובות", "👍 12 תגובות · 3 שיתופים"
+# חיתוך מבני עדיף על ספירת מילים: הוא לא תלוי באורך הפוסט, ולכן עובד גם
+# בפוסטים קצרים (ראו באג #19) שבהם חלון של N מילים כבר נוגע בתגובות.
+def _is_comment_boundary(line: str) -> bool:
+    """בודק אם השורה היא הגבול שאחריו מתחילות תגובות הפוסט."""
+    return _is_action_bar(line) or bool(_ENGAGEMENT_LINE_RE.match(line))
 
-    נרמול עמוק: lowercase, הסרת URLs, תווים בלתי-נראים, מילות רעש UI,
-    engagement ו-timestamps. המטרה: אותו פוסט ← אותו hash בין סריקות שונות.
-    תוצאות נשמרות ב-cache (lru_cache) — אותו טקסט לא מעובד פעמיים.
+
+def _normalize_lines(text: str, *, stop_at_comments: bool) -> tuple[list[str], bool]:
+    """מנרמל טקסט לרשימת שורות יציבות. מחזיר (שורות, האם נמצא גבול תגובות).
+
+    stop_at_comments=True — עוצר בגבול התגובות ומחזיר רק את גוף הפוסט.
+    הלוגיקה מוגדרת כאן פעם אחת ומשמשת גם את _stable_text_for_hash
+    וגם את _post_core_text — לא לשכפל אותה.
     """
     # 1. lowercase — מונע הבדלי case בין רינדורים
     text = text.lower()
@@ -321,12 +334,17 @@ def _stable_text_for_hash(text: str) -> str:
     # 3. הסרת תווים בלתי-נראים (כיווניות, zero-width) ו-PUA — regex משולב אחד
     text = _INVISIBLE_AND_PUA_RE.sub('', text)
 
-    lines = text.split('\n')
-    stable = []
-    for line in lines:
+    stable: list[str] = []
+    hit_boundary = False
+    for line in text.split('\n'):
         s = line.strip()
         if not s:
             continue
+        # עצירה בגבול התגובות. דורשים ש-stable כבר לא ריק כדי ששורת גבול
+        # שמופיעה בראש האלמנט (רינדור חריג) לא תרוקן את הליבה כולה.
+        if stop_at_comments and stable and _is_comment_boundary(s):
+            hit_boundary = True
+            break
         # בדיקת regex משולבת — digits-only, engagement, dynamic lines בבדיקה אחת
         if _SKIP_LINE_RE.match(s):
             continue
@@ -341,12 +359,65 @@ def _stable_text_for_hash(text: str) -> str:
         if _is_action_bar(s):
             continue
         stable.append(s)
-    joined = '\n'.join(stable)
+    return stable, hit_boundary
+
+
+def _join_stable(lines: list[str]) -> str:
+    """מאחד שורות מנורמלות למחרוזת אחת — ללא timestamps וללא רווחים כפולים."""
+    joined = '\n'.join(lines)
     # הסרת timestamps דינאמיים
     joined = _TIMESTAMP_RE.sub('', joined)
     # כיווץ רווחים מיותרים
-    joined = _WHITESPACE_RE.sub(' ', joined).strip()
-    return joined
+    return _WHITESPACE_RE.sub(' ', joined).strip()
+
+
+@functools.lru_cache(maxsize=512)
+def _stable_text_for_hash(text: str) -> str:
+    """מנרמל טקסט לחישוב hash יציב — מסיר timestamps, מספרים בודדים, ורעשי UI.
+
+    נרמול עמוק: lowercase, הסרת URLs, תווים בלתי-נראים, מילות רעש UI,
+    engagement ו-timestamps. המטרה: אותו פוסט ← אותו hash בין סריקות שונות.
+    תוצאות נשמרות ב-cache (lru_cache) — אותו טקסט לא מעובד פעמיים.
+
+    שים לב: מחזיר את **כל** הטקסט, כולל תגובות. לחישוב זהות פוסט יציבה
+    יש להשתמש ב-_post_core_text — ראו באג #19.
+    """
+    lines, _ = _normalize_lines(text, stop_at_comments=False)
+    return _join_stable(lines)
+
+
+# מספר המילים המקסימלי בליבת הפוסט כשלא נמצא גבול תגובות מבני.
+# רשת ביטחון בלבד — לא הדרך המועדפת לחתוך תגובות (ראו _is_comment_boundary).
+_CORE_MAX_WORDS = 12
+
+
+@functools.lru_cache(maxsize=512)
+def _post_core_text(text: str) -> str:
+    """ליבת הפוסט — הטקסט המנורמל עד לגבול התגובות, בלי התגובות עצמן.
+
+    זו היחידה שעליה מבוססת זהות הפוסט: היא יציבה בין סריקות כי תגובות
+    חדשות שמתווספות לפוסט לא נכללות בה.
+
+    אם נמצא גבול מבני — מחזיר את גוף הפוסט המלא (מדויק, בלי סיכון להתנגשות
+    בין פוסטים שונים). אם לא נמצא — חותך ל-_CORE_MAX_WORDS מילים כרשת ביטחון,
+    כדי שתגובות לא ידלפו לליבה.
+    """
+    lines, hit_boundary = _normalize_lines(text, stop_at_comments=True)
+    core = _join_stable(lines)
+    if core and not hit_boundary:
+        core = ' '.join(core.split()[:_CORE_MAX_WORDS])
+    return core
+
+
+def stable_post_id(text: str) -> str:
+    """post_id יציב לפוסט ללא URL אמיתי — hash של ליבת הפוסט.
+
+    מחזיר מחרוזת ריקה אם אין ליבה (הטקסט כולו timestamps/רעש UI).
+    """
+    core = _post_core_text(text)
+    if not core:
+        return ""
+    return "c_" + hashlib.md5(core.encode()).hexdigest()[:16]
 
 
 def _extract_name_from_title(page_title: str) -> str | None:
@@ -1466,15 +1537,15 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         post_id = extract_post_id(post_url)
                     else:
                         # fallback URL = URL הקבוצה → ID זהה לכל הפוסטים בקבוצה.
-                        # משתמשים ב-hash של תוכן מנורמל כ-ID ייחודי לכל פוסט.
-                        # חשוב: הטקסט מנורמל (ללא timestamps, לייקים וכו')
-                        # כדי שה-hash יהיה יציב בין סריקות.
-                        stable = _stable_text_for_hash(text)
-                        if not stable:
+                        # משתמשים ב-hash של ליבת הפוסט כ-ID ייחודי לכל פוסט.
+                        # חשוב: הליבה נחתכת בגבול התגובות — אחרת כל תגובה
+                        # חדשה משנה את ה-ID, הפוסט נראה חדש, והעצירה המוקדמת
+                        # בגלילה לא נורית לעולם (באג #19).
+                        post_id = stable_post_id(text)
+                        if not post_id:
                             # הטקסט כולו timestamps/UI → לא תוכן אמיתי, מדלגים
                             skipped_short += 1
                             continue
-                        post_id = "c_" + hashlib.md5(stable.encode()).hexdigest()[:16]
 
                     # בדיקה אם הגענו לפוסט מסריקה קודמת.
                     # ה-hash מבוסס תוכן מנורמל (ללא timestamps) ולכן יציב בין סריקות.

@@ -197,6 +197,29 @@ def is_content_hash_sent(content_hash: str) -> bool:
     ).fetchone()
     return row is not None
 
+def get_sent_leads_content() -> list[tuple[str, str]]:
+    """מחזיר (post_id, content) לכל ליד שנשלח — לחישוב מחדש של content_hash.
+
+    נדרש כששיטת חישוב ה-hash משתנה: בלי חישוב מחדש, לידים שכבר נשלחו לא
+    יתאימו ל-hash החדש וייחשבו חדשים → גל כפילויות בפריסה הראשונה.
+    """
+    return [
+        (row[0], row[1] or "")
+        for row in _get_conn().execute(
+            "SELECT post_id, content FROM sent_leads"
+        ).fetchall()
+    ]
+
+def update_content_hashes(pairs: list[tuple[str, str]]):
+    """מעדכן content_hash לרשימת (post_id, content_hash) בטרנזקציה אחת."""
+    if not pairs:
+        return
+    with _get_conn() as conn:
+        conn.executemany(
+            "UPDATE sent_leads SET content_hash = ? WHERE post_id = ?",
+            [(h, pid) for pid, h in pairs]
+        )
+
 def get_stats() -> dict:
     conn = _get_conn()
     seen = conn.execute("SELECT COUNT(*) FROM seen_posts").fetchone()[0]
