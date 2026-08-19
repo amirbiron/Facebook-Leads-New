@@ -1171,7 +1171,14 @@ class TestContentHashMigration:
         assert database.get_config(main_mod._CONTENT_HASH_VERSION_KEY) is None
 
     def test_migration_pages_through_large_history(self, tmp_db):
-        """היסטוריה גדולה מגודל העמוד מוגרת במלואה, בלי לטעון הכל לזיכרון."""
+        """היסטוריה גדולה מגודל העמוד מוגרת במלואה, בלי לטעון הכל לזיכרון.
+
+        בודק גם את המנגנון ולא רק את התוצאה: מיגרציה שתחזור לטעון את כל
+        הטבלה בשאילתה אחת תעבור בדיקת תוצאה אבל תיפול כאן. זה חשוב כי
+        המיגרציה רצה בעלייה על VM עם 512MB.
+        """
+        import main as main_mod
+        from unittest.mock import patch
         from main import _content_dedup_hash, _migrate_content_hashes, _MIGRATION_PAGE_SIZE
         n = _MIGRATION_PAGE_SIZE * 2 + 7
         texts = [f"משתמש {i}\nמחפש בעל מקצוע מספר {i}?\nאהבתי · תגובה · שיתוף\n2 תגובות"
@@ -1179,9 +1186,23 @@ class TestContentHashMigration:
         for i, t in enumerate(texts):
             database.save_lead(f"p{i:05d}", "ג", t, "ליד", content_hash="ישן")
 
-        _migrate_content_hashes()
+        calls = []
+        real = main_mod.get_sent_leads_content
+        def spy(limit, after_post_id=None):
+            calls.append((limit, after_post_id))
+            return real(limit, after_post_id)
+        with patch.object(main_mod, "get_sent_leads_content", side_effect=spy):
+            _migrate_content_hashes()
 
+        # כל הלידים מוגרו
         assert all(database.is_content_hash_sent(_content_dedup_hash(t)) for t in texts)
+        # ...ובעמודים: 3 עמודי תוכן + עמוד ריק שמסיים את הלולאה
+        assert len(calls) == 4, f"ציפינו ל-4 קריאות עימוד, היו {len(calls)}"
+        assert all(limit == _MIGRATION_PAGE_SIZE for limit, _ in calls)
+        # עימוד לפי מפתח: העמוד הראשון בלי סמן, ומשם הסמן מתקדם ממש
+        cursors = [after for _, after in calls]
+        assert cursors[0] is None
+        assert all(a < b for a, b in zip(cursors[1:], cursors[2:]))
 
     def test_migration_survives_empty_table(self, tmp_db):
         """טבלה ריקה — המיגרציה עוברת בלי שגיאה ומסמנת גרסה."""

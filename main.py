@@ -2511,9 +2511,10 @@ def _migrate_content_hashes():
     """
     if get_config(_CONTENT_HASH_VERSION_KEY, "") == _CONTENT_HASH_VERSION:
         return
-    total = updated = offset = 0
+    total = updated = 0
+    cursor = None  # עימוד לפי מפתח — ראו get_sent_leads_content
     while True:
-        rows = get_sent_leads_content(_MIGRATION_PAGE_SIZE, offset)
+        rows = get_sent_leads_content(_MIGRATION_PAGE_SIZE, cursor)
         if not rows:
             break
         changed = [
@@ -2524,7 +2525,7 @@ def _migrate_content_hashes():
         update_content_hashes(changed)
         total += len(rows)
         updated += len(changed)
-        offset += _MIGRATION_PAGE_SIZE
+        cursor = rows[-1][0]
     set_config(_CONTENT_HASH_VERSION_KEY, _CONTENT_HASH_VERSION)
     log.info(
         f"מיגרציית content_hash לגרסה {_CONTENT_HASH_VERSION} — "
