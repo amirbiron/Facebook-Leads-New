@@ -972,6 +972,245 @@ class TestStableTextForHash:
         )
 
 
+class TestPostCoreAndStableId:
+    """באג #19 — ליבת פוסט יציבה: post_id ו-content_hash לא זזים כשמתווספות תגובות.
+
+    ה-innerText של אלמנט פוסט כולל את התגובות שמתחתיו. לפני התיקון, post_id
+    היה md5 של הטקסט המלא ולכן השתנה בכל תגובה חדשה → seen_checker לא זיהה
+    את הפוסט → העצירה המוקדמת בגלילה לא נורתה → כל סבב גלל 10 גלילות בכל
+    קבוצה → מגבלת האוטומציה היומית נגמרה בשעות הבוקר.
+    """
+
+    # בר הפעולות ושורת ה-engagement — הגבול שאחריו מתחילות תגובות
+    BAR = "\nאהבתי · תגובה · שיתוף\n5 תגובות"
+    COMMENTS = ("\nיוסי לוי\nאני יכול לעזור תשלח לי הודעה פרטית\n"
+                "רונית ברק\nגם אני מחפשת המלצה לאותו דבר")
+
+    def _post(self, body, *, bar=True):
+        return "דני כהן\nלפני 20 דקות\n" + body + (self.BAR if bar else "")
+
+    # ── יציבות post_id מול תגובות חדשות ──
+    @pytest.mark.parametrize("body,label", [
+        ("מחפש שיפוצניק באזור המרכז, ממליצים?", "6 מילים"),
+        ("מחפש איש מקצוע להתקנת מזגן בדירה בתל אביב, דחוף.", "11 מילים"),
+        ("מחפש איש מקצוע אמין להתקנת מזגן בדירה בתל אביב, דחוף מאוד, "
+         "אשמח להמלצות מכל אחד כאן.", "17 מילים"),
+        ("מחפש איש מקצוע אמין להתקנת מזגן בדירה בתל אביב, דחוף מאוד, אשמח "
+         "להמלצות מכל אחד כאן בקבוצה. עדיף מישהו שעובד גם בשבתות ויכול "
+         "להגיע כבר השבוע הקרוב לתאם.", "30 מילים"),
+    ])
+    def test_post_id_stable_when_comments_added(self, body, label):
+        """post_id זהה בין סריקה בלי תגובות לסריקה עם תגובות — בכל אורך פוסט.
+
+        זה הטסט המרכזי של באג #19: לפני התיקון כל השורות כאן נכשלו.
+        """
+        from scraper import stable_post_id
+        before = self._post(body)
+        after = self._post(body) + self.COMMENTS
+        assert stable_post_id(before) == stable_post_id(after), (
+            f"post_id השתנה כשנוספו תגובות לפוסט של {label}"
+        )
+
+    @pytest.mark.parametrize("body,label", [
+        ("מחפש שיפוצניק באזור המרכז, ממליצים?", "6 מילים"),
+        ("מחפש איש מקצוע להתקנת מזגן בדירה בתל אביב, דחוף.", "11 מילים"),
+    ])
+    def test_content_hash_stable_for_short_posts(self, body, label):
+        """content_hash יציב גם בפוסטים קצרים.
+
+        חלון 12 המילים לבדו לא הספיק: בפוסט של 11 מילים, המילה ה-12 היא כבר
+        שמו של המגיב הראשון. החיתוך המבני בגבול התגובות סוגר את הפער.
+        """
+        from main import _content_dedup_hash
+        before = self._post(body)
+        after = self._post(body) + self.COMMENTS
+        assert _content_dedup_hash(before) == _content_dedup_hash(after), (
+            f"content_hash השתנה כשנוספו תגובות לפוסט של {label}"
+        )
+
+    def test_engagement_line_alone_is_a_boundary(self):
+        """שורת engagement לבדה מספיקה כגבול — גם בלי בר פעולות."""
+        from scraper import stable_post_id
+        base = "דני כהן\nלפני 20 דקות\nמחפש שיפוצניק, ממליצים?\n3 תגובות"
+        assert stable_post_id(base) == stable_post_id(base + self.COMMENTS)
+
+    def test_action_bar_alone_is_a_boundary(self):
+        """בר פעולות לבדו מספיק כגבול — גם בלי שורת engagement."""
+        from scraper import stable_post_id
+        base = ("דני כהן\nלפני 20 דקות\nמחפש שיפוצניק, ממליצים?\n"
+                "אהבתי · תגובה · שיתוף")
+        assert stable_post_id(base) == stable_post_id(base + self.COMMENTS)
+
+    # ── ייחודיות: אסור שפוסטים שונים יקבלו אותו ID ──
+    def test_different_authors_same_text_differ(self):
+        """אותה בקשה משני מפרסמים = שני לידים נפרדים, לא כפילות."""
+        from scraper import stable_post_id
+        a = "דני כהן\nלפני 5 דקות\nמחפש שיפוצניק באזור המרכז?" + self.BAR
+        b = "רונית ברק\nלפני 5 דקות\nמחפש שיפוצניק באזור המרכז?" + self.BAR
+        assert stable_post_id(a) != stable_post_id(b)
+
+    def test_different_request_same_author_differs(self):
+        """אותו מפרסם, בקשה אחרת = ליד אחר."""
+        from scraper import stable_post_id
+        a = self._post("מחפש שיפוצניק באזור המרכז?")
+        b = self._post("מחפש חשמלאי באזור המרכז?")
+        assert stable_post_id(a) != stable_post_id(b)
+
+    def test_long_posts_use_full_body_not_just_12_words(self):
+        """כשיש גבול מבני, הליבה היא גוף הפוסט המלא — לא רק 12 מילים.
+
+        post_id חייב להיות מדויק: זיהוי שגוי של "כבר ראינו" = ליד אבוד.
+        שני פוסטים שנבדלים רק אחרי המילה ה-12 חייבים לקבל ID שונה.
+        """
+        from scraper import stable_post_id
+        prefix = "מחפש איש מקצוע אמין להתקנת מזגן בדירה בתל אביב דחוף מאוד "
+        a = self._post(prefix + "אשמח להמלצות על מזגן אינוורטר")
+        b = self._post(prefix + "אשמח להמלצות על מזגן מיני מרכזי")
+        assert stable_post_id(a) != stable_post_id(b)
+
+    # ── מקרי קצה ──
+    def test_noise_only_text_returns_empty(self):
+        """טקסט שכולו timestamps/UI לא מקבל ID — הקורא מדלג עליו."""
+        from scraper import stable_post_id
+        assert stable_post_id("לפני 5 דקות\n5 תגובות\nאהבתי · תגובה · שיתוף") == ""
+        assert stable_post_id("") == ""
+
+    def test_boundary_at_start_does_not_empty_the_core(self):
+        """שורת גבול בראש האלמנט (רינדור חריג) לא מרוקנת את הליבה."""
+        from scraper import stable_post_id, _post_core_text
+        text = "5 תגובות\nדני כהן\nמחפש שיפוצניק באזור המרכז, ממליצים?"
+        assert stable_post_id(text) != ""
+        assert "שיפוצניק" in _post_core_text(text)
+
+    def test_no_boundary_falls_back_to_word_cap(self):
+        """בלי גבול מבני — רשת הביטחון חותכת ל-12 מילים (התנהגות קודמת)."""
+        from scraper import _post_core_text, _CORE_MAX_WORDS
+        text = "דני כהן\n" + " ".join(f"מילה{i}" for i in range(40))
+        assert len(_post_core_text(text).split()) == _CORE_MAX_WORDS
+
+    def test_no_boundary_fallback_is_not_comment_proof(self):
+        """מקבע מגבלה ידועה: בלי גבול מבני, פוסט קצר עדיין לא יציב.
+
+        חלון 12 המילים הוא רשת ביטחון, לא פתרון — בפוסט קצר הוא נוגע
+        בתגובות. הטסט הזה לא מתאר התנהגות רצויה אלא מתעד את גבול התיקון,
+        כדי ששינוי עתידי בנתיב הזה יהיה מודע.
+
+        בפועל הנתיב כמעט לא נדרש: פוסט עם תגובות מרנדר ספירת תגובות,
+        שהיא עצמה גבול — ראו test_engagement_line_alone_is_a_boundary.
+        """
+        from scraper import stable_post_id
+        bare = "דני כהן\nלפני 20 דקות\nמחפש שיפוצניק, ממליצים?"
+        assert stable_post_id(bare) != stable_post_id(bare + self.COMMENTS)
+
+    def test_short_post_with_comments_is_stable_in_practice(self):
+        """אותו פוסט קצר, אבל כפי שפייסבוק באמת מרנדר אותו — יציב.
+
+        משלים את הטסט שמעליו: ברגע שיש ספירת תגובות (וזה המצב תמיד
+        כשיש תגובות), הזהות יציבה.
+        """
+        from scraper import stable_post_id
+        real = "דני כהן\nלפני 20 דקות\nמחפש שיפוצניק, ממליצים?\n2 תגובות"
+        assert stable_post_id(real) == stable_post_id(real + self.COMMENTS)
+
+    def test_post_id_prefix_marks_content_derived_id(self):
+        """ID מבוסס-תוכן שומר על התחילית c_ — כדי שיהיה נבדל מ-ID מ-URL."""
+        from scraper import stable_post_id
+        assert stable_post_id(self._post("מחפש שיפוצניק?")).startswith("c_")
+
+    def test_stable_text_for_hash_still_includes_comments(self):
+        """_stable_text_for_hash לא השתנה — הוא עדיין מחזיר את הטקסט המלא.
+
+        רק _post_core_text חותך בגבול. שמירה על ההפרדה מונעת שינוי סמוי
+        בכל שאר המקומות שמשתמשים בנרמול.
+        """
+        from scraper import _stable_text_for_hash, _post_core_text
+        text = self._post("מחפש שיפוצניק?") + self.COMMENTS
+        assert "יוסי לוי" in _stable_text_for_hash(text)
+        assert "יוסי לוי" not in _post_core_text(text)
+
+
+class TestContentHashMigration:
+    """מיגרציית content_hash — מונעת גל כפילויות בפריסה אחרי שינוי שיטת ה-hash."""
+
+    def test_migration_recomputes_hashes(self, tmp_db):
+        """ליד ותיק עם hash בשיטה ישנה מזוהה ככפילות אחרי המיגרציה."""
+        from main import _content_dedup_hash, _migrate_content_hashes
+        content = ("דני כהן\nלפני 20 דקות\nמחפש שיפוצניק באזור המרכז?\n"
+                   "אהבתי · תגובה · שיתוף\n5 תגובות")
+        database.save_lead("p1", "קבוצה", content, "ליד", content_hash="hash_ישן")
+        new_hash = _content_dedup_hash(content)
+        assert database.is_content_hash_sent(new_hash) is False
+
+        _migrate_content_hashes()
+
+        assert database.is_content_hash_sent(new_hash) is True
+
+    def test_migration_runs_only_once(self, tmp_db):
+        """אחרי מיגרציה מוצלחת נשמרת גרסה — הריצה הבאה לא עושה כלום."""
+        from main import _migrate_content_hashes, _CONTENT_HASH_VERSION_KEY, _CONTENT_HASH_VERSION
+        _migrate_content_hashes()
+        assert database.get_config(_CONTENT_HASH_VERSION_KEY) == _CONTENT_HASH_VERSION
+
+        database.save_lead("p2", "קבוצה", "תוכן חדש כלשהו לבדיקה", "ליד", content_hash="לא_נגעו_בי")
+        _migrate_content_hashes()
+        row = database._get_conn().execute(
+            "SELECT content_hash FROM sent_leads WHERE post_id = 'p2'").fetchone()
+        assert row[0] == "לא_נגעו_בי"
+
+    def test_migration_raises_and_keeps_version_unset_on_failure(self, tmp_db):
+        """כישלון מיגרציה זורח החוצה ולא מסמן גרסה — ההפעלה הבאה תנסה שוב.
+
+        המשך ריצה עם hashים לא תואמים פירושו שכל ליד ותיק ייראה חדש
+        וטלגרם יוצף בכפילויות. עדיף להיכשל ברעש בעלייה.
+        """
+        import main as main_mod
+        from unittest.mock import patch
+        with patch.object(main_mod, "get_sent_leads_content", side_effect=sqlite3.OperationalError("disk I/O error")):
+            with pytest.raises(sqlite3.OperationalError):
+                main_mod._migrate_content_hashes()
+        assert database.get_config(main_mod._CONTENT_HASH_VERSION_KEY) is None
+
+    def test_migration_pages_through_large_history(self, tmp_db):
+        """היסטוריה גדולה מגודל העמוד מוגרת במלואה, בלי לטעון הכל לזיכרון.
+
+        בודק גם את המנגנון ולא רק את התוצאה: מיגרציה שתחזור לטעון את כל
+        הטבלה בשאילתה אחת תעבור בדיקת תוצאה אבל תיפול כאן. זה חשוב כי
+        המיגרציה רצה בעלייה על VM עם 512MB.
+        """
+        import main as main_mod
+        from unittest.mock import patch
+        from main import _content_dedup_hash, _migrate_content_hashes, _MIGRATION_PAGE_SIZE
+        n = _MIGRATION_PAGE_SIZE * 2 + 7
+        texts = [f"משתמש {i}\nמחפש בעל מקצוע מספר {i}?\nאהבתי · תגובה · שיתוף\n2 תגובות"
+                 for i in range(n)]
+        for i, t in enumerate(texts):
+            database.save_lead(f"p{i:05d}", "ג", t, "ליד", content_hash="ישן")
+
+        calls = []
+        real = main_mod.get_sent_leads_content
+        def spy(limit, after_post_id=None):
+            calls.append((limit, after_post_id))
+            return real(limit, after_post_id)
+        with patch.object(main_mod, "get_sent_leads_content", side_effect=spy):
+            _migrate_content_hashes()
+
+        # כל הלידים מוגרו
+        assert all(database.is_content_hash_sent(_content_dedup_hash(t)) for t in texts)
+        # ...ובעמודים: 3 עמודי תוכן + עמוד ריק שמסיים את הלולאה
+        assert len(calls) == 4, f"ציפינו ל-4 קריאות עימוד, היו {len(calls)}"
+        assert all(limit == _MIGRATION_PAGE_SIZE for limit, _ in calls)
+        # עימוד לפי מפתח: העמוד הראשון בלי סמן, ומשם הסמן מתקדם ממש
+        cursors = [after for _, after in calls]
+        assert cursors[0] is None
+        assert all(a < b for a, b in zip(cursors[1:], cursors[2:]))
+
+    def test_migration_survives_empty_table(self, tmp_db):
+        """טבלה ריקה — המיגרציה עוברת בלי שגיאה ומסמנת גרסה."""
+        from main import _migrate_content_hashes, _CONTENT_HASH_VERSION_KEY
+        _migrate_content_hashes()
+        assert database.get_config(_CONTENT_HASH_VERSION_KEY) is not None
+
+
 class TestContentHashDedup:
     """בדיקות ל-content_hash dedup — מניעת כפילויות כשה-post_id משתנה בין סשנים."""
 

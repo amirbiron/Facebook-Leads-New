@@ -10,6 +10,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from database import (
     init_db, is_seen, is_lead_sent, is_content_hash_sent, mark_seen, save_lead,
+    get_sent_leads_content, update_content_hashes,
     get_stats, get_daily_stats,
     cleanup_old_posts, add_group, remove_group, get_db_groups,
     add_keyword, remove_keyword, get_db_keywords, ensure_keywords_migrated,
@@ -1904,40 +1905,37 @@ if threading.current_thread() is threading.main_thread():
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
+# מספר המילים שמרכיבות את ה-hash לזיהוי כפילויות שליחה.
+# פחות מילים = יותר סובלנות לשינויים קלים בגוף הפוסט = פחות סיכוי לשלוח כפילות.
+_DEDUP_HASH_WORDS = 12
+
 def _content_dedup_hash(text: str) -> str:
-    """מחשב hash תוכן לזיהוי כפילויות — מבוסס על ליבת הטקסט בלבד.
+    """מחשב hash תוכן לזיהוי כפילויות — מבוסס על ליבת הפוסט בלבד.
 
-    משתמש ב-12 המילים הראשונות של הטקסט המנורמל (אחרי _stable_text_for_hash).
-    הסיבה: innerText של אלמנט פוסט כולל גם תגובות/תשובות שמופיעים בסוף הטקסט.
-    בין סריקות, תגובות חדשות מתווספות → ה-hash של הטקסט המלא משתנה → כפילות.
-    ליבת הפוסט (שם הכותב + תחילת הגוף) מופיעה תמיד בהתחלה ולא משתנה.
+    הליבה (_post_core_text) נחתכת בגבול התגובות, כך שתגובות חדשות שנוספו
+    בין סריקות לא משנות אותה. מעליה חותכים ל-_DEDUP_HASH_WORDS מילים.
 
-    למה 12 מילים ולא 150 תווים: בפוסטים קצרים (~19 מילים / ~100 תווים) חיתוך
-    לפי תווים כולל חלק מתגובות — שמשתנות בין סריקות. 12 מילים = ~60-80 תווים
-    של ליבת הפוסט (שם + משפט ראשון), וספירת מילים לא מושפעת מאורך הפוסט.
+    למה חותכים מילים גם מעל ליבה נקייה: לשני ה-hashים יש מצב כישלון הפוך.
+    ל-post_id, זיהוי שגוי של "כבר ראינו" = ליד אבוד, ולכן הוא משתמש בליבה
+    המלאה (מדויק ככל האפשר). כאן, החמצת כפילות = הודעה כפולה בטלגרם, ולכן
+    עדיף חלון צר וסלחני שעומד בשינויים קלים בגוף הפוסט.
     """
     import hashlib
-    from scraper import _stable_text_for_hash
-    stable = _stable_text_for_hash(text)
-    if not stable:
+    from scraper import _post_core_text
+    core = _post_core_text(text)
+    if not core:
         return ""
-    # 12 מילים ראשונות — ליבת הפוסט (שם + משפט ראשון) יציבה בין סריקות.
-    # מילים עדיפות על תווים כי תוכן דינמי (תגובות) מתחיל אחרי גוף הפוסט,
-    # וספירת מילים לא מושפעת מאורכי שורות או שינויי רווחים.
-    # 12 ולא 20 כי בפוסטים קצרים (~19 מילים) חיתוך ל-20 כולל חלק מתגובות.
-    words = stable.split()[:12]
-    core = ' '.join(words)
-    return hashlib.md5(core.encode()).hexdigest()
+    return hashlib.md5(' '.join(core.split()[:_DEDUP_HASH_WORDS]).encode()).hexdigest()
 
 def _dedup_debug(post_id: str, content: str, c_hash: str, label: str):
-    """לוג דיאגנוסטי לזיהוי כפילויות — מציג snippet + hash + post_id + stable text."""
+    """לוג דיאגנוסטי לזיהוי כפילויות — מציג snippet + hash + post_id + core text."""
     snippet = content.replace('\n', ' ')[:80]
     log.info(f"[DEDUP-SEND] {label} | id={post_id[:20]} | hash={c_hash[:12]} | \"{snippet}...\"")
-    # לוג מורחב: מציג את הטקסט המנורמל המלא (אחרי _stable_text_for_hash)
-    # זה מאפשר להשוות בין סריקות ולראות מה בדיוק שונה כשה-hash לא תואם
-    from scraper import _stable_text_for_hash
-    stable = _stable_text_for_hash(content)
-    log.debug(f"[DEDUP-STABLE] {c_hash[:12]} | stable_len={len(stable)} | \"{stable[:300]}...\"")
+    # לוג מורחב: מציג את ליבת הפוסט המלאה (אחרי _post_core_text).
+    # זה מאפשר להשוות בין סריקות ולראות מה בדיוק שונה כשה-hash לא תואם.
+    from scraper import _post_core_text
+    core = _post_core_text(content)
+    log.debug(f"[DEDUP-STABLE] {c_hash[:12]} | core_len={len(core)} | \"{core[:300]}...\"")
 
 def _reset_scan_progress():
     """מאפס את scan_progress לפני סבב חדש."""
@@ -2486,9 +2484,58 @@ async def run_cycle():
         except Exception:
             log.debug("שליחת הודעת סיכום סריקה נכשלה — לא קריטי")
 
+# גרסת שיטת חישוב ה-content_hash. כשהשיטה משתנה — מעלים את המספר,
+# וה-hashים של לידים שכבר נשלחו מחושבים מחדש בעלייה.
+_CONTENT_HASH_VERSION = "2"
+_CONTENT_HASH_VERSION_KEY = "content_hash_version"
+
+# גודל עמוד במיגרציה — sent_leads מחזיק את תוכן הפוסט המלא בכל שורה,
+# ועל VM עם 512MB אסור לטעון את כל ההיסטוריה לזיכרון בבת אחת.
+_MIGRATION_PAGE_SIZE = 500
+
+def _migrate_content_hashes():
+    """מחשב מחדש content_hash לכל הלידים שנשלחו, אחרי שינוי בשיטת החישוב.
+
+    בלי זה, בפריסה הראשונה אחרי השינוי אף ליד ותיק לא יזוהה ככפילות
+    (ה-hash שמור ב-DB לפי השיטה הישנה) → גל הודעות כפולות בטלגרם.
+    ה-content המקורי שמור ב-sent_leads, ולכן אפשר לחשב מחדש במדויק.
+
+    **לא זורק בשקט**: אם המיגרציה נכשלה, ה-DB לא במצב שמאפשר לזהות
+    כפילויות, והמשך ריצה פירושו הצפת טלגרם בלידים שכבר נשלחו. עדיף
+    להיכשל ברעש בעלייה — הגרסה לא נשמרת, אז ההפעלה הבאה תנסה שוב.
+
+    **מה לא ניתן למגר**: `seen_posts.post_id` לא שומר את טקסט המקור, ולכן
+    IDים ישנים של פוסטים ללא URL אמיתי לא ניתנים לחישוב מחדש. הסבב הראשון
+    אחרי הפריסה יראה אותם כחדשים ויגלול את הקבוצות במלואן — פעם אחת.
+    כפילויות בשליחה עדיין נחסמות, כי content_hash כן מוגר.
+    """
+    if get_config(_CONTENT_HASH_VERSION_KEY, "") == _CONTENT_HASH_VERSION:
+        return
+    total = updated = 0
+    cursor = None  # עימוד לפי מפתח — ראו get_sent_leads_content
+    while True:
+        rows = get_sent_leads_content(_MIGRATION_PAGE_SIZE, cursor)
+        if not rows:
+            break
+        changed = [
+            (post_id, new_hash)
+            for post_id, content in rows
+            if content and (new_hash := _content_dedup_hash(content))
+        ]
+        update_content_hashes(changed)
+        total += len(rows)
+        updated += len(changed)
+        cursor = rows[-1][0]
+    set_config(_CONTENT_HASH_VERSION_KEY, _CONTENT_HASH_VERSION)
+    log.info(
+        f"מיגרציית content_hash לגרסה {_CONTENT_HASH_VERSION} — "
+        f"חושבו מחדש {updated} מתוך {total} לידים"
+    )
+
 async def main():
     log.info("מאתחל מסד נתונים...")
     init_db()
+    _migrate_content_hashes()
     # פאנל מופעל ראשון — אם הוא תופס את אותו פורט כמו health, לא צריך שרת health נפרד
     panel_started = _start_panel()
     panel_port = _get_panel_port()
