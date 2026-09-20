@@ -4563,7 +4563,7 @@ class TestVacationMode:
 # ════════════════════════════════════════════════════════════════
 
 from scraper import _MOBILE_CONTEXT_OPTS, _CONTEXT_RECYCLE_GROUPS
-from main import _process_rss_mb
+from main import _process_rss_mb, _container_mem_mb
 
 
 class TestMemoryGuards:
@@ -4593,3 +4593,23 @@ class TestMemoryGuards:
         שמבדיל דליפה איטית מקפיצה של סייקל בודד."""
         rss = _process_rss_mb()
         assert rss is None or 1 < rss < 100_000
+
+    def test_container_memory_is_the_ceiling_metric(self):
+        """מדידת המכולה חייבת לכלול את Chromium, לא רק את הפייתון.
+        `_process_rss_mb` לבדו הראה 94MB בזמן שהמכולה הייתה ב-456MB —
+        מדד שעיוור בדיוק לדבר שגורם ל-OOM."""
+        container = _container_mem_mb()
+        if container is None:
+            pytest.skip("אין cgroup נגיש בסביבת הטסט")
+        used_mb, limit_mb = container
+        assert used_mb > 0
+        assert limit_mb is None or limit_mb >= used_mb
+
+    def test_container_memory_exceeds_python_rss(self):
+        """המכולה חייבת להיות גדולה מתהליך הפייתון לבדו — אחרת
+        המדידה חוזרת לטעות שבגללה הוספנו אותה."""
+        container = _container_mem_mb()
+        rss = _process_rss_mb()
+        if container is None or rss is None:
+            pytest.skip("מדידה לא זמינה בסביבת הטסט")
+        assert container[0] >= rss
