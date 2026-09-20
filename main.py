@@ -1031,6 +1031,14 @@ async def _telegram_control_loop(
     import requests
     import json
 
+    # שגיאות רשת חולפות מול טלגרם — מטופלות בנפרד משגיאות אמיתיות
+    # כדי שלא יציפו את הלוג ב-traceback ויסתירו תקלות של ממש.
+    _TRANSIENT_NET_ERRORS = (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+        requests.exceptions.ChunkedEncodingError,
+    )
+
     offset_file = Path(__file__).resolve().parent / "data" / "telegram_offset.txt"
 
     def load_offset() -> int:
@@ -1716,9 +1724,30 @@ async def _telegram_control_loop(
             else:
                 log.error(f"שגיאה בלולאת בקרת טלגרם: {e}", exc_info=True)
                 await asyncio.sleep(5)
+        except _TRANSIENT_NET_ERRORS as e:
+            # ניתוק רשת/TLS חולף מול api.telegram.org. long-poll של 30 שניות
+            # נקטע מדי פעם — זו לא תקלה בקוד והלולאה מתאוששת בניסיון הבא.
+            # לכן WARNING בשורה אחת ולא ERROR עם traceback של 30 שורות,
+            # שמטביע בלוג את השגיאות האמיתיות.
+            log.warning(f"ניתוק רשת מול טלגרם ({type(e).__name__}) — מנסה שוב")
+            await asyncio.sleep(5)
         except Exception as e:
             log.error(f"שגיאה בלולאת בקרת טלגרם: {e}", exc_info=True)
             await asyncio.sleep(5)
+
+def _process_rss_mb() -> float | None:
+    """זיכרון התהליך (RSS) במגהבייט, מתוך /proc — בלי תלות ב-psutil.
+
+    מחזיר None כשלא זמין (למשל מחוץ ללינוקס)."""
+    try:
+        with open("/proc/self/status", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except Exception:
+        pass
+    return None
+
 
 # רפרנס ל-shared_state — מאותחל ב-main() כדי ש-health check יוכל לגשת למצב הסריקה
 _health_shared_state: dict | None = None
@@ -2634,6 +2663,13 @@ async def main():
                 except Exception:
                     waste = 0.0
                 effective = max(0.0, elapsed - waste)
+                # RSS אחרי הסייקל. התהליך רץ שבועות ברציפות על 512MB,
+                # והזיכרון מטפס לאט לאורך ימים עד שהסייקל נחנק בתקרה.
+                # בלי המדד הזה בלוג אי אפשר להבחין בין דליפה איטית
+                # לבין קפיצה חד-פעמית של סייקל כבד (באג #20).
+                rss = _process_rss_mb()
+                if rss:
+                    log.info(f"זיכרון אחרי סייקל: {rss:.0f}MB")
                 if waste > 5:
                     log.debug(
                         f"זמן סריקה: {elapsed:.0f}s כולל | {waste:.0f}s טיימאוטים | "

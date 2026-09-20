@@ -4556,3 +4556,40 @@ class TestVacationMode:
         vacation_btn = [btn for row in buttons for btn in row
                         if btn.get("callback_data") == "vacation_toggle"][0]
         assert "כבה חופשה" in vacation_btn["text"]
+
+
+# ════════════════════════════════════════════════════════════════
+# 40. חנק זיכרון — מחזור הקשר ודיאגנוסטיקת RSS (באג #20)
+# ════════════════════════════════════════════════════════════════
+
+from scraper import _MOBILE_CONTEXT_OPTS, _CONTEXT_RECYCLE_GROUPS
+from main import _process_rss_mb
+
+
+class TestMemoryGuards:
+    """הקשר ממוחזר חייב להיות זהה למקורי, ו-RSS חייב להיות מדיד."""
+
+    def test_recycled_context_stays_mobile(self):
+        """ההקשר הממוחזר חייב לשמור על UA נייד — אחרת פייסבוק מגיש
+        דסקטופ, הסלקטורים לא תואמים וכל הסריקה נשברת בשקט."""
+        assert "Mobile" in _MOBILE_CONTEXT_OPTS["user_agent"]
+        assert "Android" in _MOBILE_CONTEXT_OPTS["user_agent"]
+
+    def test_recycled_context_blocks_service_workers(self):
+        """service_workers='block' מונע מ-SW של פייסבוק לתקוע טעינה —
+        חייב לחול גם על ההקשר הממוחזר."""
+        assert _MOBILE_CONTEXT_OPTS["service_workers"] == "block"
+
+    def test_recycled_context_keeps_small_viewport(self):
+        """viewport קטן = פחות layout לחשב = פחות זיכרון."""
+        assert _MOBILE_CONTEXT_OPTS["viewport"]["width"] <= 400
+
+    def test_recycle_interval_is_positive(self):
+        """ברירת המחדל חייבת למחזר בפועל, אחרת הזיכרון מטפס עד התקרה."""
+        assert _CONTEXT_RECYCLE_GROUPS > 0
+
+    def test_rss_reports_plausible_value(self):
+        """מדידת RSS חייבת להחזיר ערך שפוי — זה המדד היחיד בלוג
+        שמבדיל דליפה איטית מקפיצה של סייקל בודד."""
+        rss = _process_rss_mb()
+        assert rss is None or 1 < rss < 100_000

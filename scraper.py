@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import gc
 import hashlib
 import html as html_mod
 import json
@@ -489,6 +490,24 @@ async def random_delay(min_sec=1, max_sec=3):
     log.debug(f"השהיה {delay:.1f} שניות")
     await asyncio.sleep(delay)
 
+# הגדרות ההקשר הנייד — מוגדרות פעם אחת ומשמשות גם את הפתיחה הראשונה
+# וגם כל מחזור הקשר (context recycle). לא לשכפל.
+_MOBILE_CONTEXT_OPTS = {
+    "user_agent": (
+        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+    ),
+    "viewport": {"width": 360, "height": 640},
+    "locale": "he-IL",
+    "service_workers": "block",  # מונע מ-SW של פייסבוק לתקוע את טעינת הדף
+}
+
+# כל כמה קבוצות לסגור את ההקשר ולפתוח חדש.
+# Chromium לא מחזיר זיכרון ל-OS גם אחרי about:blank — רק סגירת ההקשר
+# הורגת את תהליך ה-renderer ומשחררת אותו באמת (באג #20).
+_CONTEXT_RECYCLE_GROUPS = int(os.environ.get("CONTEXT_RECYCLE_GROUPS", "3"))
+
+
 async def block_heavy_resources(page):
     """חוסם תמונות, וידאו ופונטים כדי לחסוך זיכרון"""
     BLOCKED_TYPES = {"image", "media", "font"}
@@ -516,6 +535,18 @@ async def load_session(context):
         return True
     log.info("לא נמצא סשן שמור")
     return False
+
+async def _open_scrape_page(browser):
+    """פותח הקשר נייד חדש + דף, טוען סשן שמור וחוסם משאבים כבדים.
+
+    מחזיר (context, page, session_loaded). משמש גם בפתיחה הראשונה
+    וגם במחזור הקשר באמצע סריקה."""
+    context = await browser.new_context(**_MOBILE_CONTEXT_OPTS)
+    page = await context.new_page()
+    await block_heavy_resources(page)
+    session_loaded = await load_session(context)
+    return context, page, session_loaded
+
 
 async def dismiss_cookie_dialog(page):
     """סוגר דיאלוג cookies אם מופיע"""
@@ -1361,6 +1392,7 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         KNOWN_THRESHOLD = 3  # כמה פוסטים מוכרים ברצף לפני עצירה (מונע עצירה על פוסט מוצמד)
         seen_texts = set()
         skipped_short = 0
+        elem_timeouts = 0  # אלמנטים שקריאת הטקסט שלהם פגה ב-timeout
         page_post_urls = []  # קישורי פוסטים שנאספו בסריקת דף (page-level scan)
 
         log.debug("מתחיל גלילה חכמה...")
@@ -1430,8 +1462,18 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                 # בקשת עצירה (/stop) — יוצאים מיד גם באמצע עיבוד פוסטים
                 if _stop_scan_requested:
                     break
+                _text_t0 = asyncio.get_event_loop().time()
                 try:
-                    text = await asyncio.wait_for(el.inner_text(), timeout=5)
+                    # קריאת innerText דרך evaluate ולא דרך el.inner_text().
+                    # el.inner_text() מתורגם בצד השרת ל-frame.innerText(':scope')
+                    # עם timeout ברירת מחדל נסתר של 30 שניות. כש-wait_for שלנו
+                    # מוותר אחרי 5 שניות, קריאת הפרוטוקול ממשיכה לרוץ ונכשלת
+                    # 25 שניות אחר כך לתוך future שאיש לא מחכה לו —
+                    # "Future exception was never retrieved" (באג #20).
+                    # evaluate הוא קריאה ישירה על ה-handle, בלי טיימר נסתר,
+                    # ולכן wait_for הוא מקור האמת היחיד ל-timeout.
+                    text = await asyncio.wait_for(
+                        el.evaluate("el => el.innerText || ''"), timeout=5)
                     # הסרת תגיות HTML שדלפו (כולל <img> עם base64)
                     text = re.sub(r'<[^>]+>', '', text)
                     text = text.strip()
@@ -1578,8 +1620,15 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
                         reached_known = True
                         break
 
+                except asyncio.TimeoutError:
+                    # קריאת הטקסט לא הספיקה — כמעט תמיד חישוב layout איטי
+                    # כשהזיכרון בתקרה. נזקף למצבור הזמן המבוזבז כדי שלא
+                    # ייספר במגבלת האוטומציה היומית (כמו כל נתיב timeout אחר).
+                    _add_timeout_waste(asyncio.get_event_loop().time() - _text_t0)
+                    elem_timeouts += 1
+                    continue
                 except Exception as e:
-                    log.debug(f"שגיאה בעיבוד אלמנט: {e}")
+                    log.debug(f"שגיאה בעיבוד אלמנט: {type(e).__name__}: {e}")
                     continue
 
             if reached_known:
@@ -1592,7 +1641,14 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
         if not reached_known:
             log.debug(f"לא הגענו לפוסט מוכר — נעצרנו אחרי {scroll_i} גלילות")
 
-        log.debug(f"סטטיסטיקה — דולגו: {skipped_short} קצרים")
+        # elem_timeouts גבוה = הזיכרון בתקרה וחישוב ה-layout נחנק.
+        # זה המדד שמסביר קבוצה שלוקחת דקות ומחזירה 0 פוסטים (באג #20).
+        if elem_timeouts:
+            log.warning(
+                f"{elem_timeouts} אלמנטים פגו ב-timeout בקריאת טקסט "
+                f"(~{elem_timeouts * 5}s) — סימן לחנק זיכרון"
+            )
+        log.debug(f"סטטיסטיקה — דולגו: {skipped_short} קצרים, {elem_timeouts} טיימאאוטים")
 
     except PlaywrightTimeout as e:
         log.error(f"טיימאאוט בקבוצה: {group['name']} — {e}")
@@ -1662,16 +1718,7 @@ async def scrape_all(email: str, password: str, seen_checker=None,
         )
         log.debug("דפדפן הופעל בהצלחה")
 
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-            viewport={"width": 360, "height": 640},
-            locale="he-IL",
-            service_workers="block",  # מונע מ-SW של פייסבוק לתקוע את טעינת הדף
-        )
-        page = await context.new_page()
-        await block_heavy_resources(page)
-
-        session_loaded = await load_session(context)
+        context, page, session_loaded = await _open_scrape_page(browser)
 
         if session_loaded:
             log.debug("בודק תקינות סשן...")
@@ -1739,6 +1786,34 @@ async def scrape_all(email: str, password: str, seen_checker=None,
                 log.debug("ניווט ל-about:blank לשחרור זיכרון")
             except Exception:
                 pass
+
+            # מחזור הקשר — about:blank משחרר את ה-DOM אבל Chromium לא
+            # מחזיר את הזיכרון ל-OS. רק סגירת ההקשר הורגת את תהליך ה-renderer.
+            # בלי זה הזיכרון מטפס עד תקרת ה-512MB באמצע הסייקל, חישוב ה-layout
+            # נחנק, וכל קריאת innerText פגה ב-timeout (באג #20).
+            # ה-cookies נשמרים לפני הסגירה ונטענים להקשר החדש — אין צורך בלוגין.
+            if (_CONTEXT_RECYCLE_GROUPS > 0 and i < len(GROUPS)
+                    and i % _CONTEXT_RECYCLE_GROUPS == 0):
+                # שמירת הסשן היא תנאי מקדים — בלעדיה ההקשר החדש ייפתח
+                # בלי cookies ויידרש לוגין. כישלון כאן מדלג על המחזור
+                # וממשיך עם ההקשר הקיים, במקום להרוג את שאר הקבוצות.
+                try:
+                    await save_session(context)
+                    can_recycle = True
+                except Exception as e:
+                    log.warning(f"שמירת סשן לפני מחזור הקשר נכשלה — מדלג על המחזור ({type(e).__name__}: {e})")
+                    can_recycle = False
+
+                if can_recycle:
+                    try:
+                        await context.close()
+                        gc.collect()
+                        context, page, _ = await _open_scrape_page(browser)
+                        log.info(f"הקשר הדפדפן מוחזר אחרי {i} קבוצות — שחרור זיכרון")
+                    except Exception as e:
+                        # ההקשר כבר נסגר — אין דף לעבוד איתו, חייבים לעצור.
+                        log.error(f"פתיחת הקשר חדש נכשלה: {type(e).__name__}: {e}", exc_info=True)
+                        break
 
             if i < len(GROUPS):
                 log.debug("השהיה בין קבוצות...")
