@@ -1736,8 +1736,10 @@ async def _telegram_control_loop(
             await asyncio.sleep(5)
 
 def _process_rss_mb() -> float | None:
-    """זיכרון התהליך (RSS) במגהבייט, מתוך /proc — בלי תלות ב-psutil.
+    """זיכרון תהליך הפייתון בלבד (RSS) במגהבייט, מתוך /proc.
 
+    **לא** מדד התקרה — הוא לא כולל את דרייבר ה-Node של Playwright
+    ואת תהליכי Chromium, שהם רוב הצריכה. ל-OOM השתמשו ב-`_container_mem_mb`.
     מחזיר None כשלא זמין (למשל מחוץ ללינוקס)."""
     try:
         with open("/proc/self/status", encoding="utf-8") as f:
@@ -1746,6 +1748,43 @@ def _process_rss_mb() -> float | None:
                     return int(line.split()[1]) / 1024
     except Exception:
         pass
+    return None
+
+
+# נתיבי cgroup — v2 קודם, ואז v1. זה המספר ש-Render מציג וש-OOM נאכף לפיו.
+_CGROUP_PATHS = (
+    ("/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory.max"),
+    ("/sys/fs/cgroup/memory/memory.usage_in_bytes",
+     "/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+)
+
+
+def _container_mem_mb() -> tuple[float, float | None] | None:
+    """זיכרון המכולה כולה (שימוש, תקרה) במגהבייט, מתוך cgroup.
+
+    זה המדד שקובע — הוא סופר את הפייתון, את דרייבר ה-Node ואת כל
+    תהליכי Chromium יחד, ולפיו ה-kernel מחליט על OOM. `_process_rss_mb`
+    לבדו מראה רק חלק קטן מהתמונה (באג #20).
+
+    מחזיר None כשאין cgroup נגיש. התקרה עשויה להיות None כשהיא 'max'."""
+    for usage_path, limit_path in _CGROUP_PATHS:
+        try:
+            with open(usage_path, encoding="utf-8") as f:
+                usage = int(f.read().strip()) / 1024 / 1024
+        except Exception:
+            continue
+        limit = None
+        try:
+            with open(limit_path, encoding="utf-8") as f:
+                raw = f.read().strip()
+            if raw != "max":
+                parsed = int(raw) / 1024 / 1024
+                # cgroup v1 מסמן "ללא הגבלה" במספר ענק
+                if parsed < 1_000_000:
+                    limit = parsed
+        except Exception:
+            pass
+        return usage, limit
     return None
 
 
@@ -2668,8 +2707,21 @@ async def main():
                 # בלי המדד הזה בלוג אי אפשר להבחין בין דליפה איטית
                 # לבין קפיצה חד-פעמית של סייקל כבד (באג #20).
                 rss = _process_rss_mb()
-                if rss:
-                    log.info(f"זיכרון אחרי סייקל: {rss:.0f}MB")
+                container = _container_mem_mb()
+                if container:
+                    used_mb, limit_mb = container
+                    pct = f" ({used_mb / limit_mb * 100:.0f}% מהתקרה)" if limit_mb else ""
+                    py = f", פייתון {rss:.0f}MB" if rss else ""
+                    log.info(f"זיכרון אחרי סייקל: {used_mb:.0f}MB{pct}{py}")
+                    # מתקרבים לתקרה — OOM ישתק את הבוט בלי אזהרה אחרת.
+                    if limit_mb and used_mb / limit_mb > 0.85:
+                        log.warning(
+                            f"זיכרון המכולה ב-{used_mb / limit_mb * 100:.0f}% מהתקרה "
+                            f"({used_mb:.0f}/{limit_mb:.0f}MB) — צפוי OOM. "
+                            f"שקול restart או CONTEXT_RECYCLE_GROUPS נמוך יותר."
+                        )
+                elif rss:
+                    log.info(f"זיכרון אחרי סייקל: פייתון {rss:.0f}MB (cgroup לא זמין)")
                 if waste > 5:
                     log.debug(
                         f"זמן סריקה: {elapsed:.0f}s כולל | {waste:.0f}s טיימאוטים | "
