@@ -1,0 +1,45 @@
+# אתחול תקופתי של השירות ב-Render דרך Deploy Hook.
+#
+# למה: התהליך דולף זיכרון לאט (באג #20 ב-CLAUDE.md). התיקון של מחזור
+# ההקשר קונה מרווח גדול אבל לא אוטם את הדליפה, ומופע שרץ שבועות ברציפות
+# מגיע בסוף לתקרת ה-512MB — ואז הוא לא קורס ברעש אלא נתקע בשקט: הסריקות
+# ממשיכות, כל קריאת innerText פגה ב-timeout, ואפס לידים נשלחים.
+#
+# ה-Deploy Hook הוא URL סודי; כל POST אליו מפעיל deploy מחדש של ה-commit
+# הנוכחי, כלומר מכולה חדשה עם זיכרון נקי. אין צורך ב-API key נפרד —
+# המפתח שבתוך ה-URL הוא האימות, ולכן הוא חייב להיות ב-Secrets ולא בקובץ.
+#
+# הגדרה חד-פעמית:
+#   1. Render → השירות → Settings → Deploy Hook → העתקת ה-URL
+#   2. GitHub → Settings → Secrets and variables → Actions → New secret
+#      בשם RENDER_DEPLOY_HOOK_URL
+#
+# הנתונים בדיסק (/app/data) שורדים אתחול — SQLite, סשן פייסבוק ו-offset
+# של טלגרם. גם מונה האוטומציה היומי נשמר ב-DB (באג #18), אז הוא לא מתאפס.
+
+name: Restart Render service
+
+on:
+  schedule:
+    # ה-1 וה-15 בכל חודש ב-23:00 UTC (02:00 בישראל) — בערך אחת לשבועיים,
+    # בשעה שקטה. cron של GitHub רץ ב-UTC ועשוי להתעכב בדקות בשעות עומס.
+    - cron: "0 23 1,15 * *"
+  workflow_dispatch:  # הפעלה ידנית — גם לאימות ראשוני שה-hook עובד
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy hook
+        env:
+          HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOOK_URL}" ]; then
+            echo "::error::הסוד RENDER_DEPLOY_HOOK_URL לא מוגדר — ראו הוראות בראש הקובץ"
+            exit 1
+          fi
+          # -f מפיל את הצעד על סטטוס שגיאה, כדי ש-hook שפג או הוחלף
+          # ייכשל ברעש ולא בשקט. הפלט לא מודפס — הוא עלול להכיל את ה-URL.
+          code=$(curl -fsS -o /dev/null -w '%{http_code}' -X POST "${HOOK_URL}")
+          echo "Render deploy hook triggered (HTTP ${code})"
