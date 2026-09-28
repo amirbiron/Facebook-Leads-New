@@ -203,6 +203,7 @@
 
 ## סיווג (classifier.py)
 - משתמש ב-OpenAI Chat Completions API (מודל `gpt-4.1-mini`). משתנה סביבה: `OPENAI_API_KEY`.
+- **מודל חדש ב-`_MODEL_PRIORITY` מחייב מחיר ב-`_MODEL_COSTS`** (`database.py`) — אחרת הוא מתומחר לפי ברירת המחדל ו-`/developer_usage` מציג עלות שגויה. `test_every_priority_model_has_explicit_cost` אוכף את זה.
 - `classify_post()` — סיווג פוסט בודד (fallback).
 - `classify_batch()` — סיווג מספר פוסטים בבקשה אחת (ברירת מחדל: 5 לבאצ').
 - `_chat_completion()` — פונקציית עזר לקריאת API עם auto-fallback למודל הבא אם הנוכחי deprecated (404/410).
