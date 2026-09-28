@@ -3514,6 +3514,15 @@ class TestEstimateCost:
         cost = _estimate_cost("unknown-model", 1_000_000, 1_000_000)
         assert abs(cost - 2.0) < 0.001
 
+    def test_every_priority_model_has_explicit_cost(self):
+        """כל מודל ב-_MODEL_PRIORITY חייב מחיר משלו ב-_MODEL_COSTS.
+        אחרת הוא מתומחר בשקט לפי ברירת המחדל, ו-/developer_usage מציג עלות שגויה."""
+        from classifier import _MODEL_PRIORITY
+        from database import _MODEL_COSTS
+
+        missing = [m for m in _MODEL_PRIORITY if m not in _MODEL_COSTS]
+        assert not missing, f"מודלים בלי מחיר ב-_MODEL_COSTS: {missing}"
+
     def test_zero_tokens(self):
         cost = _estimate_cost("gpt-4.1-mini", 0, 0)
         assert cost == 0.0
