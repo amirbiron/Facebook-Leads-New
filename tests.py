@@ -1537,6 +1537,12 @@ class TestModelFallback:
         next_m = classifier._rotate_model("gpt-4.1-mini")
         assert next_m == "gpt-4o-mini"
 
+    def test_primary_falls_back_to_mini(self):
+        """אם gpt-4.1 יוסר מה-API — הגיבוי הוא gpt-4.1-mini, המודל הראשי הקודם."""
+        import classifier
+
+        assert classifier._rotate_model("gpt-4.1") == "gpt-4.1-mini"
+
     def test_rotate_model_last_wraps_around(self):
         """כשהמודל האחרון ברשימה נכשל, עוטף מסביב לראשון."""
         import classifier
@@ -3498,6 +3504,11 @@ from database import (
 
 class TestEstimateCost:
     """בדיקות חישוב עלות לפי מודל וטוקנים."""
+
+    def test_gpt4_1_cost(self):
+        """עלות gpt-4.1: $2.00/1M input, $8.00/1M output — פי 5 מ-gpt-4.1-mini."""
+        cost = _estimate_cost("gpt-4.1", 1_000_000, 1_000_000)
+        assert abs(cost - 10.0) < 0.001
 
     def test_gpt4_1_mini_cost(self):
         """עלות gpt-4.1-mini: $0.40/1M input, $1.60/1M output."""

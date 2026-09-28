@@ -11,6 +11,7 @@ client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", "sk-missing"))
 
 # ── רשימת מודלים לפי סדר עדיפות (auto-fallback כשמודל יוצא מתוקף) ──
 _MODEL_PRIORITY = [
+    "gpt-4.1",
     "gpt-4.1-mini",
     "gpt-4o-mini",
 ]
