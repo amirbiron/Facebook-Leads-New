@@ -1537,12 +1537,45 @@ class TestModelFallback:
         next_m = classifier._rotate_model("gpt-4.1-mini")
         assert next_m == "gpt-4o-mini"
 
+    def test_primary_falls_back_to_mini(self):
+        """אם gpt-4.1 יוסר מה-API — הגיבוי הוא gpt-4.1-mini, המודל הראשי הקודם."""
+        import classifier
+
+        assert classifier._rotate_model("gpt-4.1") == "gpt-4.1-mini"
+
     def test_rotate_model_last_wraps_around(self):
         """כשהמודל האחרון ברשימה נכשל, עוטף מסביב לראשון."""
         import classifier
 
         result = classifier._rotate_model("gpt-4o-mini")
         assert result == classifier._MODEL_PRIORITY[0]
+
+    def test_starts_from_first_in_priority(self, tmp_db):
+        """תהליך חדש מתחיל תמיד מהמודל הראשון ברשימה."""
+        import classifier
+
+        assert classifier._get_active_model() == classifier._MODEL_PRIORITY[0]
+
+    def test_saved_model_in_db_does_not_override_priority(self, tmp_db):
+        """ערך openai_model ישן ב-DB לא גובר על _MODEL_PRIORITY (באג #21).
+        אחרת שינוי מכוון של המודל הראשי בקוד לא נכנס לתוקף — בשקט."""
+        import classifier
+        import database
+
+        database.set_config("openai_model", classifier._MODEL_PRIORITY[-1])
+        assert classifier._get_active_model() == classifier._MODEL_PRIORITY[0]
+
+    def test_rotation_not_persisted_across_restart(self, tmp_db):
+        """מעבר למודל גיבוי נשמר בזיכרון בלבד — restart מתחיל שוב מהראשון (באג #21).
+        אחרת שגיאה חולפת אחת מורידה את המודל לצמיתות."""
+        import classifier
+        import database
+
+        classifier._rotate_model(classifier._MODEL_PRIORITY[0])
+        assert classifier._active_model == classifier._MODEL_PRIORITY[1]
+        assert database.get_config("openai_model") is None
+        classifier._active_model = None  # מדמה restart של התהליך
+        assert classifier._get_active_model() == classifier._MODEL_PRIORITY[0]
 
     def test_is_model_deprecated_error_404(self):
         import openai
@@ -3472,6 +3505,11 @@ from database import (
 class TestEstimateCost:
     """בדיקות חישוב עלות לפי מודל וטוקנים."""
 
+    def test_gpt4_1_cost(self):
+        """עלות gpt-4.1: $2.00/1M input, $8.00/1M output — פי 5 מ-gpt-4.1-mini."""
+        cost = _estimate_cost("gpt-4.1", 1_000_000, 1_000_000)
+        assert abs(cost - 10.0) < 0.001
+
     def test_gpt4_1_mini_cost(self):
         """עלות gpt-4.1-mini: $0.40/1M input, $1.60/1M output."""
         cost = _estimate_cost("gpt-4.1-mini", 1_000_000, 1_000_000)
@@ -3486,6 +3524,15 @@ class TestEstimateCost:
         """מודל לא מוכר — fallback לעלות ברירת מחדל."""
         cost = _estimate_cost("unknown-model", 1_000_000, 1_000_000)
         assert abs(cost - 2.0) < 0.001
+
+    def test_every_priority_model_has_explicit_cost(self):
+        """כל מודל ב-_MODEL_PRIORITY חייב מחיר משלו ב-_MODEL_COSTS.
+        אחרת הוא מתומחר בשקט לפי ברירת המחדל, ו-/developer_usage מציג עלות שגויה."""
+        from classifier import _MODEL_PRIORITY
+        from database import _MODEL_COSTS
+
+        missing = [m for m in _MODEL_PRIORITY if m not in _MODEL_COSTS]
+        assert not missing, f"מודלים בלי מחיר ב-_MODEL_COSTS: {missing}"
 
     def test_zero_tokens(self):
         cost = _estimate_cost("gpt-4.1-mini", 0, 0)

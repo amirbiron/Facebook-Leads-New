@@ -1,7 +1,7 @@
 # CLAUDE.md — כללי עבודה לפרויקט Facebook Leads Bot
 
 ## סקירה
-בוט שסורק קבוצות פייסבוק, מסנן לידים רלוונטיים באמצעות Claude API, ושולח אותם לטלגרם.
+בוט שסורק קבוצות פייסבוק, מסנן לידים רלוונטיים באמצעות OpenAI API, ושולח אותם לטלגרם.
 רץ על VM עם **512MB RAM** — כל שינוי חייב להתחשב במגבלת זיכרון.
 
 ## קבצים עיקריים
@@ -10,7 +10,7 @@
 |-------|--------|
 | `scraper.py` | גלישה בפייסבוק עם Playwright (אתר מובייל) |
 | `main.py` | אורקסטרציה, לולאת טלגרם, שעות שקטות, מצב חופשה |
-| `classifier.py` | סיווג פוסטים עם OpenAI gpt-4.1-mini — תומך סיווג באצ'ים (`classify_batch`) + auto-fallback למודל הבא |
+| `classifier.py` | סיווג פוסטים עם OpenAI gpt-4.1 — תומך סיווג באצ'ים (`classify_batch`) + auto-fallback למודל הבא |
 | `notifier.py` | שליחת הודעות טלגרם |
 | `database.py` | SQLite — seen_posts, sent_leads, groups, keywords, _config |
 | `logger.py` | לוגר |
@@ -178,6 +178,15 @@
   - **לפני שמאשימים את פייסבוק או את הקוד — להסתכל על `memory_usage` מול `memory_limit` ב-Render.** כאן, CPU עמד על 0.088 מתוך 0.5 בזמן החנק: התהליך לא היה עסוק, הוא היה חנוק בזיכרון.
   - **uptime ארוך הוא חלק מהתסריט**: אותו instance רץ 30+ יום. דליפה של 5.7MB ליום היא בלתי מורגשת ביום, וקטלנית בחודש.
 
+### 21. מודל גיבוי שנשמר ב-DB גבר על שינוי מכוון של `_MODEL_PRIORITY`
+**הבעיה:** `_rotate_model` שמר את מודל הגיבוי ב-`_config.openai_model`, ו-`_get_active_model` טען אותו בכל עלייה, כל עוד הוא עדיין מופיע ברשימה. מכאן שני כשלים שקטים:
+  1. **שינוי מודל בקוד לא נכנס לתוקף**: אם אי פעם היה מעבר לגיבוי, הערך השמור גבר על הראשון ברשימה, גם אחרי שהקוד שם בראש הרשימה מודל חדש. הלוגים והקוד מראים מודל אחד, ובפועל רץ אחר.
+  2. **שגיאה חולפת מורידה מודל לצמיתות**: `_is_model_deprecated_error` מזהה גם לפי טקסט ההודעה (`"not available"` ועוד). שגיאה חד-פעמית כזו העבירה לגיבוי, והבחירה נשמרה ושרדה כל restart.
+**הכלל:**
+  - **מעבר לגיבוי נשמר בזיכרון בלבד.** כל תהליך מתחיל מ-`_MODEL_PRIORITY[0]`. אם המודל הראשי באמת הוסר, כל restart עולה קריאה כושלת אחת (404 מיידי) ושורת WARNING, וזו נראות רצויה: היא מסמנת שצריך לעדכן את הרשימה בקוד.
+  - **מקור האמת לבחירת המודל הוא הקוד**, לא מצב שנצבר ב-DB. שורת `openai_model` ישנה ב-DB מתעלמים ממנה.
+  - **לאימות המודל שרץ בפועל**: `מודל סיווג פעיל: ...` (INFO, פעם אחת לכל תהליך), ופירוק לפי מודל ב-`/developer_usage`.
+
 ## כללי עבודה על session/auth detection
 - **false positive שובר הכל**: זיהוי שגוי של "סשן פג" → re-login → נכשל → 0 פוסטים. לכן **סף גבוה + בדיקה כפולה**.
 - **לפני שמניחים שפייסבוק שינה משהו** — לבדוק אם **הקוד עצמו השתנה** (רגרסיה). לפרוס גרסה ישנה ידועה כעובדת ולהשוות.
@@ -193,11 +202,12 @@
 - **חילוץ URL** — 7 אסטרטגיות (סלקטורים ישירים → סריקת לינקים → timestamp → data-attributes → element ID → DOM climbing → page-level scan). Fallback ל-URL קבוצה אם הכל נכשל. **שים לב:** `m.facebook.com` לא תמיד מכיל לינקים לפוסטים בודדים — ה-fallback הוא התנהגות צפויה, לא באג (ראו באג #11).
 
 ## סיווג (classifier.py)
-- משתמש ב-OpenAI Chat Completions API (מודל `gpt-4.1-mini`). משתנה סביבה: `OPENAI_API_KEY`.
+- משתמש ב-OpenAI Chat Completions API (מודל `gpt-4.1`, גיבוי: `gpt-4.1-mini`, `gpt-4o-mini`). משתנה סביבה: `OPENAI_API_KEY`.
+- **מודל חדש ב-`_MODEL_PRIORITY` מחייב מחיר ב-`_MODEL_COSTS`** (`database.py`) — אחרת הוא מתומחר לפי ברירת המחדל ו-`/developer_usage` מציג עלות שגויה. `test_every_priority_model_has_explicit_cost` אוכף את זה.
 - `classify_post()` — סיווג פוסט בודד (fallback).
 - `classify_batch()` — סיווג מספר פוסטים בבקשה אחת (ברירת מחדל: 5 לבאצ').
 - `_chat_completion()` — פונקציית עזר לקריאת API עם auto-fallback למודל הבא אם הנוכחי deprecated (404/410).
-- `_MODEL_PRIORITY` — רשימת מודלים לפי סדר עדיפות. כשמודל נכשל, עובר אוטומטית לבא ושומר ב-DB.
+- `_MODEL_PRIORITY` — רשימת מודלים לפי סדר עדיפות. כשמודל נכשל, עובר אוטומטית לבא — בזיכרון בלבד, לא ב-DB (ראו באג #21).
 - פונקציית עזר `_parse_json_response()` — חילוץ JSON כולל unwrap של markdown. **חייבים להשתמש בה בכל פירוש תשובה מ-API** (לא לשכפל את הלוגיקה).
 - fallback חכם: אם באצ' נכשל (שגיאת API, JSON לא תקין, אורך שגוי, אלמנט null) — נופל לסיווג בודד פוסט-פוסט.
 - **פרומפט סיווג**: `_CLASSIFICATION_CRITERIA_DEFAULT` נטען מ-env var `CLASSIFICATION_CRITERIA`. המשתמש יכול להגדיר פרומפט מותאם דרך הפאנל (נשמר ב-DB כ-`classification_criteria`, עדיפות על env). אם שניהם ריקים — הבוט לא יסווג.
@@ -223,7 +233,7 @@
 ```bash
 python -m pytest tests.py -v
 ```
-513 טסטים ב-`tests.py` מכסים:
+519 טסטים ב-`tests.py` מכסים:
 - `passes_keyword_filter()` — סינון לפי מילות מפתח (כולל רשימה ריקה)
 - `is_blocked()` — חסימת מילים אסורות
 - `extract_post_id()` — חילוץ ID מ-URLs בפורמטים שונים
@@ -231,6 +241,7 @@ python -m pytest tests.py -v
 - `clean_post_content()` — ניקוי תוכן פוסטים
 - `classify_post()` — סיווג בודד (עם מוקים)
 - `classify_batch()` — סיווג באצ'ים (חלוקה, fallback, null elements, markdown)
+- `_get_active_model()` / `_rotate_model()` — בחירת מודל, מעבר לגיבוי בזיכרון בלבד, התעלמות מ-`openai_model` ישן ב-DB (באג #21)
 - Groups CRUD — הוספה, מחיקה, נרמול URLs, fallback ל-None
 - Keywords CRUD — הוספה, מחיקה, הפרדת סוגים, fallback ל-defaults
 - `reload_keywords()` — טעינה מ-DB עם fallback
