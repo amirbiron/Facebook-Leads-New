@@ -15,31 +15,25 @@ _MODEL_PRIORITY = [
     "gpt-4o-mini",
 ]
 
-# מודל פעיל — נטען מ-DB אם שמור, אחרת ברירת מחדל ראשונה ברשימה
+# מודל פעיל — כל תהליך מתחיל מהראשון ברשימה. מעבר למודל גיבוי נשמר בזיכרון
+# בלבד ולא ב-DB: מודל גיבוי שמור היה גובר על שינוי מכוון של _MODEL_PRIORITY
+# בקוד, ושגיאה חולפת הייתה מורידה מודל לצמיתות (באג #21).
 _active_model: str | None = None
 
 
 def _get_active_model() -> str:
-    """מחזיר את המודל הפעיל. אם אין — טוען מ-DB או ברירת מחדל."""
+    """מחזיר את המודל הפעיל — הראשון ברשימה, או מודל גיבוי אם הראשון נכשל בתהליך הזה."""
     global _active_model
-    if _active_model is not None:
-        return _active_model
-    try:
-        from database import get_config
-        saved = get_config("openai_model")
-        if saved and saved in _MODEL_PRIORITY:
-            _active_model = saved
-            return _active_model
-    except Exception:
-        pass
-    _active_model = _MODEL_PRIORITY[0]
+    if _active_model is None:
+        _active_model = _MODEL_PRIORITY[0]
+        log.info(f"מודל סיווג פעיל: {_active_model}")
     return _active_model
 
 
 def _rotate_model(failed_model: str) -> str | None:
     """מסובב למודל הבא ברשימה אחרי שמודל נכשל (deprecated/not found).
-    שומר את המודל החדש ב-DB. מחזיר None אם אין עוד מודלים.
-    עוטף מסביב לתחילת הרשימה אם הגענו לסוף (כדי שמודל ישן ב-DB לא יחסום את השרשרת).
+    המעבר נשמר בזיכרון בלבד — ה-restart הבא מתחיל שוב מהראשון ברשימה.
+    מחזיר None אם אין עוד מודלים. עוטף מסביב לתחילת הרשימה אם הגענו לסוף.
     """
     global _active_model
     try:
@@ -54,11 +48,6 @@ def _rotate_model(failed_model: str) -> str | None:
         return None
     _active_model = new_model
     log.warning(f"מודל {failed_model} לא זמין — עובר ל-{new_model}")
-    try:
-        from database import set_config
-        set_config("openai_model", new_model)
-    except Exception:
-        pass
     return new_model
 
 

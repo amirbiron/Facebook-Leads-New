@@ -1544,6 +1544,33 @@ class TestModelFallback:
         result = classifier._rotate_model("gpt-4o-mini")
         assert result == classifier._MODEL_PRIORITY[0]
 
+    def test_starts_from_first_in_priority(self, tmp_db):
+        """תהליך חדש מתחיל תמיד מהמודל הראשון ברשימה."""
+        import classifier
+
+        assert classifier._get_active_model() == classifier._MODEL_PRIORITY[0]
+
+    def test_saved_model_in_db_does_not_override_priority(self, tmp_db):
+        """ערך openai_model ישן ב-DB לא גובר על _MODEL_PRIORITY (באג #21).
+        אחרת שינוי מכוון של המודל הראשי בקוד לא נכנס לתוקף — בשקט."""
+        import classifier
+        import database
+
+        database.set_config("openai_model", classifier._MODEL_PRIORITY[-1])
+        assert classifier._get_active_model() == classifier._MODEL_PRIORITY[0]
+
+    def test_rotation_not_persisted_across_restart(self, tmp_db):
+        """מעבר למודל גיבוי נשמר בזיכרון בלבד — restart מתחיל שוב מהראשון (באג #21).
+        אחרת שגיאה חולפת אחת מורידה את המודל לצמיתות."""
+        import classifier
+        import database
+
+        classifier._rotate_model(classifier._MODEL_PRIORITY[0])
+        assert classifier._active_model == classifier._MODEL_PRIORITY[1]
+        assert database.get_config("openai_model") is None
+        classifier._active_model = None  # מדמה restart של התהליך
+        assert classifier._get_active_model() == classifier._MODEL_PRIORITY[0]
+
     def test_is_model_deprecated_error_404(self):
         import openai
         import classifier
