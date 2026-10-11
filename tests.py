@@ -4660,3 +4660,49 @@ class TestMemoryGuards:
         if container is None or rss is None:
             pytest.skip("מדידה לא זמינה בסביבת הטסט")
         assert container[0] >= rss
+
+
+# ════════════════════════════════════════════════════════════════
+# 41. דליפת חיבורי SQLite — thread שהסתיים חייב לשחרר את החיבור (באג #22)
+# ════════════════════════════════════════════════════════════════
+
+import gc as _gc
+import sqlite3 as _sqlite3
+import threading as _threading
+
+
+def _live_sqlite_connections() -> int:
+    """כמה אובייקטי sqlite3.Connection חיים כרגע בתהליך."""
+    _gc.collect()
+    return sum(1 for o in _gc.get_objects() if isinstance(o, _sqlite3.Connection))
+
+
+class TestConnectionLifetime:
+    """שרת הפאנל (werkzeug) יוצר thread חדש לכל בקשה, כולל polling של
+    scan-status כל 3 שניות. כל חיבור שנשאר חי אחרי שה-thread שלו הסתיים
+    הוא ~1.8MB של page cache ושני file descriptors שלא חוזרים לעולם —
+    וזה מה שהפיל את המכולה ל-OOM אחרי 9 ימים."""
+
+    def test_finished_thread_releases_its_connection(self, tmp_db):
+        """החיבור שייך ל-thread-local בלבד. אם משהו אחר מחזיק אליו הפניה
+        (רשימה גלובלית, cache), הוא לא נאסף ולא נסגר — זו בדיוק הדליפה."""
+        before = _live_sqlite_connections()
+        for _ in range(25):
+            t = _threading.Thread(target=database.get_stats)
+            t.start()
+            t.join()
+        assert _live_sqlite_connections() - before == 0
+
+    def test_same_thread_reuses_one_connection(self, tmp_db):
+        """thread שחי לאורך זמן (כמו ה-workers של asyncio.to_thread) משתמש
+        בחיבור אחד — הוא לא צריך לפתוח חיבור חדש בכל קריאה."""
+        assert database._get_conn() is database._get_conn()
+
+    def test_atexit_close_handles_only_own_thread(self, tmp_db):
+        """close() על חיבור מ-thread אחר זורק ProgrammingError (check_same_thread),
+        ולכן הניקוי ב-atexit סוגר רק את החיבור של ה-thread הקורא — ולא נכשל
+        כשאין חיבור בכלל."""
+        database._get_conn()
+        database._close_thread_connection()
+        assert not hasattr(database._local, "conn")
+        database._close_thread_connection()  # קריאה שנייה — לא זורקת
