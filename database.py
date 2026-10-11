@@ -24,32 +24,41 @@ def _now() -> datetime:
     return datetime.now(tz=tz)
 
 
-# ── Connection Pool (thread-local) ────────────────────────────
+# ── חיבור לכל thread (thread-local) ──────────────────────────
+# ה-thread-local הוא הבעלים **היחיד** של החיבור. כשה-thread מסתיים, CPython
+# משחרר את ה-thread-local, החיבור נאסף, וה-dealloc שלו סוגר אותו.
+#
+# אסור להחזיק הפניה נוספת לחיבור (רשימה גלובלית, cache, registry): היא מונעת
+# את האיסוף, והחיבור נשאר פתוח לנצח עם ה-page cache וה-file descriptors שלו.
+# הפאנל רץ על שרת werkzeug שיוצר thread חדש לכל בקשה, אז כל בקשה — כולל
+# polling של scan-status כל 3 שניות — הייתה דולפת חיבור שלם (~1.8MB + 2 fds).
+# זה מה שהרים את זיכרון התהליך במדרגות עד OOM (באג #22).
 _local = threading.local()
-_all_connections: list[sqlite3.Connection] = []
-_conn_lock = threading.Lock()
+
 
 def _get_conn() -> sqlite3.Connection:
     if not hasattr(_local, "conn"):
         _local.conn = sqlite3.connect(DB_PATH, timeout=10)
         _local.conn.execute("PRAGMA journal_mode=WAL")
-        with _conn_lock:
-            _all_connections.append(_local.conn)
     return _local.conn
 
 
-def _close_all_connections():
-    """סוגר את כל ה-connections הפתוחים — נקרא ב-atexit."""
-    with _conn_lock:
-        for conn in _all_connections:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        _all_connections.clear()
+def _close_thread_connection():
+    """סוגר את החיבור של ה-thread הנוכחי, אם יש. נקרא ב-atexit.
+
+    רק החיבור של ה-thread הקורא: SQLite אוסר close() על חיבור מ-thread אחר
+    (check_same_thread) וזורק ProgrammingError. חיבורים של threads אחרים
+    נסגרים ממילא כשה-thread שלהם מסתיים."""
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        del _local.conn
 
 
-atexit.register(_close_all_connections)
+atexit.register(_close_thread_connection)
 
 # ── Init ──────────────────────────────────────────────────────
 def init_db():
