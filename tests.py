@@ -4997,6 +4997,10 @@ class TestDecisionsUseBody:
         כאן המסווג ו-send_lead אמיתיים (רק OpenAI והרשת מזויפים), כי הנפילה
         הייתה במעבר ביניהם: None הגיע ל-_escape_markdown וזרק TypeError.
         הפוסטים כבר סומנו כנראו, ולכן גם הליד הזה וגם כל הבאים אבדו.
+
+        הטסט בודק גם שכל ליד קיבל את הסיבה **שלו**: run_cycle בונה למסווג
+        רשימה חדשה (body במפתח content) ומצמיד את התוצאות בחזרה ב-zip.
+        ההערה שם מבטיחה סדר ואורך זהים — וזה מה שמאמת את ההבטחה (באג #9).
         """
         import asyncio as _asyncio
         import main as _main
@@ -5012,11 +5016,20 @@ class TestDecisionsUseBody:
         async def fake_scrape_all(*args, **kwargs):
             return posts
 
-        ai_answer = '[{"relevant": true, "reason": null}, {"relevant": true, "reason": "ליד"}]'
-        response = SimpleNamespace(choices=[SimpleNamespace(
-            message=SimpleNamespace(content=ai_answer), finish_reason="stop")])
+        def ai_answers_by_content(**kwargs):
+            # ה-AI המזויף עונה לפי תוכן כל פוסט בבקשה, לא לפי מיקום קבוע —
+            # אחרת גם רשימה בסדר שגוי "מתאימה", והטסט לא יכול להיכשל על
+            # misalignment (נבדק במוטציה: רשימה הפוכה עברה עם תשובה קבועה).
+            user_msg = kwargs["messages"][-1]["content"]
+            blocks = user_msg.split("--- פוסט ")[1:]
+            items = [{"relevant": True, "reason": None if "מתכנת" in b else "ליד"}
+                     for b in blocks]
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content=json.dumps(items)),
+                finish_reason="stop")])
+
         fake_client = MagicMock()
-        fake_client.chat.completions.create.return_value = response
+        fake_client.chat.completions.create.side_effect = ai_answers_by_content
         telegram = MagicMock(return_value=MagicMock(status_code=200))
 
         monkeypatch.setattr(_scraper, "scrape_all", fake_scrape_all)
@@ -5033,3 +5046,9 @@ class TestDecisionsUseBody:
         leads = [c.kwargs["json"]["text"] for c in telegram.call_args_list
                  if "ליד חדש" in c.kwargs["json"]["text"]]
         assert len(leads) == 2
+
+        # כל ליד עם הסיבה שלו: לפוסט הראשון ה-AI החזיר null, לשני "ליד".
+        coder = next(t for t in leads if "מחפש מתכנת לבוט טלגרם" in t)
+        designer = next(t for t in leads if "מחפש מעצבת לוגו לעסק" in t)
+        assert "*למה רלוונטי:* ליד" in designer
+        assert "*למה רלוונטי:* ליד" not in coder
