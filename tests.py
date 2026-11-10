@@ -1179,6 +1179,34 @@ class TestPostBody:
         text = "5 תגובות\nדני כהן\nמחפש שיפוצניק באזור המרכז, ממליצים?"
         assert extract_post_body(text) == text
 
+    @pytest.mark.parametrize("head,label", [
+        ("דני כהן\nלפני 5 דקות", "תמונה בלבד, בלי טקסט"),
+        ("דני כהן\nלפני 5 דקות\n😂😂🔥", "אמוג'י בלבד"),
+    ])
+    def test_text_less_posts_still_cut_at_the_boundary(self, head, label):
+        """פוסט בלי טקסט עדיין נחתך בגבול: שם המפרסם וחותמת הזמן שורדים את
+        הנרמול, ולכן יש שורה לפני הגבול והוא מזוהה. תגובה לא נכנסת לגוף."""
+        from scraper import extract_post_body
+        text = head + self.BAR + "\nיוסי לוי\nדחוף! דרושים עובדים"
+        assert extract_post_body(text) == head, label
+
+    def test_boundary_at_top_then_real_boundary_cuts_at_the_real_one(self):
+        """שורת ספירה בראש האלמנט, ואחריה הפוסט והגבול האמיתי — החיתוך בגבול
+        האמיתי. זו הסיבה שלא חותכים בשורת גבול שאין לפניה כלום: חיתוך שם היה
+        מרוקן את הגוף, והחזרה לטקסט המלא הייתה מכניסה את התגובות."""
+        from scraper import extract_post_body
+        text = ("5 תגובות\nדני כהן\nמחפש מתכנת לבוט\n"
+                "אהבתי · תגובה · שיתוף\nיוסי לוי\nדחוף! דרושים עובדים")
+        assert extract_post_body(text) == "5 תגובות\nדני כהן\nמחפש מתכנת לבוט"
+
+    def test_no_surviving_line_before_boundary_falls_back_to_full_text(self):
+        """מקבע מגבלה ידועה: כשאין לפני הגבול אף שורה ששורדת את הנרמול
+        (אפילו לא שם המפרסם), הגבול לא מזוהה והגוף הוא הטקסט המלא — כמו
+        לפני באג #23, לא פחות מזה. לא נצפה רינדור כזה של אלמנט פוסט."""
+        from scraper import extract_post_body
+        text = "😂😂" + self.BAR + "\nיוסי לוי\nדרושים עובדים"
+        assert extract_post_body(text) == text
+
     def test_body_cut_matches_identity_cut(self):
         """הגוף והזהות נחתכים באותה שורה בדיוק — גבול אחד, מוגדר פעם אחת."""
         from scraper import extract_post_body, _post_core_text
@@ -1324,6 +1352,15 @@ class TestClassifyPost:
         result = classify_post("מחפש מפתח לבוט", "קבוצת פרילנסרים")
         assert result["relevant"] is True
         assert "reason" in result
+
+    @patch("classifier.client")
+    def test_null_reason_becomes_empty_string(self, mock_client):
+        """באג #23 — גם בנתיב הבודד, "reason": null הופך למחרוזת ריקה."""
+        from classifier import classify_post
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
+            '{"relevant": true, "reason": null}'
+        )
+        assert classify_post("מחפש מפתח", "קבוצה") == {"relevant": True, "reason": ""}
 
     @patch("classifier.client")
     def test_not_relevant_post(self, mock_client):
@@ -1509,6 +1546,19 @@ class TestClassifyBatch:
         results = classify_batch(posts, batch_size=5)
         assert len(results) == 2
         assert all(r["relevant"] is False for r in results)
+
+    @patch("classifier.client")
+    def test_null_reason_becomes_empty_string(self, mock_client):
+        """באג #23 — "reason": null מה-AI הופך למחרוזת ריקה, לא נשאר None.
+        None הגיע ל-_escape_markdown ב-send_lead, זרק TypeError ועצר את הסבב."""
+        from classifier import classify_batch
+        mock_client.chat.completions.create.return_value = self._make_mock_response(
+            '[{"relevant": true, "reason": null}, {"relevant": true, "reason": 5}]'
+        )
+        results = classify_batch([{"content": "א", "group": "ק"},
+                                  {"content": "ב", "group": "ק"}])
+        assert results[0] == {"relevant": True, "reason": ""}
+        assert results[1] == {"relevant": True, "reason": "5"}
 
     @patch("classifier.client")
     def test_batch_fallback_on_null_element(self, mock_client):
@@ -4940,3 +4990,46 @@ class TestDecisionsUseBody:
         _, sent = self._run(monkeypatch, [post])
         assert len(sent) == 1
         assert sent[0]["is_hot"] is False
+
+    def test_null_reason_from_ai_does_not_crash_the_cycle(self, tmp_db, monkeypatch):
+        """באג #23 — "reason": null מה-AI עצר את כל הסבב.
+
+        כאן המסווג ו-send_lead אמיתיים (רק OpenAI והרשת מזויפים), כי הנפילה
+        הייתה במעבר ביניהם: None הגיע ל-_escape_markdown וזרק TypeError.
+        הפוסטים כבר סומנו כנראו, ולכן גם הליד הזה וגם כל הבאים אבדו.
+        """
+        import asyncio as _asyncio
+        import main as _main
+        import scraper as _scraper
+        import classifier as _classifier
+        import notifier as _notifier
+
+        posts = [
+            self._post("p1", "מחפש מתכנת לבוט טלגרם", "יוסי לוי\nמעוניין"),
+            self._post("p2", "מחפש מעצבת לוגו לעסק", "רונית ברק\nאני"),
+        ]
+
+        async def fake_scrape_all(*args, **kwargs):
+            return posts
+
+        ai_answer = '[{"relevant": true, "reason": null}, {"relevant": true, "reason": "ליד"}]'
+        response = SimpleNamespace(choices=[SimpleNamespace(
+            message=SimpleNamespace(content=ai_answer), finish_reason="stop")])
+        fake_client = MagicMock()
+        fake_client.chat.completions.create.return_value = response
+        telegram = MagicMock(return_value=MagicMock(status_code=200))
+
+        monkeypatch.setattr(_scraper, "scrape_all", fake_scrape_all)
+        monkeypatch.setattr(_classifier, "client", fake_client)
+        monkeypatch.setattr(_classifier, "_CLASSIFICATION_CRITERIA_DEFAULT", "פרומפט לטסט")
+        monkeypatch.setattr(_notifier.requests, "post", telegram)
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+        monkeypatch.setattr(_main, "FB_EMAIL", "test@example.com")
+        monkeypatch.setattr(_main, "FB_PASSWORD", "pw")
+
+        _asyncio.run(_main.run_cycle())
+
+        leads = [c.kwargs["json"]["text"] for c in telegram.call_args_list
+                 if "ליד חדש" in c.kwargs["json"]["text"]]
+        assert len(leads) == 2
