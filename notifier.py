@@ -69,11 +69,14 @@ def _redact_token(text: str, bot_token: str) -> str:
 
 
 def telegram_request(api_method: str, *, bot_token: str, http_method: str = "post",
-                     raise_for_status: bool = False, **kwargs) -> requests.Response:
+                     raise_for_status: bool = True, **kwargs) -> requests.Response:
     """קריאה ל-API של טלגרם. הדרך היחידה בקוד לפנות לטלגרם.
 
     kwargs עוברים כמו שהם ל-requests (json, params, data, files, timeout).
-    raise_for_status=True — תשובה שאינה 2xx הופכת ל-TelegramAPIError עם status_code.
+    raise_for_status — ברירת מחדל True: תשובה שאינה 2xx הופכת ל-TelegramAPIError
+    עם status_code, ומגיעה ל-except של הקורא. כך קורא ששכח לבדוק את הסטטוס לא
+    מתייחס לשגיאת HTTP כאל הצלחה. קורא שבודק את הסטטוס בעצמו (ורושם את
+    response.text של טלגרם) מעביר False במפורש.
     כל חריגה מכל סוג הופכת ל-TelegramAPIError עם הודעה מנוקה. החריגה נזרקת
     **אחרי** בלוק ה-except, כדי שלא תישא את המקורית כ-__context__ — שם הטוקן
     היה מודפס ב-traceback של exc_info.
@@ -135,8 +138,10 @@ def send_message(
 
     try:
         log.debug(f"שולח הודעה לטלגרם (chat_id={target_chat})...")
+        # raise_for_status=False: הסטטוס נבדק כאן, והתיאור של טלגרם נרשם ללוג
         response = telegram_request(
             "sendMessage", bot_token=bot_token, json=payload, timeout=10,
+            raise_for_status=False,
         )
         if response.status_code == 200:
             log.info("הודעה נשלחה בהצלחה לטלגרם")
@@ -211,6 +216,7 @@ def send_message_with_buttons(
     try:
         response = telegram_request(
             "sendMessage", bot_token=bot_token, json=payload, timeout=10,
+            raise_for_status=False,
         )
         if response.status_code == 200:
             data = response.json()
@@ -248,6 +254,7 @@ def edit_message_text(
     try:
         response = telegram_request(
             "editMessageText", bot_token=bot_token, json=payload, timeout=10,
+            raise_for_status=False,
         )
         if response.status_code == 200:
             return True
@@ -273,7 +280,8 @@ def answer_callback_query(callback_query_id: str, text: str = "") -> bool:
         return response.status_code == 200
     except Exception as e:
         # לא קריטי: רק עוצר את אנימציית הטעינה על הכפתור. נרשם כדי שכשל
-        # חוזר ייראה בלוג (K11). ההודעה מנוקה מהטוקן ב-telegram_request.
+        # חוזר ייראה בלוג (K11) — גם שגיאת HTTP, כי raise_for_status פעיל
+        # כברירת מחדל. ההודעה מנוקה מהטוקן ב-telegram_request.
         log.warning(f"answerCallbackQuery נכשל: {e}")
         return False
 
@@ -304,7 +312,7 @@ def send_document(
             "sendDocument", bot_token=bot_token,
             data={"chat_id": target_chat, "caption": caption[:1024]},
             files={"document": (filename, file_bytes)},
-            timeout=15,
+            timeout=15, raise_for_status=False,
         )
         if response.status_code == 200:
             log.debug(f"קובץ {filename} נשלח לטלגרם")

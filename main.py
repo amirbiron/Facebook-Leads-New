@@ -1052,11 +1052,12 @@ async def _telegram_control_loop(
         params: dict = {"timeout": timeout, "allowed_updates": json.dumps(["message", "edited_message", "callback_query"])}
         if offset:
             params["offset"] = offset
-        # raise_for_status דרך telegram_request ולא על התשובה עצמה: HTTPError של
-        # requests נושא את הכתובת המלאה עם הטוקן, וה-409 מגיע מכאן באופן קבוע (באג #24).
+        # שגיאת HTTP (כולל ה-409 הקבוע) יוצאת מ-telegram_request כ-TelegramAPIError
+        # מנוקה — לא לקרוא ל-raise_for_status על התשובה עצמה: HTTPError של
+        # requests נושא את הכתובת המלאה עם הטוקן (באג #24).
         resp = telegram_request(
             "getUpdates", bot_token=bot_token, http_method="get",
-            raise_for_status=True, params=params, timeout=timeout + 10,
+            params=params, timeout=timeout + 10,
         )
         data = resp.json()
         if not data.get("ok"):
@@ -1204,7 +1205,8 @@ async def _telegram_control_loop(
         log.debug("webhook נוקה בהצלחה")
     except Exception as e:
         # לא עוצר את הבוט: אם נשאר webhook, getUpdates יחזיר 409 והלולאה תטפל.
-        # נרשם כדי שהסיבה תיראה (K11); ההודעה מנוקה מהטוקן ב-telegram_request.
+        # נרשם כדי שהסיבה תיראה (K11) — גם 401/429/5xx, כי telegram_request זורק
+        # על תשובה שאינה 2xx כברירת מחדל. ההודעה מנוקה מהטוקן.
         log.warning(f"ניקוי webhook נכשל: {e}")
 
     # רישום פקודות בוט בטלגרם — כפתור "/" יציג את הפקודות הזמינות
@@ -1236,7 +1238,8 @@ async def _telegram_control_loop(
         log.debug("פקודות בוט נרשמו בטלגרם")
     except Exception as e:
         # לא עוצר את הבוט — רק תפריט ה-"/" בטלגרם לא יתעדכן. נרשם כדי שהסיבה
-        # תיראה (K11); ההודעה מנוקה מהטוקן ב-telegram_request.
+        # תיראה (K11) — גם שגיאת HTTP, כי telegram_request זורק עליה כברירת
+        # מחדל. ההודעה מנוקה מהטוקן.
         log.warning(f"רישום פקודות הבוט נכשל: {e}")
 
     offset = load_offset()

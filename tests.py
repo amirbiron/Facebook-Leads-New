@@ -5089,12 +5089,31 @@ class TestTelegramTokenNotLeaked:
         assert self.SECRET not in caplog.text
 
     def test_real_requests_failure_is_redacted_without_chained_cause(self, monkeypatch):
-        """בקשה אמיתית שנכשלת (דומיין .invalid) — לא הודעה שכתבנו ביד.
-        גם ה-traceback המלא נקי: החריגה נזרקת אחרי בלוק ה-except, ולכן לא
-        נושאת את המקורית (שבה הטוקן) כ-__context__."""
+        """שגיאה אמיתית של requests — לא הודעה שכתבנו ביד — ובלי רשת חיצונית.
+
+        הבקשה הולכת לפורט סגור ב-127.0.0.1, וה-proxy מנוטרל, כך שהיא נכשלת
+        מקומית ומיד. הבדיקה העצמית בהתחלה מוודאת שהשגיאה הגולמית של requests
+        באמת מכילה את הטוקן — אחרת הטסט היה עובר גם בלי שום ניקוי. גם ה-traceback
+        המלא נקי: החריגה נזרקת אחרי בלוק ה-except, ולכן לא נושאת את המקורית
+        (שבה הטוקן) כ-__context__.
+        """
+        import socket
         import traceback
+        import requests
         import notifier
-        monkeypatch.setattr(notifier, "_TELEGRAM_API_BASE", "https://api.telegram.invalid")
+        for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                    "http_proxy", "https_proxy", "all_proxy"):
+            monkeypatch.delenv(var, raising=False)
+        with socket.socket() as sock:  # פורט שהיה פנוי רגע לפני — אין מי שמאזין
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        base = f"http://127.0.0.1:{port}"
+
+        with pytest.raises(requests.exceptions.ConnectionError) as raw:
+            requests.get(f"{base}/bot{self.TOKEN}/getMe", timeout=5)
+        assert self.SECRET in str(raw.value)  # התרחיש עדיין משחזר את הדליפה
+
+        monkeypatch.setattr(notifier, "_TELEGRAM_API_BASE", base)
         with pytest.raises(notifier.TelegramAPIError) as info:
             notifier.telegram_request("getMe", bot_token=self.TOKEN, timeout=5)
         err = info.value
@@ -5103,6 +5122,38 @@ class TestTelegramTokenNotLeaked:
         assert self.SECRET not in "".join(traceback.format_exception(err))
         assert err.transient is True
         assert err.status_code is None
+
+    def test_http_failure_raises_by_default(self):
+        """ברירת המחדל זורקת על תשובה שאינה 2xx — קורא ששכח לבדוק את הסטטוס
+        לא מתייחס לשגיאת HTTP כאל הצלחה (deleteWebhook, setMyCommands)."""
+        import requests
+        import notifier
+        response = requests.Response()
+        response.status_code = 429
+        response.reason = "Too Many Requests"
+        response.url = f"https://api.telegram.org/bot{self.TOKEN}/setMyCommands"
+        with patch("notifier.requests.post", return_value=response):
+            with pytest.raises(notifier.TelegramAPIError) as info:
+                notifier.telegram_request("setMyCommands", bot_token=self.TOKEN, json={})
+        assert info.value.status_code == 429
+        assert self.SECRET not in str(info.value)
+
+    def test_answer_callback_query_logs_http_failure(self, caplog, monkeypatch):
+        """שגיאת HTTP ב-answerCallbackQuery נרשמת כ-WARNING, ולא נבלעת בשקט."""
+        import logging
+        import requests
+        import notifier
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", self.TOKEN)
+        caplog.set_level(logging.DEBUG)
+        response = requests.Response()
+        response.status_code = 400
+        response.reason = "Bad Request"
+        response.url = f"https://api.telegram.org/bot{self.TOKEN}/answerCallbackQuery"
+        with patch("notifier.requests.post", return_value=response):
+            assert notifier.answer_callback_query("cb1") is False
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("answerCallbackQuery נכשל" in r.getMessage() for r in warnings)
+        assert self.SECRET not in caplog.text
 
     def test_http_error_keeps_status_code_and_hides_token(self):
         """הלולאה של getUpdates מזהה 409 לפי status_code — הקוד נשמר, הכתובת לא."""
@@ -5140,15 +5191,33 @@ class TestTelegramTokenNotLeaked:
         assert _redact_token("plain error", self.TOKEN) == "plain error"
 
     def test_only_telegram_request_builds_the_token_url(self):
-        """נקודת הרכבה אחת: כתובת עם /bot{...} נבנית רק ב-notifier.telegram_request.
-        מקום שני שבונה אותה יעקוף את הניקוי, וזה בדיוק הבאג."""
+        """נקודת הרכבה אחת לכתובת עם הטוקן.
+
+        סורק את המחרוזות בקוד (טוקנים של tokenize — לא הערות): הכתובת
+        api.telegram.org מופיעה רק פעם אחת, בקבוע שב-notifier.py, ובשום מודול
+        אחר אין מחרוזת עם "/bot". כל דרך ישירה לבנות את הכתובת מחוץ ל-
+        telegram_request צריכה אחת משתיהן. זו בדיקה טקסטואלית: הרכבה עקיפה
+        (למשל "/" + "bot") לא תיתפס.
+        """
+        import io
         import pathlib
+        import tokenize
+        string_types = {tokenize.STRING}
+        if hasattr(tokenize, "FSTRING_MIDDLE"):  # Python 3.12+: חלקי f-string
+            string_types.add(tokenize.FSTRING_MIDDLE)
         root = pathlib.Path(__file__).resolve().parent
-        hits = []
+        host_hits, bot_hits = [], []
         for path in sorted(root.glob("*.py")):
             if path.name == "tests.py":
                 continue
-            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-                if re.search(r"/bot\{", line):
-                    hits.append(f"{path.name}:{n}")
-        assert len(hits) == 1 and hits[0].startswith("notifier.py:"), hits
+            source = path.read_text(encoding="utf-8")
+            for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+                if tok.type not in string_types:
+                    continue
+                where = f"{path.name}:{tok.start[0]}"
+                if "api.telegram.org" in tok.string:
+                    host_hits.append(where)
+                if "/bot" in tok.string and path.name != "notifier.py":
+                    bot_hits.append(where)
+        assert len(host_hits) == 1 and host_hits[0].startswith("notifier.py:"), host_hits
+        assert bot_hits == [], bot_hits
