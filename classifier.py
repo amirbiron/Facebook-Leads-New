@@ -160,7 +160,7 @@ def classify_post(content: str, group_name: str) -> dict:
             log.warning("API החזיר תשובה ריקה")
             return {"relevant": False, "reason": "תשובה ריקה מ-API"}
 
-        result = _parse_json_response(raw_text)
+        result = _normalize_result(_parse_json_response(raw_text))
         log.debug(f"תוצאה: relevant={result.get('relevant')} reason={result.get('reason', '')}")
         return result
     except json.JSONDecodeError as e:
@@ -181,6 +181,24 @@ def _parse_json_response(raw_text: str):
     if text.startswith("```"):
         text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
     return json.loads(text)
+
+
+def _normalize_result(result) -> dict:
+    """מבטיח שתוצאת סיווג היא dict ושה-reason שלה מחרוזת.
+
+    כאן תשובת ה-AI נכנסת למערכת, ולכן זה המקום לאכוף את החוזה. ה-AI יכול
+    להחזיר "reason": null או מספר. בלי הנרמול, None הגיע ל-_escape_markdown
+    ב-send_lead, זרק TypeError ועצר את הסבב — והפוסטים שכבר סומנו כנראו
+    לא חזרו (באג #23). רק הטיפוס של reason משתנה; שאר השדות עוברים כמו שהם.
+
+    לא-dict (למשל null במערך) זורק TypeError — ואז הקורא נופל לנתיב השגיאה
+    הקיים שלו: classify_batch עובר לסיווג בודד (באג #9), classify_post מחזיר
+    "שגיאה בסיווג". זו אותה התנהגות כמו לפני הפונקציה הזו.
+    """
+    if not isinstance(result, dict):
+        raise TypeError(f"תוצאת סיווג אינה אובייקט: {type(result).__name__}")
+    reason = result.get("reason")
+    return {**result, "reason": "" if reason is None else str(reason)}
 
 
 def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
@@ -248,6 +266,7 @@ def classify_batch(posts: list[dict], batch_size: int = 5) -> list[dict]:
             # ייתפס לפני שמוסיפים תוצאות חלקיות ל-all_results
             batch_results = []
             for idx, result in enumerate(parsed):
+                result = _normalize_result(result)
                 log.debug(
                     f"פוסט {start + idx + 1}: "
                     f"relevant={result.get('relevant')} reason={result.get('reason', '')}"
