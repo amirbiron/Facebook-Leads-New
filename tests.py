@@ -1129,6 +1129,64 @@ class TestPostCoreAndStableId:
         assert "יוסי לוי" not in _post_core_text(text)
 
 
+class TestPostBody:
+    """באג #23 — גוף הפוסט (body) בלי התגובות שמתחתיו.
+
+    על הגוף מקבלים כל החלטה לפי תוכן. הגבול זהה לזה של זהות הפוסט (באג #19),
+    אבל הטקסט נשאר מקורי — לא מנורמל — כי המסננים והמסווג צריכים את מה
+    שהמפרסם כתב.
+    """
+
+    BAR = "\nאהבתי · תגובה · שיתוף\n5 תגובות"
+    COMMENTS = "\nיוסי לוי\nאני יכול לעזור תשלח לי הודעה פרטית"
+    HEAD = "דני כהן\nלפני 20 דקות\n"
+
+    def test_action_bar_cuts_the_comments(self):
+        from scraper import extract_post_body
+        text = self.HEAD + "מחפש מתכנת לבוט טלגרם" + self.BAR + self.COMMENTS
+        assert extract_post_body(text) == self.HEAD + "מחפש מתכנת לבוט טלגרם"
+
+    def test_engagement_line_alone_cuts_the_comments(self):
+        from scraper import extract_post_body
+        text = self.HEAD + "מחפש מתכנת לבוט טלגרם\n3 תגובות" + self.COMMENTS
+        assert extract_post_body(text) == self.HEAD + "מחפש מתכנת לבוט טלגרם"
+
+    def test_no_boundary_returns_full_text(self):
+        """בלי גבול מבני — הטקסט המלא חוזר כמו שהוא, כדי ששום דבר לא יאבד."""
+        from scraper import extract_post_body
+        text = self.HEAD + "מחפש מתכנת לבוט טלגרם" + self.COMMENTS
+        assert extract_post_body(text) == text
+
+    def test_body_is_original_text_not_normalized(self):
+        """הגוף שומר על אותיות גדולות, חותמות זמן ו-URL — הוא לא הליבה המנורמלת."""
+        from scraper import extract_post_body
+        body = self.HEAD + "Looking for a Python dev https://example.com/job"
+        assert extract_post_body(body + self.BAR + self.COMMENTS) == body
+
+    def test_cut_point_survives_invisible_chars_and_url_lines(self):
+        """אינדקס שורת הגבול מחושב על הטקסט המנורמל ומוחל על המקורי.
+        הנרמול מדלג על שורות ריקות ומסיר URLs ותווים בלתי-נראים — אסור שאף
+        אחד מאלה יזיז את נקודת החיתוך. השורות הריקות כאן הכרחיות: בלעדיהן
+        טסט כזה עובר גם על מימוש שסופר רק שורות לא-ריקות (נבדק במוטציה)."""
+        from scraper import extract_post_body
+        body = ("דני כהן‏\n\n‎‏\n   \n"
+                "https://example.com/a?fbclid=XYZ\nמחפש מתכנת Python")
+        assert extract_post_body(body + self.BAR + self.COMMENTS) == body
+
+    def test_boundary_at_start_is_ignored(self):
+        """שורת גבול בראש האלמנט לא חותכת — אחרת הגוף היה ריק לגמרי."""
+        from scraper import extract_post_body
+        text = "5 תגובות\nדני כהן\nמחפש שיפוצניק באזור המרכז, ממליצים?"
+        assert extract_post_body(text) == text
+
+    def test_body_cut_matches_identity_cut(self):
+        """הגוף והזהות נחתכים באותה שורה בדיוק — גבול אחד, מוגדר פעם אחת."""
+        from scraper import extract_post_body, _post_core_text
+        text = self.HEAD + "מחפש מתכנת לבוט טלגרם" + self.BAR + self.COMMENTS
+        body = extract_post_body(text)
+        assert _post_core_text(body + self.BAR) == _post_core_text(text)
+
+
 class TestContentHashMigration:
     """מיגרציית content_hash — מונעת גל כפילויות בפריסה אחרי שינוי שיטת ה-hash."""
 
@@ -4530,6 +4588,70 @@ class TestSendLeadAuthorUrl:
         assert "פרופיל המפרסם" not in payload["text"]
 
 
+class TestSendLeadMarkdownEscape:
+    """באג #23 — טקסט חיצוני בהודעת ליד עובר escape ל-Markdown הישן של טלגרם.
+
+    מקור: https://core.telegram.org/bots/api#markdown-style — "To escape
+    characters '_', '*', '`', '[' outside of an entity, prepend the
+    character '\\' before them."
+    """
+
+    def _send(self, mock_post, **kwargs):
+        mock_post.return_value = MagicMock(status_code=200)
+        from notifier import send_lead
+        args = {
+            "group_name": "קבוצה",
+            "content": "תוכן",
+            "post_url": "https://m.facebook.com/groups/g/posts/1",
+            "reason": "סיבה",
+        }
+        args.update(kwargs)
+        send_lead(**args)
+        return mock_post.call_args.kwargs["json"]["text"]
+
+    def test_escape_function_covers_all_four_characters(self):
+        from notifier import _escape_markdown
+        assert _escape_markdown("a_b*c`d[e]") == "a\\_b\\*c\\`d\\[e]"
+        assert _escape_markdown("בלי תווים מיוחדים") == "בלי תווים מיוחדים"
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "123"})
+    def test_content_group_and_reason_are_escaped(self, mock_post):
+        text = self._send(mock_post,
+                          group_name="מפתחים_ישראל",
+                          content="כתבו לי ל-dev_jobs@mail.com, תקציב *גמיש*",
+                          reason="מחפש [מפתח]")
+        assert "מפתחים\\_ישראל" in text
+        assert "dev\\_jobs@mail.com" in text
+        assert "\\*גמיש\\*" in text
+        assert "מחפש \\[מפתח]" in text
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "123"})
+    def test_template_formatting_is_not_escaped(self, mock_post):
+        """העיצוב של התבנית עצמה נשאר עיצוב — רק הטקסט החיצוני עובר escape."""
+        text = self._send(mock_post, content="תוכן עם _קו_ תחתון")
+        assert "*ליד חדש*" in text
+        assert "*קבוצה:*" in text
+        assert "*למה רלוונטי:*" in text
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "123"})
+    def test_escape_runs_after_truncation(self, mock_post):
+        """חיתוך אחרי escape היה משאיר '\\' יתום בתו ה-350 — לפני ה-'...'."""
+        text = self._send(mock_post, content="א" * 349 + "_" + "ב" * 20)
+        assert "\\_..." in text
+        assert "\\..." not in text.replace("\\_...", "")
+
+    @patch("notifier.requests.post")
+    @patch.dict("os.environ", {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "123"})
+    def test_urls_inside_links_are_not_escaped(self, mock_post):
+        """בתוך ישות ([טקסט](url)) אסור לעשות escape — ה-URL נשאר כמו שהוא."""
+        text = self._send(mock_post,
+                          post_url="https://m.facebook.com/story.php?story_fbid=1&id=2")
+        assert "(https://www.facebook.com/story.php?story_fbid=1&id=2)" in text
+
+
 # ──────────────────────────────────────────────────────────────
 # מצב חופשה (Vacation Mode)
 # ──────────────────────────────────────────────────────────────
@@ -4706,3 +4828,115 @@ class TestConnectionLifetime:
         database._close_thread_connection()
         assert not hasattr(database._local, "conn")
         database._close_thread_connection()  # קריאה שנייה — לא זורקת
+
+
+class TestDecisionsUseBody:
+    """באג #23 — run_cycle מקבל כל החלטה לפי תוכן על גוף הפוסט, לא על התגובות.
+
+    לפני התיקון, p["content"] (כולל תגובות) הוזן לכל המסננים ולמסווג. מילה
+    שמופיעה רק בתגובה של מישהו אחר חסמה ליד אמיתי, העבירה ל-AI פוסט שאינו
+    ליד, הפעילה "שלח תמיד" או סימנה ליד כחם. הטסטים מריצים את run_cycle
+    עצמו עם סורק, מסווג ושליחה מזויפים — כדי לבדוק את החיווט, לא רק את
+    הפונקציות בנפרד.
+    """
+
+    BAR = "\nאהבתי · תגובה · שיתוף\n2 תגובות"
+
+    def _post(self, pid, body, comments):
+        from scraper import extract_post_body
+        content = "דני כהן\nלפני 20 דקות\n" + body + self.BAR + "\n" + comments
+        return {
+            "id": pid,
+            "content": content,
+            "body": extract_post_body(content),
+            "url": f"https://m.facebook.com/groups/g/posts/{pid}/",
+            "group": "קבוצה",
+            "group_url": "https://m.facebook.com/groups/g",
+            "has_real_url": True,
+            "author": "דני כהן",
+            "author_url": "",
+        }
+
+    def _run(self, monkeypatch, posts):
+        import asyncio as _asyncio
+        import main as _main
+        import scraper as _scraper
+        import classifier as _classifier
+        import notifier as _notifier
+
+        classified: list[dict] = []
+        sent: list[dict] = []
+
+        async def fake_scrape_all(*args, **kwargs):
+            return posts
+
+        def fake_classify_batch(items, batch_size=5):
+            classified.extend(items)
+            return [{"relevant": True, "reason": "רלוונטי"} for _ in items]
+
+        def fake_send_lead(**kwargs):
+            sent.append(kwargs)
+            return True
+
+        monkeypatch.setattr(_scraper, "scrape_all", fake_scrape_all)
+        monkeypatch.setattr(_classifier, "classify_batch", fake_classify_batch)
+        monkeypatch.setattr(_notifier, "send_lead", fake_send_lead)
+        monkeypatch.setattr(_notifier, "send_message", lambda *a, **k: True)
+        monkeypatch.setattr(_notifier, "send_error_alert", lambda *a, **k: True)
+        monkeypatch.setattr(_main, "FB_EMAIL", "test@example.com")
+        monkeypatch.setattr(_main, "FB_PASSWORD", "pw")
+        _asyncio.run(_main.run_cycle())
+        return classified, sent
+
+    def test_block_word_in_comment_does_not_block_the_lead(self, tmp_db, monkeypatch):
+        database.add_keyword("דרושים", "block")
+        post = self._post("p1", "מחפש מתכנת לבניית בוט טלגרם לעסק",
+                          "יוסי לוי\nדרושים עובדים בחברה שלי")
+        _, sent = self._run(monkeypatch, [post])
+        assert len(sent) == 1
+
+    def test_block_word_in_body_still_blocks(self, tmp_db, monkeypatch):
+        database.add_keyword("דרושים", "block")
+        post = self._post("p1", "דרושים עובדים לחברה, שלחו קורות חיים",
+                          "יוסי לוי\nמעוניין")
+        classified, sent = self._run(monkeypatch, [post])
+        assert classified == [] and sent == []
+
+    def test_keyword_only_in_comment_does_not_reach_the_ai(self, tmp_db, monkeypatch):
+        database.add_keyword("בוט", "pre_filter")
+        post = self._post("p1", "מישהו מכיר מוסך טוב בחיפה?",
+                          "יוסי לוי\nאני בונה בוט שימליץ לך")
+        classified, sent = self._run(monkeypatch, [post])
+        assert classified == [] and sent == []
+
+    def test_ai_gets_the_body_while_db_keeps_full_content(self, tmp_db, monkeypatch):
+        """המסווג רואה את הגוף בלבד. ב-DB נשמר הטקסט המלא — מיגרציית
+        ה-content_hash מחשבת ממנו מחדש (באג #19), ולכן אסור לקצר אותו."""
+        post = self._post("p1", "מחפש מתכנת לבוט טלגרם",
+                          "יוסי לוי\nממליץ על עצמי, תשלח הודעה")
+        classified, sent = self._run(monkeypatch, [post])
+        assert len(classified) == 1
+        assert "מחפש מתכנת לבוט טלגרם" in classified[0]["content"]
+        assert "יוסי לוי" not in classified[0]["content"]
+        assert len(sent) == 1
+        stored = database._get_conn().execute(
+            "SELECT content FROM sent_leads").fetchone()[0]
+        assert "יוסי לוי" in stored
+
+    def test_force_send_word_in_comment_does_not_force_send(self, tmp_db, monkeypatch):
+        import main as _main
+        _main.add_force_send_keyword("דחוף")
+        post = self._post("p1", "מישהו מכיר מוסך טוב בחיפה?",
+                          "יוסי לוי\nדחוף לי לדעת גם")
+        _, sent = self._run(monkeypatch, [post])
+        assert len(sent) == 1
+        assert not sent[0]["reason"].startswith("שלח תמיד")
+
+    def test_hot_word_in_comment_does_not_mark_hot(self, tmp_db, monkeypatch):
+        import main as _main
+        _main.add_hot_word("דחוף")
+        post = self._post("p1", "מחפש מתכנת לבוט טלגרם",
+                          "יוסי לוי\nדחוף לי גם")
+        _, sent = self._run(monkeypatch, [post])
+        assert len(sent) == 1
+        assert sent[0]["is_hot"] is False

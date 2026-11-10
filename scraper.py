@@ -319,12 +319,17 @@ def _is_comment_boundary(line: str) -> bool:
     return _is_action_bar(line) or bool(_ENGAGEMENT_LINE_RE.match(line))
 
 
-def _normalize_lines(text: str, *, stop_at_comments: bool) -> tuple[list[str], bool]:
-    """מנרמל טקסט לרשימת שורות יציבות. מחזיר (שורות, האם נמצא גבול תגובות).
+def _normalize_lines(text: str, *, stop_at_comments: bool) -> tuple[list[str], int | None]:
+    """מנרמל טקסט לרשימת שורות יציבות.
+
+    מחזיר (שורות, אינדקס שורת הגבול). האינדקס הוא מספר השורה בטקסט המקורי
+    (לפי split('\\n')) שבה נמצא גבול התגובות, או None אם לא נמצא גבול.
+    האינדקס תקף גם לטקסט המקורי כי אף שלב נרמול לא מוסיף או מוחק תו שורה
+    חדשה: lower, הסרת URL (\\S לא תופס \\n) והסרת תווים בלתי-נראים.
 
     stop_at_comments=True — עוצר בגבול התגובות ומחזיר רק את גוף הפוסט.
-    הלוגיקה מוגדרת כאן פעם אחת ומשמשת גם את _stable_text_for_hash
-    וגם את _post_core_text — לא לשכפל אותה.
+    הלוגיקה מוגדרת כאן פעם אחת ומשמשת את _stable_text_for_hash,
+    את _post_core_text ואת extract_post_body — לא לשכפל אותה.
     """
     # 1. lowercase — מונע הבדלי case בין רינדורים
     text = text.lower()
@@ -336,15 +341,15 @@ def _normalize_lines(text: str, *, stop_at_comments: bool) -> tuple[list[str], b
     text = _INVISIBLE_AND_PUA_RE.sub('', text)
 
     stable: list[str] = []
-    hit_boundary = False
-    for line in text.split('\n'):
+    boundary_index: int | None = None
+    for i, line in enumerate(text.split('\n')):
         s = line.strip()
         if not s:
             continue
         # עצירה בגבול התגובות. דורשים ש-stable כבר לא ריק כדי ששורת גבול
         # שמופיעה בראש האלמנט (רינדור חריג) לא תרוקן את הליבה כולה.
         if stop_at_comments and stable and _is_comment_boundary(s):
-            hit_boundary = True
+            boundary_index = i
             break
         # בדיקת regex משולבת — digits-only, engagement, dynamic lines בבדיקה אחת
         if _SKIP_LINE_RE.match(s):
@@ -360,7 +365,7 @@ def _normalize_lines(text: str, *, stop_at_comments: bool) -> tuple[list[str], b
         if _is_action_bar(s):
             continue
         stable.append(s)
-    return stable, hit_boundary
+    return stable, boundary_index
 
 
 def _join_stable(lines: list[str]) -> str:
@@ -403,11 +408,32 @@ def _post_core_text(text: str) -> str:
     בין פוסטים שונים). אם לא נמצא — חותך ל-_CORE_MAX_WORDS מילים כרשת ביטחון,
     כדי שתגובות לא ידלפו לליבה.
     """
-    lines, hit_boundary = _normalize_lines(text, stop_at_comments=True)
+    lines, boundary_index = _normalize_lines(text, stop_at_comments=True)
     core = _join_stable(lines)
-    if core and not hit_boundary:
+    if core and boundary_index is None:
         core = ' '.join(core.split()[:_CORE_MAX_WORDS])
     return core
+
+
+def extract_post_body(text: str) -> str:
+    """גוף הפוסט — הטקסט המקורי עד לגבול התגובות, בלי התגובות שמתחתיו.
+
+    על הטקסט הזה מקבלים כל החלטה לפי תוכן: "שלח תמיד", מילה חמה, מילים
+    חוסמות, מילות מפתח וסיווג AI. בלי ההפרדה, מילה שמופיעה רק בתגובה של
+    מישהו אחר הייתה חוסמת ליד אמיתי, או מעבירה ל-AI פוסט שאינו ליד.
+    (סינון הגיל נשאר על הטקסט המלא — הוא חסין לתגובות מעצם התכנון, באג #16.)
+
+    ההבדל מ-_post_core_text: שם הטקסט מנורמל (lowercase, בלי timestamps
+    ורעשי UI) כי הוא משמש לזהות. כאן הטקסט נשאר כמו שהוא — המסננים
+    והמסווג צריכים את מה שהמפרסם כתב.
+
+    הגבול זהה לזה של זהות הפוסט (_normalize_lines). אם לא נמצא גבול —
+    מחזיר את הטקסט המלא, כדי ששום תוכן של הפוסט לא יאבד.
+    """
+    _, boundary_index = _normalize_lines(text, stop_at_comments=True)
+    if boundary_index is None:
+        return text
+    return '\n'.join(text.split('\n')[:boundary_index]).strip()
 
 
 def stable_post_id(text: str) -> str:
@@ -1606,7 +1632,11 @@ async def scrape_group(page, group: dict, seen_checker=None) -> list[dict]:
 
                     posts.append({
                         "id": post_id,
+                        # content — הטקסט המלא כולל תגובות. נשמר כך כי ה-content_hash
+                        # ומיגרציית ה-hashים מחושבים ממנו (באג #19), והוא מוצג בטלגרם.
                         "content": text,
+                        # body — גוף הפוסט בלבד. כל החלטת סינון וסיווג נעשית עליו (באג #23).
+                        "body": extract_post_body(text),
                         "url": post_url,
                         "group": group_name,
                         "group_url": group["url"],

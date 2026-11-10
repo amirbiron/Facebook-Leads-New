@@ -244,6 +244,26 @@ def _to_desktop_url(url: str) -> str:
     """ממיר URL מובייל ל-URL דסקטופ (m.facebook.com → www.facebook.com)."""
     return url.replace("://m.facebook.com", "://www.facebook.com")
 
+
+# תווים שיש להם משמעות ב-Markdown הישן של טלגרם (parse_mode="Markdown").
+# מקור, מילולית: https://core.telegram.org/bots/api#markdown-style —
+#   "To escape characters '_', '*', '`', '[' outside of an entity,
+#    prepend the character '\' before them."
+#   "Escaping inside entities is not allowed"
+_MARKDOWN_SPECIAL_RE = re.compile(r"([_*`\[])")
+
+
+def _escape_markdown(text: str) -> str:
+    """מוסיף '\\' לפני כל תו מיוחד של Markdown הישן של טלגרם.
+
+    חובה על כל טקסט שמגיע מבחוץ ומשובץ בהודעה עם parse_mode="Markdown":
+    תוכן הפוסט, שם הקבוצה וסיבת הסיווג. בלי זה, קו תחתון בכתובת מייל או
+    כוכבית בתוכן נקראים כעיצוב, והעיצוב שבתבנית שלנו (*ליד חדש*) נשבר.
+    רק מחוץ לישויות — URL בתוך [טקסט](url) לא עובר דרך כאן, כי בתוך
+    ישות אסור לעשות escape (ראו המקור למעלה).
+    """
+    return _MARKDOWN_SPECIAL_RE.sub(r"\\\1", text)
+
 def send_lead(group_name: str, content: str, post_url: str, reason: str,
               has_real_url: bool = True, also_in: list[str] | None = None,
               is_hot: bool = False, author_url: str = ""):
@@ -253,6 +273,9 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
 
     content = clean_post_content(content)
     short_content = content[:350] + "..." if len(content) > 350 else content
+    # escape אחרי החיתוך ולא לפניו: חיתוך אחרי escape יכול להשאיר '\' יתום
+    # בסוף, שיברח מהתו הבא בתבנית במקום מהתו שנחתך.
+    short_content = _escape_markdown(short_content)
 
     # המרת URL מובייל לדסקטופ — נוח יותר למשתמשים
     desktop_url = _to_desktop_url(post_url)
@@ -261,7 +284,7 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
     link_label = "פתח פוסט" if has_real_url else "פתח קבוצה"
 
     # תצוגת קבוצה — אם הפוסט הופיע גם בקבוצות נוספות, מציג אותן
-    group_line = f"\U0001f4cc *קבוצה:* {group_name}"
+    group_line = f"\U0001f4cc *קבוצה:* {_escape_markdown(group_name)}"
     if also_in:
         group_line += f" (+ {len(also_in)} קבוצות נוספות)"
 
@@ -281,7 +304,7 @@ def send_lead(group_name: str, content: str, post_url: str, reason: str,
         f"\U0001f3af *ליד חדש*\n"
         f"{group_line}\n\n"
         f"{short_content}\n\n"
-        f"\U0001f4a1 *למה רלוונטי:* {reason}\n\n"
+        f"\U0001f4a1 *למה רלוונטי:* {_escape_markdown(reason)}\n\n"
         f"\U0001f517 [{link_label}]({desktop_url})"
         f"{profile_line}"
     )

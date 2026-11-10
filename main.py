@@ -2131,6 +2131,10 @@ async def _run_debug_scan(group_url: str) -> str:
     if dedup_caught:
         lines.append(f"\U0001f503 כפילויות לפי content_hash: {dedup_caught}")
 
+    # החלטות לפי תוכן (חסימה, מילות מפתח) נעשות כאן על p["body"] — בדיוק כמו
+    # ב-run_cycle (באג #23), כדי שהדו"ח יתאר את מה שהסבב האמיתי עושה.
+    # content נשאר ל-content_hash ולסינון הגיל, כמו שם.
+
     # שלב 3 — סינון גיל
     max_age = _load_max_post_age()
     age_filtered = 0
@@ -2156,7 +2160,7 @@ async def _run_debug_scan(group_url: str) -> str:
     blocked_count = 0
     after_block = []
     for p in after_dedup:
-        if is_blocked(p["content"]):
+        if is_blocked(p["body"]):
             blocked_count += 1
         else:
             after_block.append(p)
@@ -2164,7 +2168,7 @@ async def _run_debug_scan(group_url: str) -> str:
         lines.append(f"\U0001f6ab נחסמו לפי מילים חוסמות: {blocked_count}")
 
     # שלב 6 — סינון מילות מפתח
-    passed_filter = [p for p in after_block if passes_keyword_filter(p["content"])]
+    passed_filter = [p for p in after_block if passes_keyword_filter(p["body"])]
     kw_filtered = len(after_block) - len(passed_filter)
     lines.append(f"\U0001f50d עברו סינון מילות מפתח: {len(passed_filter)}")
     if kw_filtered:
@@ -2181,20 +2185,20 @@ async def _run_debug_scan(group_url: str) -> str:
     if kw_filtered and after_block:
         # מחפשים פוסט שלא עבר סינון מילות מפתח
         for p in after_block:
-            if not passes_keyword_filter(p["content"]):
-                snippet = p["content"].replace("\n", " ")[:150]
+            if not passes_keyword_filter(p["body"]):
+                snippet = p["body"].replace("\n", " ")[:150]
                 lines.append(f"\n\U0001f4dd דוגמה לפוסט שנפסל (מילות מפתח):\n\"{snippet}...\"")
                 break
 
     if blocked_count and after_dedup:
         for p in after_dedup:
-            if is_blocked(p["content"]):
-                snippet = p["content"].replace("\n", " ")[:150]
+            if is_blocked(p["body"]):
+                snippet = p["body"].replace("\n", " ")[:150]
                 # מציג את המילה החסומה שנמצאה
                 with _kw_lock:
                     block_kws = _keywords_state["block"]
                 found_word = ""
-                text_lower = p["content"].lower()
+                text_lower = p["body"].lower()
                 for kw in block_kws:
                     if kw in text_lower:
                         found_word = kw
@@ -2386,6 +2390,12 @@ async def run_cycle():
         for post in new_posts:
             mark_seen(post["id"], post["group"])
 
+        # החלטות לפי תוכן ("שלח תמיד", מילה חמה, חסימה, מילות מפתח, סיווג AI)
+        # נעשות על p["body"] — גוף הפוסט בלי התגובות. p["content"] (כולל תגובות)
+        # נשאר ל-content_hash, לשמירה ב-DB, לתצוגה בטלגרם — ולסינון הגיל,
+        # שכבר חסין לתגובות מעצם התכנון (באג #16): הוא לוקח את הגיל המקסימלי,
+        # ותגובות תמיד חדשות מהפוסט. אותו כלל חל ב-_run_debug_scan (באג #23).
+
         # שלב 2.5 — סינון פוסטים ישנים (לפי max_post_age_days)
         # עוקף גם force_send — פוסט ישן לא יישלח גם אם מכיל מילת "שלח תמיד"
         max_age = _load_max_post_age()
@@ -2413,10 +2423,10 @@ async def run_cycle():
         for post in new_posts:
             # בדיקת force_send — גם מול group_url של הפוסט המקורי
             # וגם מול group_urls של קבוצות שאוחדו (cross-group dedup)
-            matched_kw = matches_force_send(post["content"], post.get("group_url", ""))
+            matched_kw = matches_force_send(post["body"], post.get("group_url", ""))
             if not matched_kw:
                 for alt_url in post.get("_also_in_urls", []):
-                    matched_kw = matches_force_send(post["content"], alt_url)
+                    matched_kw = matches_force_send(post["body"], alt_url)
                     if matched_kw:
                         break
             if matched_kw and not is_lead_sent(post["id"]):
@@ -2425,7 +2435,7 @@ async def run_cycle():
                     log.debug(f"דילוג על force_send — תוכן זהה כבר נשלח (content_hash)")
                     continue
                 reason = f"שלח תמיד — מילת מפתח: {matched_kw}"
-                hot_kw = matches_hot_word(post["content"])
+                hot_kw = matches_hot_word(post["body"])
                 sent_ok = await asyncio.to_thread(
                     send_lead,
                     group_name=post["group"],
@@ -2460,13 +2470,13 @@ async def run_cycle():
             _has_block = bool(_keywords_state["block"])
         if _has_block:
             before_block = len(rest_posts)
-            rest_posts = [p for p in rest_posts if not is_blocked(p["content"])]
+            rest_posts = [p for p in rest_posts if not is_blocked(p["body"])]
             blocked_count = before_block - len(rest_posts)
             if blocked_count:
                 log.info(f"נחסמו {blocked_count} פוסטים לפי מילים חוסמות (BLOCK_KEYWORDS)")
 
         # שלב 4ב — סינון מילות מפתח לפני שליחה ל-AI
-        filtered_posts = [p for p in rest_posts if passes_keyword_filter(p["content"])]
+        filtered_posts = [p for p in rest_posts if passes_keyword_filter(p["body"])]
         skipped_by_filter = len(rest_posts) - len(filtered_posts)
         if skipped_by_filter:
             log.info(f"סונן לפי מילות מפתח: {skipped_by_filter} פוסטים לא רלוונטיים דולגו")
@@ -2502,13 +2512,19 @@ async def run_cycle():
             scan_progress.update({"phase": "classifying", "phase_label": "מסווג עם AI"})
 
             # סיווג באצ'ים — שליחת מספר פוסטים ל-AI בבקשה אחת
-            # עוטף ב-asyncio.to_thread כי classify_batch משתמש ב-openai סינכרוני
-            results = await asyncio.to_thread(classify_batch, to_classify)
+            # עוטף ב-asyncio.to_thread כי classify_batch משתמש ב-openai סינכרוני.
+            # ה-AI מקבל את גוף הפוסט בלבד: classify_batch מסווג את מה שב-"content",
+            # ולכן מעבירים לו body במפתח הזה. הרשימה החדשה שומרת על אותו סדר
+            # ואותו אורך, כך שה-zip למטה מתאים כל תוצאה לפוסט שלה (באג #9).
+            results = await asyncio.to_thread(
+                classify_batch,
+                [{"content": p["body"], "group": p["group"]} for p in to_classify],
+            )
 
             for post, result in zip(to_classify, results):
                 if result.get("relevant"):
                     reason = result.get("reason", "")
-                    hot_kw = matches_hot_word(post["content"])
+                    hot_kw = matches_hot_word(post["body"])
                     sent_ok = await asyncio.to_thread(
                         send_lead,
                         group_name=post["group"],
