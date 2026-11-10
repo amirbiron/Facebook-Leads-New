@@ -1,9 +1,102 @@
 import os
 import re
+from urllib.parse import quote
+
 import requests
 from logger import get_logger
 
 log = get_logger("Notifier")
+
+
+# ── קריאות ל-API של טלגרם — נקודת הרכבה אחת לכתובת שמכילה את הטוקן ──
+# טלגרם דורש את הטוקן בתוך נתיב ה-URL, ואין לו חלופה בכותרת.
+# מקור, מילולית: https://core.telegram.org/bots/api#making-requests —
+#   "All queries to the Telegram Bot API must be served over HTTPS and need
+#    to be presented in this form: https://api.telegram.org/bot<token>/METHOD_NAME"
+# ו-requests מכניס את הכתובת להודעות השגיאה שלו: שגיאת רשת ("Max retries
+# exceeded with url: /bot<token>/...") וגם HTTPError של raise_for_status
+# ("... for url: {self.url}", ‏requests/models.py ב-2.32.3). כל `log.error(f"...{e}")`
+# כתב את הטוקן ללוג (באג #24). לכן הכתובת נבנית רק כאן, וכל שגיאה יוצאת מכאן
+# מנוקה — בנקודת ההרכבה ולא אצל הצרכנים (K13).
+_TELEGRAM_API_BASE = "https://api.telegram.org"
+
+# שגיאות רשת חולפות — הלולאה של getUpdates רושמת אותן כ-WARNING בשורה אחת.
+# ProxyError ו-SSLError הן תת-מחלקות של ConnectionError (requests/exceptions.py).
+_TRANSIENT_ERRORS = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
+
+# מקטע הטוקן בנתיב: "/bot" ואחריו הכל עד ה-"/" הבא, רווח או מירכאה.
+_BOT_PATH_RE = re.compile(r"/bot[^/\s'\"]+")
+
+_REDACTED_MESSAGE = "<הודעת השגיאה הוסתרה כי הכילה את הטוקן>"
+
+
+class TelegramAPIError(Exception):
+    """שגיאה בקריאה ל-API של טלגרם. ההודעה לא מכילה את הטוקן.
+
+    status_code — קוד ה-HTTP כשהתקבלה תשובה (למשל 409), None בשגיאת רשת.
+    transient — ניתוק רשת חולף, שאפשר פשוט לנסות שוב.
+    cause — שם המחלקה של החריגה המקורית, לאבחון.
+    החריגה לא שומרת את אובייקט התשובה או את החריגה המקורית: שניהם מחזיקים
+    את הכתובת המלאה עם הטוקן (HTTPError.response.url).
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None,
+                 transient: bool = False, cause: str = ""):
+        super().__init__(message)
+        self.status_code = status_code
+        self.transient = transient
+        self.cause = cause
+
+
+def _redact_token(text: str, bot_token: str) -> str:
+    """מסיר את הטוקן מטקסט של הודעת שגיאה. נכשל-סגור (K13).
+
+    מחליף את מקטע הנתיב /bot<token> ואת הטוקן עצמו בכל מקום. אם אחרי זה
+    עדיין נשאר זכר לחלק הסודי (למשל בקידוד URL) — מחזיר הודעה קבועה
+    במקום הטקסט, כי עדיף לאבד פרטי אבחון מאשר לכתוב את הטוקן ללוג.
+    """
+    text = _BOT_PATH_RE.sub("/bot<TOKEN>", text)
+    if bot_token:
+        text = text.replace(bot_token, "<TOKEN>")
+        secret = bot_token.split(":", 1)[-1]
+        if secret and (secret in text or quote(secret, safe="") in text):
+            return _REDACTED_MESSAGE
+    return text
+
+
+def telegram_request(api_method: str, *, bot_token: str, http_method: str = "post",
+                     raise_for_status: bool = False, **kwargs) -> requests.Response:
+    """קריאה ל-API של טלגרם. הדרך היחידה בקוד לפנות לטלגרם.
+
+    kwargs עוברים כמו שהם ל-requests (json, params, data, files, timeout).
+    raise_for_status=True — תשובה שאינה 2xx הופכת ל-TelegramAPIError עם status_code.
+    כל חריגה מכל סוג הופכת ל-TelegramAPIError עם הודעה מנוקה. החריגה נזרקת
+    **אחרי** בלוק ה-except, כדי שלא תישא את המקורית כ-__context__ — שם הטוקן
+    היה מודפס ב-traceback של exc_info.
+    """
+    url = f"{_TELEGRAM_API_BASE}/bot{bot_token}/{api_method}"
+    send = requests.get if http_method == "get" else requests.post
+    try:
+        response = send(url, **kwargs)
+        if raise_for_status:
+            response.raise_for_status()
+        return response
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code if e.response is not None else None
+        error = TelegramAPIError(
+            _redact_token(f"{api_method}: HTTPError: {e}", bot_token),
+            status_code=status, cause="HTTPError",
+        )
+    except Exception as e:
+        error = TelegramAPIError(
+            _redact_token(f"{api_method}: {type(e).__name__}: {e}", bot_token),
+            transient=isinstance(e, _TRANSIENT_ERRORS), cause=type(e).__name__,
+        )
+    raise error
 
 def _get_bot_token() -> str | None:
     return os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -42,10 +135,8 @@ def send_message(
 
     try:
         log.debug(f"שולח הודעה לטלגרם (chat_id={target_chat})...")
-        response = requests.post(
-            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json=payload,
-            timeout=10,
+        response = telegram_request(
+            "sendMessage", bot_token=bot_token, json=payload, timeout=10,
         )
         if response.status_code == 200:
             log.info("הודעה נשלחה בהצלחה לטלגרם")
@@ -118,10 +209,8 @@ def send_message_with_buttons(
         payload["parse_mode"] = parse_mode
 
     try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json=payload,
-            timeout=10,
+        response = telegram_request(
+            "sendMessage", bot_token=bot_token, json=payload, timeout=10,
         )
         if response.status_code == 200:
             data = response.json()
@@ -157,10 +246,8 @@ def edit_message_text(
         payload["parse_mode"] = parse_mode
 
     try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{bot_token}/editMessageText",
-            json=payload,
-            timeout=10,
+        response = telegram_request(
+            "editMessageText", bot_token=bot_token, json=payload, timeout=10,
         )
         if response.status_code == 200:
             return True
@@ -180,13 +267,14 @@ def answer_callback_query(callback_query_id: str, text: str = "") -> bool:
     if text:
         payload["text"] = text
     try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery",
-            json=payload,
-            timeout=10,
+        response = telegram_request(
+            "answerCallbackQuery", bot_token=bot_token, json=payload, timeout=10,
         )
         return response.status_code == 200
-    except Exception:
+    except Exception as e:
+        # לא קריטי: רק עוצר את אנימציית הטעינה על הכפתור. נרשם כדי שכשל
+        # חוזר ייראה בלוג (K11). ההודעה מנוקה מהטוקן ב-telegram_request.
+        log.warning(f"answerCallbackQuery נכשל: {e}")
         return False
 
 
@@ -212,8 +300,8 @@ def send_document(
     target_chat = str(chat_id or default_chat)
 
     try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{bot_token}/sendDocument",
+        response = telegram_request(
+            "sendDocument", bot_token=bot_token,
             data={"chat_id": target_chat, "caption": caption[:1024]},
             files={"document": (filename, file_bytes)},
             timeout=15,

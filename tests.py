@@ -5052,3 +5052,103 @@ class TestDecisionsUseBody:
         designer = next(t for t in leads if "מחפש מעצבת לוגו לעסק" in t)
         assert "*למה רלוונטי:* ליד" in designer
         assert "*למה רלוונטי:* ליד" not in coder
+
+
+class TestTelegramTokenNotLeaked:
+    """באג #24 — הטוקן של בוט הטלגרם דלף ללוגים דרך הודעות שגיאה של requests.
+
+    טלגרם דורש את הטוקן בנתיב ה-URL, ו-requests מכניס את הכתובת להודעת
+    השגיאה: שגיאת רשת ("Max retries exceeded with url: /bot<token>/...")
+    וגם HTTPError של raise_for_status ("... for url: <url>"). כל
+    `log.error(f"...{e}", exc_info=True)` כתב את הטוקן ללוג.
+    """
+
+    TOKEN = "123456:SECRETpart_xyz"
+    SECRET = "SECRETpart_xyz"
+
+    def _real_style_connection_error(self, method="sendMessage"):
+        # בדיוק הצורה ש-requests 2.32.3 מייצר (נבדק מול בקשה אמיתית שנכשלה)
+        import requests
+        return requests.exceptions.ConnectionError(
+            "HTTPSConnectionPool(host='api.telegram.org', port=443): Max retries "
+            f"exceeded with url: /bot{self.TOKEN}/{method} (Caused by "
+            "NewConnectionError('Failed to establish a new connection'))"
+        )
+
+    def test_send_message_network_error_does_not_log_token(self, caplog, monkeypatch):
+        """הנזק עצמו: הטוקן לא מגיע ללוג, גם לא ב-traceback של exc_info."""
+        import logging
+        import notifier
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", self.TOKEN)
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "1")
+        caplog.set_level(logging.DEBUG)
+        with patch("notifier.requests.post",
+                   side_effect=self._real_style_connection_error()):
+            assert notifier.send_message("שלום") is False
+        assert "שגיאה בשליחה לטלגרם" in caplog.text  # השגיאה עדיין נרשמת
+        assert self.SECRET not in caplog.text
+
+    def test_real_requests_failure_is_redacted_without_chained_cause(self, monkeypatch):
+        """בקשה אמיתית שנכשלת (דומיין .invalid) — לא הודעה שכתבנו ביד.
+        גם ה-traceback המלא נקי: החריגה נזרקת אחרי בלוק ה-except, ולכן לא
+        נושאת את המקורית (שבה הטוקן) כ-__context__."""
+        import traceback
+        import notifier
+        monkeypatch.setattr(notifier, "_TELEGRAM_API_BASE", "https://api.telegram.invalid")
+        with pytest.raises(notifier.TelegramAPIError) as info:
+            notifier.telegram_request("getMe", bot_token=self.TOKEN, timeout=5)
+        err = info.value
+        assert self.SECRET not in str(err)
+        assert err.__context__ is None and err.__cause__ is None
+        assert self.SECRET not in "".join(traceback.format_exception(err))
+        assert err.transient is True
+        assert err.status_code is None
+
+    def test_http_error_keeps_status_code_and_hides_token(self):
+        """הלולאה של getUpdates מזהה 409 לפי status_code — הקוד נשמר, הכתובת לא."""
+        import requests
+        import notifier
+        response = requests.Response()
+        response.status_code = 409
+        response.reason = "Conflict"
+        response.url = f"https://api.telegram.org/bot{self.TOKEN}/getUpdates?timeout=30"
+        with patch("notifier.requests.get", return_value=response):
+            with pytest.raises(notifier.TelegramAPIError) as info:
+                notifier.telegram_request("getUpdates", bot_token=self.TOKEN,
+                                          http_method="get", raise_for_status=True)
+        err = info.value
+        assert err.status_code == 409
+        assert err.transient is False
+        assert self.SECRET not in str(err)
+        assert not hasattr(err, "response")  # התשובה מחזיקה את הכתובת המלאה
+
+    def test_unknown_exception_type_is_redacted_too(self):
+        """נכשל-סגור (K13): גם חריגה מסוג לא צפוי לא יוצאת גולמית."""
+        import notifier
+        with patch("notifier.requests.post",
+                   side_effect=RuntimeError(f"boom /bot{self.TOKEN}/getMe")):
+            with pytest.raises(notifier.TelegramAPIError) as info:
+                notifier.telegram_request("getMe", bot_token=self.TOKEN)
+        assert self.SECRET not in str(info.value)
+        assert info.value.cause == "RuntimeError"
+        assert info.value.transient is False
+
+    def test_secret_residue_replaces_the_whole_message(self):
+        """שארית של החלק הסודי, בלי ה-/bot ובלי המזהה שלפניו — כל ההודעה מוסתרת."""
+        from notifier import _redact_token, _REDACTED_MESSAGE
+        assert _redact_token(f"oops {self.SECRET} here", self.TOKEN) == _REDACTED_MESSAGE
+        assert _redact_token("plain error", self.TOKEN) == "plain error"
+
+    def test_only_telegram_request_builds_the_token_url(self):
+        """נקודת הרכבה אחת: כתובת עם /bot{...} נבנית רק ב-notifier.telegram_request.
+        מקום שני שבונה אותה יעקוף את הניקוי, וזה בדיוק הבאג."""
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent
+        hits = []
+        for path in sorted(root.glob("*.py")):
+            if path.name == "tests.py":
+                continue
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if re.search(r"/bot\{", line):
+                    hits.append(f"{path.name}:{n}")
+        assert len(hits) == 1 and hits[0].startswith("notifier.py:"), hits
