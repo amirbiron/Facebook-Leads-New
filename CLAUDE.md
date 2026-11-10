@@ -221,7 +221,8 @@
 ### 24. הטוקן של בוט הטלגרם דלף ללוגים דרך הודעות השגיאה של requests
 **הבעיה:** טלגרם דורש את הטוקן בנתיב ה-URL (`https://api.telegram.org/bot<token>/METHOD_NAME`), והקוד בנה את הכתובת הזו ב-8 מקומות — 5 ב-`notifier.py` ו-3 ב-`main.py`. ‏requests מכניס את הכתובת להודעות השגיאה שלו: שגיאת רשת ("Max retries exceeded with url: /bot<token>/...") וגם HTTPError של `raise_for_status` ("... for url: <url>", והחריגה שומרת את כל התשובה, כולל הכתובת). כל `log.error(f"...{e}", exc_info=True)` כתב את הטוקן ללוגים של Render — בכל תקלת רשת מול טלגרם, ובלולאת `getUpdates` גם בכל שגיאת HTTP שאינה 409 (למשל 502 מטלגרם). מי שקורא את הלוגים יכול לשלוט בבוט במלואו.
 **הכלל:**
-  - **כל קריאה לטלגרם עוברת דרך `telegram_request()` ב-`notifier.py`** — המקום היחיד שבונה כתובת עם הטוקן. לא לבנות `api.telegram.org/bot{...}` בשום מקום אחר, ולא לקרוא ל-`raise_for_status()` על תשובה של טלגרם — להעביר `raise_for_status=True` ל-`telegram_request`. `test_only_telegram_request_builds_the_token_url` נופל על כל מקום נוסף שבונה את הכתובת.
+  - **כל קריאה לטלגרם עוברת דרך `telegram_request()` ב-`notifier.py`** — המקום היחיד שבונה כתובת עם הטוקן. לא לבנות `api.telegram.org/bot{...}` בשום מקום אחר, ולא לקרוא ל-`raise_for_status()` על תשובה של טלגרם. `test_only_telegram_request_builds_the_token_url` סורק את המחרוזות בקוד (טוקנים, לא הערות): `api.telegram.org` מופיע רק בקבוע שב-`notifier.py`, ואין `"/bot"` במחרוזת של שום מודול אחר. זו בדיקה טקסטואלית — הרכבה עקיפה (למשל `"/" + "bot"`) לא תיתפס, ולכן הכלל עצמו מחייב גם בלי הטסט.
+  - **`raise_for_status=True` הוא ברירת המחדל של `telegram_request`.** תשובה שאינה 2xx הופכת ל-`TelegramAPIError` ומגיעה ל-except של הקורא, כך שקורא ששכח לבדוק את הסטטוס לא רושם שגיאת HTTP כהצלחה. כך היה ב-`deleteWebhook`, ‏`setMyCommands` ו-`answer_callback_query`: 401/429/5xx עקפו את ה-except — הראשונים רשמו "הצלחה" ב-debug, והאחרון החזיר `False` בלי לוג. קורא שבודק את הסטטוס בעצמו ורושם את `response.text` של טלגרם (שליחה, עריכה, קובץ) מעביר `raise_for_status=False` במפורש.
   - **כל חריגה יוצאת כ-`TelegramAPIError` עם הודעה מנוקה** — מכל סוג, כולל סוג לא צפוי (נכשל-סגור, K13). היא שומרת `status_code` (ה-409 של getUpdates), `transient` (ניתוק רשת חולף) ו-`cause` (שם החריגה המקורית), ולא את התשובה או את החריגה המקורית — שתיהן מחזיקות את הכתובת המלאה.
   - **החריגה נזרקת אחרי בלוק ה-except, לא בתוכו.** זריקה בתוך ה-except שומרת את המקורית כ-`__context__`, ו-`exc_info=True` מדפיס אותה יחד עם הטוקן. נבדק במוטציה: זריקה בתוך ה-except החזירה את הטוקן ללוג של `send_message`.
   - **`_redact_token` נכשל-סגור**: מחליף את מקטע `/bot<token>` ואת הטוקן עצמו, ואם עדיין נשאר זכר לחלק הסודי — מחזיר הודעה קבועה במקום הטקסט. עדיף לאבד פרטי אבחון מאשר לכתוב את הטוקן.
@@ -337,7 +338,7 @@
 ```bash
 python -m pytest tests.py -v
 ```
-553 טסטים ב-`tests.py` מכסים:
+555 טסטים ב-`tests.py` מכסים:
 - `passes_keyword_filter()` — סינון לפי מילות מפתח (כולל רשימה ריקה)
 - `is_blocked()` — חסימת מילים אסורות
 - `extract_post_id()` — חילוץ ID מ-URLs בפורמטים שונים
@@ -356,7 +357,7 @@ python -m pytest tests.py -v
 - `TestConnectionLifetime` — thread שהסתיים משחרר את חיבור ה-SQLite שלו, ו-thread חי משתמש בחיבור אחד (באג #22)
 - `TestPostBody` / `TestDecisionsUseBody` — גוף הפוסט בלי תגובות, ו-`run_cycle` עצמו מקבל עליו כל החלטה לפי תוכן (באג #23)
 - `TestSendLeadMarkdownEscape` — escape לטקסט חיצוני בהודעת ליד, בלי לגעת בעיצוב התבנית וב-URLים (באג #23)
-- `TestTelegramTokenNotLeaked` — הטוקן של הבוט לא מגיע ללוג בשגיאת רשת או HTTP, ויש נקודת הרכבה אחת לכתובת עם הטוקן (באג #24)
+- `TestTelegramTokenNotLeaked` — הטוקן של הבוט לא מגיע ללוג בשגיאת רשת או HTTP, שגיאת HTTP לא נבלעת כהצלחה, ויש נקודת הרכבה אחת לכתובת עם הטוקן (באג #24)
 
 ## התאמה ללקוח (`client_checklist.md`)
 - קובץ `client_checklist.md` מפרט את כל המקומות בקוד שצריך לערוך כשמשכפלים את הפרויקט ללקוח חדש.
