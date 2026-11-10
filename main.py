@@ -1027,17 +1027,9 @@ async def _telegram_control_loop(
     from notifier import (
         send_message, send_message_with_buttons,
         edit_message_text, answer_callback_query,
+        telegram_request, TelegramAPIError,
     )
-    import requests
     import json
-
-    # שגיאות רשת חולפות מול טלגרם — מטופלות בנפרד משגיאות אמיתיות
-    # כדי שלא יציפו את הלוג ב-traceback ויסתירו תקלות של ממש.
-    _TRANSIENT_NET_ERRORS = (
-        requests.exceptions.ConnectionError,
-        requests.exceptions.Timeout,
-        requests.exceptions.ChunkedEncodingError,
-    )
 
     offset_file = Path(__file__).resolve().parent / "data" / "telegram_offset.txt"
 
@@ -1057,12 +1049,16 @@ async def _telegram_control_loop(
             pass
 
     def fetch_updates(offset: int, timeout: int = 30) -> list[dict]:
-        url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
         params: dict = {"timeout": timeout, "allowed_updates": json.dumps(["message", "edited_message", "callback_query"])}
         if offset:
             params["offset"] = offset
-        resp = requests.get(url, params=params, timeout=timeout + 10)
-        resp.raise_for_status()
+        # שגיאת HTTP (כולל ה-409 הקבוע) יוצאת מ-telegram_request כ-TelegramAPIError
+        # מנוקה — לא לקרוא ל-raise_for_status על התשובה עצמה: HTTPError של
+        # requests נושא את הכתובת המלאה עם הטוקן (באג #24).
+        resp = telegram_request(
+            "getUpdates", bot_token=bot_token, http_method="get",
+            params=params, timeout=timeout + 10,
+        )
         data = resp.json()
         if not data.get("ok"):
             raise RuntimeError(f"Telegram getUpdates failed: {data}")
@@ -1203,20 +1199,20 @@ async def _telegram_control_loop(
     # ניקוי webhook קודם וביטול polling תקוע מאינסטנס ישן
     try:
         await asyncio.to_thread(
-            requests.post,
-            f"https://api.telegram.org/bot{bot_token}/deleteWebhook",
-            json={"drop_pending_updates": False},
-            timeout=10,
+            telegram_request, "deleteWebhook", bot_token=bot_token,
+            json={"drop_pending_updates": False}, timeout=10,
         )
         log.debug("webhook נוקה בהצלחה")
-    except Exception:
-        pass
+    except Exception as e:
+        # לא עוצר את הבוט: אם נשאר webhook, getUpdates יחזיר 409 והלולאה תטפל.
+        # נרשם כדי שהסיבה תיראה (K11) — גם 401/429/5xx, כי telegram_request זורק
+        # על תשובה שאינה 2xx כברירת מחדל. ההודעה מנוקה מהטוקן.
+        log.warning(f"ניקוי webhook נכשל: {e}")
 
     # רישום פקודות בוט בטלגרם — כפתור "/" יציג את הפקודות הזמינות
     try:
         await asyncio.to_thread(
-            requests.post,
-            f"https://api.telegram.org/bot{bot_token}/setMyCommands",
+            telegram_request, "setMyCommands", bot_token=bot_token,
             json={"commands": [
                 {"command": "menu", "description": "📋 תפריט ראשי עם כפתורים"},
                 {"command": "scan", "description": "🔍 סריקה עכשיו"},
@@ -1240,8 +1236,11 @@ async def _telegram_control_loop(
             timeout=10,
         )
         log.debug("פקודות בוט נרשמו בטלגרם")
-    except Exception:
-        pass
+    except Exception as e:
+        # לא עוצר את הבוט — רק תפריט ה-"/" בטלגרם לא יתעדכן. נרשם כדי שהסיבה
+        # תיראה (K11) — גם שגיאת HTTP, כי telegram_request זורק עליה כברירת
+        # מחדל. ההודעה מנוקה מהטוקן.
+        log.warning(f"רישום פקודות הבוט נכשל: {e}")
 
     offset = load_offset()
     log.info("בקרת טלגרם הופעלה. פקודות: /menu /scan /status")
@@ -1715,22 +1714,23 @@ async def _telegram_control_loop(
                     continue
 
 
-        except requests.HTTPError as e:
-            if e.response is not None and e.response.status_code == 409:
+        except TelegramAPIError as e:
+            # כל שגיאה מול טלגרם מגיעה מנוקה מהטוקן (telegram_request, באג #24).
+            if e.status_code == 409:
                 # 409 Conflict = אינסטנס אחר עושה polling — ממתין עם backoff
                 log.warning(f"409 Conflict — אינסטנס אחר פעיל. ממתין {conflict_backoff} שניות...")
                 await asyncio.sleep(conflict_backoff)
                 conflict_backoff = min(conflict_backoff * 2, 120)
+            elif e.transient:
+                # ניתוק רשת/TLS חולף מול api.telegram.org. long-poll של 30 שניות
+                # נקטע מדי פעם — זו לא תקלה בקוד והלולאה מתאוששת בניסיון הבא.
+                # לכן WARNING בשורה אחת ולא ERROR עם traceback של 30 שורות,
+                # שמטביע בלוג את השגיאות האמיתיות.
+                log.warning(f"ניתוק רשת מול טלגרם ({e.cause}) — מנסה שוב")
+                await asyncio.sleep(5)
             else:
                 log.error(f"שגיאה בלולאת בקרת טלגרם: {e}", exc_info=True)
                 await asyncio.sleep(5)
-        except _TRANSIENT_NET_ERRORS as e:
-            # ניתוק רשת/TLS חולף מול api.telegram.org. long-poll של 30 שניות
-            # נקטע מדי פעם — זו לא תקלה בקוד והלולאה מתאוששת בניסיון הבא.
-            # לכן WARNING בשורה אחת ולא ERROR עם traceback של 30 שורות,
-            # שמטביע בלוג את השגיאות האמיתיות.
-            log.warning(f"ניתוק רשת מול טלגרם ({type(e).__name__}) — מנסה שוב")
-            await asyncio.sleep(5)
         except Exception as e:
             log.error(f"שגיאה בלולאת בקרת טלגרם: {e}", exc_info=True)
             await asyncio.sleep(5)
