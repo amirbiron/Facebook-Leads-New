@@ -2,6 +2,13 @@ services:
   - type: web
     name: fb-leads-agent
     runtime: docker
+    # שינוי שנוגע רק במאזין הוואטסאפ (שירות נפרד, למטה) לא בונה מחדש את הסורק.
+    # הנתיבים יחסיים לשורש הריפו, בתחביר glob (‏** = כל תת-תיקייה).
+    # https://render.com/docs/monorepo-support, https://render.com/schema/render.yaml.json
+    # סנכרון Blueprint מחליף את הסינון כולו בערך שכאן, ואם השדה נמחק — הסינון מתרוקן.
+    buildFilter:
+      ignoredPaths:
+        - whatsapp-listener/**
     envVars:
       - key: FB_EMAIL
         sync: false
