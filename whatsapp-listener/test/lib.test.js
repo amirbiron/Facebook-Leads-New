@@ -27,7 +27,9 @@ import {
   RECONNECT_MAX_DELAY_MS,
   recordMessage,
   rollDay,
+  serializeStats,
   safeTokenEqual,
+  scrubIdentifiers,
   SEEN_MAX,
   SEEN_TTL_MS,
   SOCKET_ALLOWED_PROPS,
@@ -216,16 +218,34 @@ test('recordMessage / rollDay: היומי מתאפס במעבר יום, המצט
   assert.equal(s.since, '2026-11-12');
 });
 
-test('pruneSeen: מוחק ישנים ומגביל את הכמות', () => {
+test('pruneSeen: מוחק את מה שעבר את ה-TTL ומשאיר את השאר', () => {
   const s = emptyStats('2026-11-13');
   const now = 100 * SEEN_TTL_MS;
-  s.seen.old = now - SEEN_TTL_MS - 1;
-  s.seen.fresh = now - 1000;
+  claimMessage(s, 'old', now - SEEN_TTL_MS - 1);
+  claimMessage(s, 'fresh', now - 1000);
   pruneSeen(s, now);
-  assert.deepEqual(Object.keys(s.seen), ['fresh']);
-  for (let i = 0; i < SEEN_MAX + 10; i++) s.seen[`k${i}`] = now - 1;
-  pruneSeen(s, now);
-  assert.equal(Object.keys(s.seen).length, SEEN_MAX);
+  assert.deepEqual([...s.seen.keys()], ['fresh']);
+});
+
+test('claimMessage: התקרה נאכפת בכל תפיסה, לא רק במעבר יום — הישן ביותר יוצא', () => {
+  const s = emptyStats('2026-11-13');
+  for (let i = 0; i < SEEN_MAX + 5; i++) assert.equal(claimMessage(s, `k${i}`, 1000 + i), true);
+  assert.equal(s.seen.size, SEEN_MAX);
+  assert.equal(s.seen.has('k0'), false);
+  assert.equal(s.seen.has('k4'), false);
+  assert.equal(s.seen.has('k5'), true);
+  assert.equal(s.seen.has(`k${SEEN_MAX + 4}`), true);
+});
+
+test('serializeStats / normalizeStats: הלוך-חזור דרך JSON שומר מזהים, סדר ומונים', () => {
+  const s = emptyStats('2026-11-13');
+  claimMessage(s, 'b', 2000);
+  claimMessage(s, 'a', 1000);
+  recordMessage(s, GROUP, true);
+  const back = normalizeStats(JSON.parse(JSON.stringify(serializeStats(s))), '2026-11-13');
+  assert.deepEqual([...back.seen.entries()], [['a', 1000], ['b', 2000]]); // ממוין לפי זמן — סדר הפינוי
+  assert.deepEqual(back.totals[GROUP], { count: 1, withText: 1 });
+  assert.equal(claimMessage(back, 'a', 3000), false);
 });
 
 test('normalizeStats: קובץ פגום, חלקי או עם NaN לא מכניס זבל למונים', () => {
@@ -239,7 +259,7 @@ test('normalizeStats: קובץ פגום, חלקי או עם NaN לא מכניס 
   assert.equal(n.since, '2026-11-10');
   assert.deepEqual(n.daily[GROUP], { count: 0, withText: 0 });
   assert.deepEqual(n.totals, {});
-  assert.deepEqual(n.seen, { a: 1 });
+  assert.deepEqual([...n.seen.entries()], [['a', 1]]);
 });
 
 test('formatDailySummary: כל הקבוצות שבמעקב מופיעות (גם עם 0), עם מצטבר', () => {
@@ -301,4 +321,29 @@ test('guardSocket: רק המאפיינים המותרים עוברים; כל ה�
   }, ForbiddenSocketAccess);
   assert.equal(sent, 0);
   assert.deepEqual([...SOCKET_ALLOWED_PROPS], ['ev', 'groupFetchAllParticipating', 'end']);
+});
+
+test('guardSocket: אין דרך עוקפת לחיבור האמיתי — descriptor, keys, delete, defineProperty, prototype', () => {
+  const realSend = () => {};
+  const fake = { ev: { on() {} }, groupFetchAllParticipating: async () => ({}), end() {}, sendMessage: realSend };
+  const g = guardSocket(fake);
+  // הדרך שעקפה את get בגרסה הקודמת: ה-descriptor של האובייקט האמיתי
+  assert.equal(Object.getOwnPropertyDescriptor(g, 'sendMessage'), undefined);
+  assert.deepEqual(Object.keys(g), ['ev', 'groupFetchAllParticipating', 'end']);
+  assert.equal('sendMessage' in g, false);
+  assert.throws(() => delete g.end, ForbiddenSocketAccess);
+  assert.throws(() => Object.defineProperty(g, 'sendMessage', { value: 1 }), ForbiddenSocketAccess);
+  assert.throws(() => Object.setPrototypeOf(g, {}), ForbiddenSocketAccess);
+  assert.throws(() => ({ ...g }).sendMessage(), TypeError); // העתקה מקבלת רק את המותרים
+  // החיבור האמיתי לא השתנה
+  assert.equal(fake.sendMessage, realSend);
+  assert.equal(typeof fake.end, 'function');
+});
+
+test('scrubIdentifiers: מזהי טלפון, LID וקבוצה, ומספרים ארוכים — מוחלפים; קודים קצרים נשארים', () => {
+  const out = scrubIdentifiers(
+    'from 972541234567@s.whatsapp.net / 155516504436974:12@lid in 120363402840406015@g.us, +972541234567 code=515 id=3EB0A1',
+  );
+  assert.equal(out, 'from <jid> / <jid> in <jid>, <num> code=515 id=3EB0A1');
+  assert.equal(scrubIdentifiers(undefined), '');
 });

@@ -6,21 +6,38 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// מחזיר את התוכן, או null כשהקובץ חסר. קובץ פגום מוחזר כ-null עם אזהרה
-// בלוג — לא מפיל את השירות.
-export function readJson(file, log) {
+// טעינת קובץ מצב, עם שלושה מקרים שאסור לבלבל ביניהם:
+//   missing  — הקובץ לא קיים: מתחילים ריק, ומותר לכתוב.
+//   corrupt  — הקובץ קיים אבל אינו JSON תקין: מזיזים אותו הצידה
+//              (<file>.corrupt-<זמן>) כדי לא למחוק ראיה, ומתחילים ריק.
+//   unreadable — הקובץ קיים ולא נקרא (EACCES, EIO, EMFILE...): ייתכן שהוא
+//              תקין לגמרי. מחזירים writable=false — הקורא לא כותב עליו,
+//              אחרת הכתיבה הבאה הייתה דורסת מונים ומזהים שלא נקראו.
+// אותו כלל גם כשההזזה הצידה נכשלת: לא דורסים קובץ שלא הצלחנו לשמור.
+// מחזיר { value, status, writable }. לא זורק.
+export function loadJsonState(file, log, nowMs = Date.now()) {
   let raw;
   try {
     raw = fs.readFileSync(file, 'utf8');
   } catch (err) {
-    if (err.code !== 'ENOENT') log.warn(`לא הצלחתי לקרוא את ${file}: ${err.name}: ${err.message}`);
-    return null;
+    if (err.code === 'ENOENT') return { value: null, status: 'missing', writable: true };
+    log.error(`❌ לא הצלחתי לקרוא את ${file} (${err.name}: ${err.code || err.message}) — לא אכתוב עליו, כדי לא לדרוס תוכן שלא נקרא.`);
+    return { value: null, status: 'unreadable', writable: false };
   }
   try {
-    return JSON.parse(raw);
+    return { value: JSON.parse(raw), status: 'ok', writable: true };
   } catch (err) {
-    log.warn(`הקובץ ${file} פגום (${err.name}: ${err.message}) — מתחיל ממצב ריק.`);
-    return null;
+    const aside = `${file}.corrupt-${nowMs}`;
+    try {
+      fs.renameSync(file, aside);
+    } catch (moveErr) {
+      log.error(
+        `❌ הקובץ ${file} פגום ולא הצלחתי להזיז אותו הצידה (${moveErr.name}: ${moveErr.code || moveErr.message}) — לא אכתוב עליו.`,
+      );
+      return { value: null, status: 'unreadable', writable: false };
+    }
+    log.warn(`⚠️ הקובץ ${file} פגום (${err.name}) — הועבר ל-${aside}, ומתחיל ממצב ריק.`);
+    return { value: null, status: 'corrupt', writable: true };
   }
 }
 

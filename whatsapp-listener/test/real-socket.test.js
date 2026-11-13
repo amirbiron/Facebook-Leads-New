@@ -8,9 +8,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import pino from 'pino';
 import makeWASocket, { makeCacheableSignalKeyStore, useMultiFileAuthState } from '@whiskeysockets/baileys';
 import { ForbiddenSocketAccess, guardSocket, SOCKET_ALLOWED_PROPS } from '../lib.js';
+import { createSafeLogger } from '../safe-logger.js';
 
 // הרשימה מ-Ck 11.7/11.9, ועוד שתי פונקציות שליחה ברמה נמוכה יותר
 // (lib/Socket/messages-send.js: relayMessage, sendReceipt).
@@ -27,7 +27,7 @@ const SENDING = [
 
 test('guardSocket על חיבור Baileys אמיתי: חוסם כל פונקציית שליחה, ומעביר ev/end', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-auth-test-'));
-  const logger = pino({ level: 'silent' });
+  const logger = createSafeLogger({ level: 'silent' });
   const auth = await useMultiFileAuthState(dir);
   const raw = makeWASocket({
     waWebSocketUrl: 'ws://127.0.0.1:1',
@@ -44,6 +44,12 @@ test('guardSocket על חיבור Baileys אמיתי: חוסם כל פונקצי
       assert.throws(() => sock[name], ForbiddenSocketAccess, name);
     }
     for (const name of SOCKET_ALLOWED_PROPS) assert.notEqual(sock[name], undefined, name);
+    // דרכים עוקפות: descriptor, delete, defineProperty — לא מגיעות לחיבור האמיתי
+    assert.equal(Object.getOwnPropertyDescriptor(sock, 'sendMessage'), undefined);
+    assert.throws(() => delete sock.ev, ForbiddenSocketAccess);
+    assert.throws(() => Object.defineProperty(sock, 'sendMessage', { value: 1 }), ForbiddenSocketAccess);
+    assert.equal(typeof raw.sendMessage, 'function');
+    assert.equal(typeof raw.ev.on, 'function');
 
     const events = [];
     const closed = new Promise((resolve) => {

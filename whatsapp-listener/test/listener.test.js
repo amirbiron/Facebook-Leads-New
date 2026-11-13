@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getContentType, normalizeMessageContent, toNumber } from '@whiskeysockets/baileys';
 import { emptyStats, localDayKey } from '../lib.js';
-import { createListener, RECONNECT_ALERT_AFTER_ATTEMPTS } from '../listener.js';
+import { createListener, RECONNECT_ALERT_AFTER_ATTEMPTS, STABLE_CONNECTION_MS } from '../listener.js';
 
 const LISTED = '120363402840406015@g.us';
 const OTHER_GROUP = '120363999999999999@g.us';
@@ -51,7 +51,7 @@ function makeFakeSocket(groups = {}) {
   return sock;
 }
 
-function makeHarness({ linked = true, groupIds = [LISTED], groups } = {}) {
+function makeHarness({ linked = true, groupIds = [LISTED], groups, loadAuth, makeSocket, toQrDataUrl } = {}) {
   const h = {
     logs: [],
     alerts: [],
@@ -72,8 +72,9 @@ function makeHarness({ linked = true, groupIds = [LISTED], groups } = {}) {
     groupIds: new Set(groupIds),
     timeZone: TZ,
     qrHint: 'https://example.invalid/qr?token=<QR_ACCESS_TOKEN>',
-    loadAuth: async () => ({ state: { creds: h.creds, keys: {} }, saveCreds: async () => {} }),
-    makeSocket: () => {
+    loadAuth: loadAuth || (async () => ({ state: { creds: h.creds, keys: {} }, saveCreds: async () => {} })),
+    makeSocket: (auth) => {
+      if (makeSocket) makeSocket(auth); // דמות שיכולה לזרוק לפני שנוצר חיבור
       const s = makeFakeSocket(groups);
       h.sockets.push(s);
       return s;
@@ -81,7 +82,7 @@ function makeHarness({ linked = true, groupIds = [LISTED], groups } = {}) {
     purgeAuth: () => {
       h.purgeCalls += 1;
     },
-    toQrDataUrl: async (qr) => `data:image/png;base64,${qr}`,
+    toQrDataUrl: toQrDataUrl || (async (qr) => `data:image/png;base64,${qr}`),
     notifier: {
       send: async (text) => {
         h.alerts.push(text);
@@ -113,14 +114,19 @@ function makeHarness({ linked = true, groupIds = [LISTED], groups } = {}) {
       connection: 'close',
       lastDisconnect: { error: Object.assign(new Error(message), { output: { statusCode } }) },
     });
-  h.pendingTimers = () => h.timers.filter((t) => !t.cleared && !t.fired);
-  h.runTimers = async () => {
-    for (const t of h.pendingTimers()) {
+  // שני סוגי טיימרים: חיבור חוזר (השהיה גדלה) וטיימר היציבות. מופרדים כדי
+  // שבדיקה תחליט במפורש אם החיבור "נשאר פתוח" או נפל לפני כן.
+  h.pendingTimers = () => h.timers.filter((t) => !t.cleared && !t.fired && t.ms !== STABLE_CONNECTION_MS);
+  h.pendingStable = () => h.timers.filter((t) => !t.cleared && !t.fired && t.ms === STABLE_CONNECTION_MS);
+  const fire = async (list) => {
+    for (const t of list) {
       t.fired = true;
       t.fn();
     }
     await flush();
   };
+  h.runTimers = () => fire(h.pendingTimers());
+  h.runStable = () => fire(h.pendingStable());
   h.messageLogs = () => h.logs.filter(([, m]) => m.startsWith('💬'));
   return h;
 }
@@ -128,11 +134,13 @@ function makeHarness({ linked = true, groupIds = [LISTED], groups } = {}) {
 // מחכה שה-promises הפנימיים (await בתוך handlers) יסתיימו
 const flush = () => new Promise((r) => setImmediate(r));
 
+// חיבור שנפתח ונשאר פתוח מספיק זמן כדי להיחשב יציב
 async function connected(opts) {
   const h = makeHarness(opts);
   await h.listener.startSocket('startup');
   h.emit('connection.update', { connection: 'open' });
   await flush();
+  await h.runStable();
   return h;
 }
 
@@ -156,7 +164,7 @@ test('הודעה פרטית — לא נרשמת ולא נספרת', async () => 
   }
   assert.equal(h.messageLogs().length, 0);
   assert.deepEqual(h.stats.daily, {});
-  assert.deepEqual(h.stats.seen, {});
+  assert.equal(h.stats.seen.size, 0);
 });
 
 test('הודעה מקבוצה שלא ברשימה — לא נרשמת ולא נספרת', async () => {
@@ -315,7 +323,7 @@ test('השהיה גדלה, התראה כשהחיבור לא חוזר, ועציר
   assert.equal(h.alerts.filter((a) => a.includes('8 ניסיונות')).length, 1);
 });
 
-test('חיבור שנפתח אחרי התראה שולח "מחובר" ומאפס את המונה; בלי התראה קודמת — שקט', async () => {
+test('חיבור שנשאר פתוח אחרי התראה שולח "מחובר" ומאפס את המונה; בלי התראה קודמת — שקט', async () => {
   const h = await connected();
   assert.equal(h.alerts.length, 0);
   for (let i = 0; i < RECONNECT_ALERT_AFTER_ATTEMPTS + 1; i++) {
@@ -326,6 +334,10 @@ test('חיבור שנפתח אחרי התראה שולח "מחובר" ומאפס
   assert.equal(h.alerts.length, 1);
   h.emit('connection.update', { connection: 'open' });
   await flush();
+  // נפתח — אבל עוד לא יציב: אין "מחובר" והמונה לא התאפס
+  assert.equal(h.alerts.length, 1);
+  assert.ok(h.listener.runtime.reconnectAttempts > 0);
+  await h.runStable();
   assert.equal(h.alerts.length, 2);
   assert.match(h.alerts[1], /מחובר/);
   assert.equal(h.listener.runtime.reconnectAttempts, 0);
@@ -333,6 +345,27 @@ test('חיבור שנפתח אחרי התראה שולח "מחובר" ומאפס
   h.close(428);
   await flush();
   assert.equal(h.alerts.length, 2);
+});
+
+test('חיבור שנפתח ונופל מיד: ההשהיה ממשיכה לגדול, התראה אחת, ועצירה אחרי 8 — בלי הצפת "מחובר"', async () => {
+  const h = await connected();
+  const delays = [];
+  for (let i = 0; i < 12; i++) {
+    h.close(500, 'Stream Errored (unknown)');
+    await flush();
+    const pending = h.pendingTimers();
+    if (pending.length === 0) break;
+    delays.push(pending[0].ms);
+    await h.runTimers();
+    // החיבור נפתח שוב — ונופל לפני שהוא נחשב יציב
+    h.emit('connection.update', { connection: 'open' });
+    await flush();
+  }
+  assert.deepEqual(delays, [3000, 6000, 12000, 24000, 48000, 96000, 192000, 300000]);
+  assert.equal(h.listener.runtime.state, 'stopped');
+  assert.equal(h.listener.runtime.stopKind, 'gave_up');
+  assert.equal(h.alerts.filter((a) => a.includes('ממשיך לנסות')).length, 1);
+  assert.equal(h.alerts.filter((a) => a.includes('מחובר')).length, 0);
 });
 
 test('515 אחרי סריקה: חיבור חוזר דרך המתזמן, בלי התראה', async () => {
@@ -454,4 +487,129 @@ test('הקוד לא נוגע בפונקציות אסורות של החיבור �
   await h.runTimers();
   h.listener.shutdown();
   assert.equal(h.sockets.reduce((n, s) => n + s.forbiddenCalls, 0), 0);
+});
+
+// ===== מקרי קצה מהסקירה =====
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+test('המרת QR שמסתיימת אחרי שהחיבור נסגר — לא מתפרסמת, ו-/qr יכול לבקש חיבור חדש', async () => {
+  const pending = [];
+  const h = makeHarness({
+    linked: false,
+    toQrDataUrl: (qr) => {
+      const d = deferred();
+      pending.push({ qr, d });
+      return d.promise;
+    },
+  });
+  await h.listener.startSocket('startup');
+  h.listener.requestPairing();
+  await flush();
+  h.emit('connection.update', { qr: 'OLD' });
+  h.close(408, 'QR refs attempts ended'); // ה-QR פג לפני שההמרה הסתיימה
+  await flush();
+  pending[0].d.resolve('data:image/png;base64,OLD');
+  await flush();
+  assert.equal(h.listener.runtime.qrDataUrl, null);
+  assert.equal(h.listener.runtime.state, 'needs_pairing');
+  h.listener.requestPairing();
+  await flush();
+  assert.equal(h.sockets.length, 2, '/qr לא פתח חיבור חדש');
+});
+
+test('שני QR ברצף: המרה איטית של הישן לא דורסת את החדש', async () => {
+  const pending = [];
+  const h = makeHarness({
+    linked: false,
+    toQrDataUrl: (qr) => {
+      const d = deferred();
+      pending.push({ qr, d });
+      return d.promise;
+    },
+  });
+  await h.listener.startSocket('startup');
+  h.listener.requestPairing();
+  await flush();
+  h.emit('connection.update', { qr: 'Q1' });
+  h.emit('connection.update', { qr: 'Q2' });
+  pending[1].d.resolve('data:Q2');
+  await flush();
+  pending[0].d.resolve('data:Q1');
+  await flush();
+  assert.equal(h.listener.runtime.qrDataUrl, 'data:Q2');
+});
+
+test('כיבוי בזמן טעינת הסשן — לא נפתח חיבור אחרי ש-shutdown חזרה', async () => {
+  const gate = deferred();
+  const h = makeHarness({
+    loadAuth: async () => {
+      await gate.promise;
+      return { state: { creds: { me: { id: '972500000000:1@s.whatsapp.net' } }, keys: {} }, saveCreds: async () => {} };
+    },
+  });
+  const opening = h.listener.startSocket('startup');
+  h.listener.shutdown();
+  gate.resolve();
+  await opening;
+  await flush();
+  assert.equal(h.sockets.length, 0);
+});
+
+test('כשל ביצירת החיבור לקישור — המצב נשאר needs_pairing, ובקשת /qr הבאה מנסה שוב', async () => {
+  let failures = 1;
+  const h = makeHarness({
+    linked: false,
+    makeSocket: () => {
+      if (failures-- > 0) throw new Error('boom in makeWASocket');
+    },
+  });
+  await h.listener.startSocket('startup');
+  h.listener.requestPairing();
+  await flush();
+  assert.equal(h.sockets.length, 0);
+  assert.equal(h.listener.runtime.state, 'needs_pairing');
+  assert.ok(h.logs.some(([lvl, m]) => lvl === 'error' && m.includes('boom in makeWASocket')));
+  h.listener.requestPairing();
+  await flush();
+  assert.equal(h.sockets.length, 1);
+  assert.equal(h.listener.runtime.state, 'pairing');
+});
+
+test('הודעה אחרי חצות, לפני פעימת הטיימר — נספרת ליום החדש, והסיכום של אתמול לא כולל אותה', async () => {
+  const h = await connected({ groups: { [LISTED]: { id: LISTED, subject: 'פיתוח AI' } } });
+  h.emit('messages.upsert', { messages: [groupMsg({ id: 'Y1' })], type: 'notify' });
+  h.nowMs = Date.UTC(2026, 10, 13, 22, 0, 30); // 00:00:30 בירושלים, 14.11 — הטיימר עוד לא רץ
+  h.emit('messages.upsert', { messages: [groupMsg({ id: 'T1' })], type: 'notify' });
+  const summary = h.logs.map(([, m]) => m).find((m) => m.startsWith('📊 סיכום יומי'));
+  assert.match(summary, /סיכום יומי 2026-11-13: 1 הודעות/);
+  assert.equal(h.stats.day, '2026-11-14');
+  assert.deepEqual(h.stats.daily[LISTED], { count: 1, withText: 1 });
+  assert.deepEqual(h.stats.totals[LISTED], { count: 2, withText: 2 });
+});
+
+test('הודעת ניתוק מהשרת עם מזהים — נכתבת ללוג ולטלגרם בלי המספר', async () => {
+  const h = await connected();
+  h.emit('connection.update', {
+    connection: 'close',
+    lastDisconnect: {
+      error: Object.assign(new Error('Connection Failure for 972541234567@s.whatsapp.net'), {
+        output: { statusCode: 403 },
+        data: { reason: '403', jid: '155516504436974@lid' },
+      }),
+    },
+  });
+  await flush();
+  const all = [...h.logs.map(([, m]) => m), ...h.alerts].join('\n');
+  assert.ok(!all.includes('972541234567'), all);
+  assert.ok(!all.includes('155516504436974'), all);
+  assert.match(h.alerts[0], /<jid>/);
 });

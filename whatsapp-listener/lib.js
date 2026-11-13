@@ -243,8 +243,7 @@ export function safeTokenEqual(presented, expected) {
 // המאזין רק קורא. Baileys לא שולחת מעצמה אישור קריאה, "מקליד" או הודעה —
 // כל אלה יוצאים רק מקריאה מפורשת לפונקציה של החיבור (Ck, סעיף 11.7). לכן
 // הקוד שלנו מקבל את החיבור רק דרך העטיפה הזו, שמתירה רשימה סגורה של
-// מאפיינים, וכל השאר זורק לפני שמשהו נשלח. רשימה מותרת ולא אסורה:
-// פונקציה חדשה שתתווסף לספרייה חסומה מעצמה.
+// מאפיינים. רשימה מותרת ולא אסורה: פונקציה חדשה שתתווסף לספרייה חסומה מעצמה.
 // הפנימיים של Baileys לא עוברים דרך העטיפה (הם קוראים זה לזה בתוך closure),
 // ולכן אישורי המסירה האוטומטיים לא מושפעים.
 export const SOCKET_ALLOWED_PROPS = Object.freeze(['ev', 'groupFetchAllParticipating', 'end']);
@@ -256,23 +255,53 @@ export class ForbiddenSocketAccess extends Error {
   }
 }
 
+// העטיפה לא מחזיקה את החיבור האמיתי כ-target של ה-Proxy, אלא אובייקט חדש
+// וקפוא שמכיל רק את המאפיינים המותרים. Proxy שה-target שלו הוא החיבור עצמו
+// דולף דרך כל מלכודת שלא הוגדרה: delete ו-defineProperty מגיעים לחיבור,
+// ו-Object.getOwnPropertyDescriptor(guarded, 'sendMessage').value מחזיר את
+// הפונקציה האמיתית ועוקף את get לגמרי. כאן אין מה לדלוף — ממה שלא נמצא
+// באובייקט הקפוא אין דרך להגיע לחיבור. ה-Proxy רק הופך גישה אסורה לשגיאה
+// עם שם ברור, במקום undefined שקט.
 export function guardSocket(sock) {
-  const allowed = new Set(SOCKET_ALLOWED_PROPS);
-  return new Proxy(sock, {
+  const safe = {};
+  for (const prop of SOCKET_ALLOWED_PROPS) {
+    const value = sock[prop];
+    // פונקציות עטופות, כדי שלא תחזור הפניה שה-this שלה הוא החיבור האמיתי
+    safe[prop] = typeof value === 'function' ? (...args) => value.apply(sock, args) : value;
+  }
+  Object.freeze(safe);
+  const deny = (_target, prop) => {
+    throw new ForbiddenSocketAccess(prop);
+  };
+  return new Proxy(safe, {
     get(target, prop) {
-      if (typeof prop === 'string' && allowed.has(prop)) {
-        const value = target[prop];
-        return typeof value === 'function' ? value.bind(target) : value;
-      }
+      if (typeof prop === 'string' && Object.prototype.hasOwnProperty.call(target, prop)) return target[prop];
       // then נבדק על כל אובייקט שעובר דרך await; Symbol-ים נבדקים ע"י Node
       // בהדפסה. שניהם קריאות של הסביבה, לא של הקוד שלנו — מחזירים undefined.
       if (prop === 'then' || typeof prop === 'symbol') return undefined;
       throw new ForbiddenSocketAccess(prop);
     },
-    set(_target, prop) {
-      throw new ForbiddenSocketAccess(prop);
-    },
+    set: deny,
+    defineProperty: deny,
+    deleteProperty: deny,
+    setPrototypeOf: deny,
   });
+}
+
+// ===== הסרת מזהים מטקסט חופשי =====
+
+// מזהי וואטסאפ (טלפון, LID, קבוצה) ומספרי טלפון חשופים מוחלפים בסימון.
+// משמש לכל טקסט שמגיע מהספרייה או מהשרת ועלול להגיע ללוג או לטלגרם: הודעות
+// שגיאה, נתוני ניתוק, הלוג של Baileys עצמה. מספר טלפון הוא PII (K7).
+const JID_RE = /[0-9][0-9-]*(?::[0-9]+)?@(?:s\.whatsapp\.net|c\.us|lid|g\.us|broadcast|newsletter|hosted)/gi;
+// רצף של 8 ספרות ומעלה (עם + אופציונלי) — טלפון בלי סיומת. תופס גם חותמות
+// זמן ומספרים ארוכים אחרים, בכוונה: עדיף לאבד מספר בלוג מאשר לכתוב טלפון.
+const LONG_NUMBER_RE = /\+?(?<![0-9])[0-9]{8,}(?![0-9])/g;
+
+export function scrubIdentifiers(text) {
+  return String(text ?? '')
+    .replace(JID_RE, '<jid>')
+    .replace(LONG_NUMBER_RE, '<num>');
 }
 
 // ===== זמן מקומי =====
@@ -287,16 +316,25 @@ export function isValidTimeZone(tz) {
   }
 }
 
+// יצירת Intl.DateTimeFormat יקרה יחסית, והיא נקראת בכל הודעה (מעבר יום,
+// שעת שליחה). פורמט אחד לכל אזור זמן — בפועל אחד.
+const zoneFormatters = new Map();
+
 function partsInZone(ms, timeZone) {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date(ms));
+  let fmt = zoneFormatters.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    });
+    zoneFormatters.set(timeZone, fmt);
+  }
+  const parts = fmt.formatToParts(new Date(ms));
   const get = (type) => parts.find((p) => p.type === type)?.value;
   return { y: get('year'), mo: get('month'), d: get('day'), h: get('hour'), mi: get('minute') };
 }
@@ -340,8 +378,15 @@ function cleanCounters(obj) {
   return out;
 }
 
+// seen הוא Map בזיכרון: שומר את סדר ההכנסה (הישן ראשון), size ב-O(1), והסרת
+// הישן ביותר ב-O(1) — כך שהתקרה נאכפת בכל תפיסה ולא רק במעבר יום. בדיסק הוא
+// נשמר כאובייקט רגיל (serializeStats), באותו סדר.
 export function emptyStats(dayKey) {
-  return { version: 1, day: dayKey, since: dayKey, daily: {}, totals: {}, seen: {} };
+  return { version: 1, day: dayKey, since: dayKey, daily: {}, totals: {}, seen: new Map() };
+}
+
+export function serializeStats(stats) {
+  return { ...stats, seen: Object.fromEntries(stats.seen) };
 }
 
 // טוען מצב מהדיסק אחרי ולידציה: קובץ ישן, חלקי או ידני לא מפיל את השירות
@@ -351,26 +396,30 @@ export function normalizeStats(raw, todayKey) {
   const dayRe = /^\d{4}-\d{2}-\d{2}$/;
   const day = typeof raw.day === 'string' && dayRe.test(raw.day) ? raw.day : todayKey;
   const since = typeof raw.since === 'string' && dayRe.test(raw.since) ? raw.since : day;
-  const seen = {};
-  if (isPlainObject(raw.seen)) {
-    for (const [k, t] of Object.entries(raw.seen)) if (Number.isFinite(t)) seen[k] = t;
-  }
+  const entries = isPlainObject(raw.seen) ? Object.entries(raw.seen).filter(([, t]) => Number.isFinite(t)) : [];
+  entries.sort((a, b) => a[1] - b[1]); // הישן ראשון — סדר הפינוי
+  const seen = new Map(entries.slice(-SEEN_MAX));
   return { version: 1, day, since, daily: cleanCounters(raw.daily), totals: cleanCounters(raw.totals), seen };
 }
 
 // תפיסה אטומית של מזהה: בדיקה והכנסה באותה פעולה סינכרונית, בלי await
 // ביניהן. ב-Node כל הקוד הזה רץ על thread אחד, ולכן שתי הגעות של אותה הודעה
 // לא יכולות לעבור את הבדיקה שתיהן. מחזיר true רק לתופס הראשון.
+// התקרה נאכפת כאן, בכל תפיסה: ביום עמוס הקובץ והזיכרון לא חורגים ממנה גם
+// לפני הניקוי של מעבר היום. כשמגיעים לתקרה — הישן ביותר יוצא.
 export function claimMessage(stats, key, nowMs) {
-  if (Object.prototype.hasOwnProperty.call(stats.seen, key)) return false;
-  stats.seen[key] = nowMs;
+  if (stats.seen.has(key)) return false;
+  stats.seen.set(key, nowMs);
+  while (stats.seen.size > SEEN_MAX) stats.seen.delete(stats.seen.keys().next().value);
   return true;
 }
 
+// ניקוי לפי גיל — במעבר יום. ה-Map מסודר לפי זמן ההכנסה, אז הישנים בהתחלה.
 export function pruneSeen(stats, nowMs) {
-  const entries = Object.entries(stats.seen).filter(([, t]) => nowMs - t < SEEN_TTL_MS);
-  entries.sort((a, b) => a[1] - b[1]);
-  stats.seen = Object.fromEntries(entries.slice(-SEEN_MAX));
+  for (const [key, t] of stats.seen) {
+    if (nowMs - t < SEEN_TTL_MS) break;
+    stats.seen.delete(key);
+  }
 }
 
 export function recordMessage(stats, groupId, hasText) {

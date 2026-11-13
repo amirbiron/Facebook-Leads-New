@@ -14,7 +14,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import pino from 'pino';
 import QRCode from 'qrcode';
 import makeWASocket, {
   getContentType,
@@ -33,11 +32,13 @@ import {
   pruneStarts,
   QR_TOKEN_MIN_LENGTH,
   safeTokenEqual,
+  serializeStats,
   startupDelayMs,
 } from './lib.js';
 import { createListener, safeJson } from './listener.js';
+import { createSafeLogger } from './safe-logger.js';
 import { createNotifier } from './telegram.js';
-import { readJson, writeJsonAtomic } from './store.js';
+import { loadJsonState, writeJsonAtomic } from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -107,8 +108,10 @@ const BROWSER = ['Mac OS', 'Chrome', '14.4.1'];
 // ב-myAgent. משנים רק יחד עם שדרוג מכוון של הספרייה.
 const WA_WEB_VERSION = [2, 3000, 1043857760];
 
-// לוג של הספרייה (pino, JSON). ברירת מחדל warn, כדי שהלוג לא יוצף.
-const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'warn' });
+// לוג של הספרייה. לא pino כמו ב-myAgent: Baileys מעבירה ללוג מזהי שולח וצמתים
+// גולמיים של הודעות, ו-safe-logger.js מדפיס רק שדות מרשימה מותרת, בלי מזהים
+// (K7). ברירת מחדל warn, כדי שהלוג לא יוצף.
+const logger = createSafeLogger({ level: process.env.BAILEYS_LOG_LEVEL || 'warn' });
 
 const notifier = createNotifier({
   token: process.env.TELEGRAM_BOT_TOKEN || '',
@@ -127,7 +130,10 @@ const QR_HINT = process.env.RENDER_EXTERNAL_URL ? `${process.env.RENDER_EXTERNAL
 // נשמרים בדיסק ולא רק בזיכרון: מונה יומי שמתאפס ב-restart לא נותן מדידה
 // (הלקח של באג #18 ב-CLAUDE.md), וגם מניעת הכפילויות צריכה לשרוד restart —
 // הודעות שהצטברו בזמן ההשבתה מגיעות מיד אחריו.
-const stats = normalizeStats(readJson(STATS_FILE, log), localDayKey(Date.now(), TIME_ZONE));
+// קובץ שקיים ולא נקרא (הרשאות, I/O) לא נדרס: השירות ממשיך לספור בזיכרון
+// בלבד, ומתריע — המדידה של השבוע תלויה במונים האלה.
+const statsLoad = loadJsonState(STATS_FILE, log);
+const stats = normalizeStats(statsLoad.value, localDayKey(Date.now(), TIME_ZONE));
 let persistTimer = null;
 
 function flushStats() {
@@ -135,8 +141,9 @@ function flushStats() {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  if (!statsLoad.writable) return; // נרשם ונשלחה התראה בעלייה
   try {
-    writeJsonAtomic(STATS_FILE, stats);
+    writeJsonAtomic(STATS_FILE, serializeStats(stats));
   } catch (err) {
     log.error(`❌ שמירת המונים נכשלה (${STATS_FILE}): ${err.name}: ${err.message}`);
   }
@@ -352,12 +359,19 @@ setInterval(() => listener.dailyTick(), 60 * 1000).unref();
 // ===== עלייה =====
 server.listen(PORT, HOST, () => log.info(`🌐 שרת HTTP על ${HOST}:${PORT}`));
 
+if (!statsLoad.writable) {
+  void listener.alert('state_unreadable', null, `${STATS_FILE} — המונים ומניעת הכפילויות לא יישמרו עד שזה יטופל`);
+}
+
 const startNow = Date.now();
-const previousStarts = pruneStarts(readJson(STARTS_FILE, log)?.starts, startNow);
-try {
-  writeJsonAtomic(STARTS_FILE, { starts: [...previousStarts, startNow] });
-} catch (err) {
-  log.warn(`⚠️ לא הצלחתי לכתוב את ${STARTS_FILE} — ההשהיה בין הפעלות לא תישמר: ${err.name}: ${err.message}`);
+const startsLoad = loadJsonState(STARTS_FILE, log);
+const previousStarts = pruneStarts(startsLoad.value?.starts, startNow);
+if (startsLoad.writable) {
+  try {
+    writeJsonAtomic(STARTS_FILE, { starts: [...previousStarts, startNow] });
+  } catch (err) {
+    log.warn(`⚠️ לא הצלחתי לכתוב את ${STARTS_FILE} — ההשהיה בין הפעלות לא תישמר: ${err.name}: ${err.message}`);
+  }
 }
 if (previousStarts.length >= CRASH_LOOP_PREVIOUS_STARTS) {
   void listener.alert('crash_loop', null, `${previousStarts.length + 1} עליות ב-15 הדקות האחרונות`);

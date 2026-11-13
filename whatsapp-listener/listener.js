@@ -21,6 +21,7 @@ import {
   RECONNECT_MAX_ATTEMPTS,
   recordMessage,
   rollDay,
+  scrubIdentifiers,
   textLength,
   toGroupRecord,
 } from './lib.js';
@@ -30,6 +31,15 @@ import {
 // מתריע — התראה על כל הבהוב מלמדת להתעלם מהתראות. מה שמתריע הוא חיבור
 // שלא חוזר: כאן, ובסוף ב-gave_up.
 export const RECONNECT_ALERT_AFTER_ATTEMPTS = 3;
+
+// כמה זמן חיבור צריך להישאר פתוח כדי להיחשב יציב. רק אז מתאפסים מונה
+// הניסיונות וההתראות. איפוס ב-'open' עצמו היה מבטל את ההשהיה הגדלה בדיוק
+// במצב המסוכן: חיבור שנפתח ונופל מיד (שגיאת stream אחרי הכניסה) היה חוזר
+// כל 3 שניות לנצח, בלי התראה ובלי עצירה — וגם שולח "מחובר" ו"נפל" בכל סבב.
+// זה לא איפוס לפי שעון במובן של הבאג ב-myAgent (שם נמדד הזמן מאז ready
+// בזמן ההשהיות, בלי חיבור פתוח): כאן נמדד רק זמן רצוף שבו החיבור פתוח, וכל
+// סגירה מבטלת את הטיימר.
+export const STABLE_CONNECTION_MS = 60 * 1000;
 
 function alertText(kind, code, detail, qrHint) {
   const c = Number.isFinite(code) ? ` (קוד ${code})` : '';
@@ -52,6 +62,8 @@ function alertText(kind, code, detail, qrHint) {
       return `📭 וואטסאפ: אין סשן מקושר — המאזין לא מחובר עד שיסרקו QR.${qr}`;
     case 'crash_loop':
       return `🔁 וואטסאפ: השירות עלה כמה פעמים ברבע השעה האחרונה — כנראה קורס בלולאה.${d}`;
+    case 'state_unreadable':
+      return `💾 וואטסאפ: קובץ המונים קיים אבל לא נקרא. המאזין סופר בזיכרון בלבד ולא כותב עליו, כדי לא לדרוס אותו.${d}`;
     default:
       return `⚠️ וואטסאפ: ${kind}${c}${d}`;
   }
@@ -94,6 +106,10 @@ export function createListener(deps) {
     lastQrAt: null,
     reconnectAttempts: 0,
     reconnectTimer: null,
+    stableTimer: null,
+    // מספר סידורי ל-QR: המרת QR לתמונה אסינכרונית, ותוצאה שמגיעה אחרי שה-QR
+    // הוחלף או שהחיבור נסגר — נזרקת (ראו onConnectionUpdate)
+    qrSeq: 0,
     shuttingDown: false,
     groupsListed: false,
   };
@@ -129,6 +145,24 @@ export function createListener(deps) {
       timers.clearTimeout(runtime.reconnectTimer);
       runtime.reconnectTimer = null;
     }
+  }
+
+  function clearStableTimer() {
+    if (runtime.stableTimer) {
+      timers.clearTimeout(runtime.stableTimer);
+      runtime.stableTimer = null;
+    }
+  }
+
+  // החיבור נשאר פתוח STABLE_CONNECTION_MS — עכשיו הוא נחשב יציב.
+  function onStable() {
+    runtime.stableTimer = null;
+    if (runtime.state !== 'open') return;
+    runtime.reconnectAttempts = 0;
+    const hadAlerts = alertedKinds.size > 0;
+    alertedKinds.clear();
+    log.info('✅ החיבור יציב — מונה הניסיונות וההתראות אופסו.');
+    if (hadAlerts) void notifier.send('✅ וואטסאפ: המאזין מחובר.');
   }
 
   // מתזמן החיבור היחיד. אין מסלול שמתחבר מחדש בלי לעבור כאן: ההשהיה גדלה,
@@ -183,40 +217,66 @@ export function createListener(deps) {
     const gen = ++runtime.generation;
 
     const auth = await loadAuth();
+    // בזמן ה-await אפשר היה להתחיל כיבוי או לעצור. בלי הבדיקה החוזרת נפתח
+    // חיבור חדש אחרי ש-shutdown() כבר חזרה.
+    if (runtime.shuttingDown || runtime.state === 'stopped') return;
     // creds.me ולא creds.registered — ראו classifyDisconnect ב-lib.js
-    runtime.linked = Boolean(auth.state.creds.me?.id);
-    if (!runtime.linked && trigger !== 'pairing') {
+    const linked = Boolean(auth.state.creds.me?.id);
+    runtime.linked = linked;
+    if (!linked && trigger !== 'pairing') {
       setState('needs_pairing');
       log.info('📭 אין סשן מקושר — מחכה לפתיחת /qr עם הטוקן.');
       void alert('needs_pairing');
       return;
     }
 
-    setState(runtime.linked ? 'connecting' : 'pairing', trigger);
-    const sock = guardSocket(makeSocket(auth));
+    // קודם החיבור והמאזינים, ורק אחר כך המצב (K15: הסימון לא מתפרסם לפני
+    // הערך שהוא מסמן). אם 'pairing' היה נקבע לפני makeSocket והיצירה נכשלה,
+    // המצב היה נתקע ב-pairing ו-/qr לא היה מנסה שוב לעולם. כשל כאן משאיר את
+    // המצב הקודם (needs_pairing / reconnect_wait), וחיבור שכבר נוצר נסגר.
+    const raw = makeSocket(auth);
+    let sock;
+    try {
+      sock = guardSocket(raw);
+      sock.ev.on('creds.update', () => {
+        auth.saveCreds().catch((err) => logError('❌ שמירת פרטי הסשן נכשלה:', err));
+      });
+      sock.ev.on('connection.update', (update) => {
+        if (gen !== runtime.generation) return;
+        onConnectionUpdate(sock, auth, update).catch((err) => logError('שגיאה בטיפול בעדכון חיבור:', err));
+      });
+      sock.ev.on('messages.upsert', (event) => {
+        if (gen !== runtime.generation) return;
+        onMessagesUpsert(event);
+      });
+      sock.ev.on('groups.update', (updates) => rememberGroupNames(updates));
+      sock.ev.on('groups.upsert', (groups) => rememberGroupNames(groups));
+    } catch (err) {
+      try {
+        Promise.resolve(raw && raw.end && raw.end(undefined)).catch(() => {
+          // החיבור לא הוקם עד הסוף — סגירה שנכשלת כאן אין לה מה לדווח מעבר לשגיאה המקורית
+        });
+      } catch {
+        // כנ"ל: השגיאה המקורית היא זו שנזרקת ונרשמת אצל הקורא
+      }
+      throw err;
+    }
     runtime.sock = sock;
-
-    sock.ev.on('creds.update', () => {
-      auth.saveCreds().catch((err) => logError('❌ שמירת פרטי הסשן נכשלה:', err));
-    });
-    sock.ev.on('connection.update', (update) => {
-      if (gen !== runtime.generation) return;
-      onConnectionUpdate(sock, auth, update).catch((err) => logError('שגיאה בטיפול בעדכון חיבור:', err));
-    });
-    sock.ev.on('messages.upsert', (event) => {
-      if (gen !== runtime.generation) return;
-      onMessagesUpsert(event);
-    });
-    sock.ev.on('groups.update', (updates) => rememberGroupNames(updates));
-    sock.ev.on('groups.upsert', (groups) => rememberGroupNames(groups));
+    setState(linked ? 'connecting' : 'pairing', trigger);
   }
 
   async function onConnectionUpdate(sock, auth, update) {
     const { connection, lastDisconnect, qr } = update || {};
 
     if (qr) {
+      const seq = ++runtime.qrSeq;
       try {
-        runtime.qrDataUrl = await toQrDataUrl(qr);
+        const dataUrl = await toQrDataUrl(qr);
+        // בזמן ההמרה ה-QR יכול היה להתחלף, או שהחיבור נסגר (QR פג, סריקה,
+        // ניתוק). תמונה ישנה שמתפרסמת אחרי זה הייתה מוצגת ב-/qr לנצח —
+        // והדף לא היה מבקש חיבור חדש, כי "יש QR".
+        if (seq !== runtime.qrSeq || runtime.sock !== sock) return;
+        runtime.qrDataUrl = dataUrl;
         runtime.lastQrAt = new Date(now()).toISOString();
         log.info('📱 QR חדש מוכן בדף /qr');
       } catch (err) {
@@ -225,29 +285,32 @@ export function createListener(deps) {
     }
 
     if (connection === 'open') {
-      runtime.reconnectAttempts = 0;
+      runtime.qrSeq += 1;
       runtime.qrDataUrl = null;
       runtime.linked = true;
       runtime.stopKind = null;
-      const hadAlerts = alertedKinds.size > 0;
-      alertedKinds.clear();
       setState('open');
       log.info('✅ מאזין הוואטסאפ מחובר.');
-      if (hadAlerts) void notifier.send('✅ וואטסאפ: המאזין מחובר.');
+      // המונה וההתראות מתאפסים רק אם החיבור נשאר פתוח — ראו STABLE_CONNECTION_MS
+      clearStableTimer();
+      runtime.stableTimer = timers.setTimeout(onStable, STABLE_CONNECTION_MS);
       void listGroupsOnce(sock);
       return;
     }
 
     if (connection !== 'close') return;
 
+    clearStableTimer();
     runtime.sock = null;
+    runtime.qrSeq += 1;
     runtime.qrDataUrl = null;
     if (runtime.shuttingDown) return;
 
     const err = lastDisconnect && lastDisconnect.error;
     const statusCode = err && err.output ? err.output.statusCode : undefined;
-    const message = (err && err.message) || '';
-    const data = err && err.data ? safeJson(err.data) : '';
+    // טקסט מהשרת ומהספרייה — בלי מזהים לפני שהוא מגיע ללוג או לטלגרם (K7)
+    const message = scrubIdentifiers((err && err.message) || '');
+    const data = err && err.data ? scrubIdentifiers(safeJson(err.data)) : '';
     // creds.me מתעדכן בזיכרון ברגע הקישור (Object.assign ב-lib/Socket/socket.js:855),
     // ולכן נבדק כאן ולא נלקח מתחילת החיבור.
     const linked = Boolean(auth.state.creds.me?.id);
@@ -256,7 +319,8 @@ export function createListener(deps) {
       `🔌 החיבור נסגר: code=${statusCode} reason="${oneLine(message, 200)}"${data ? ` data=${oneLine(data, 300)}` : ''} linked=${linked}`,
     );
 
-    const decision = classifyDisconnect({ statusCode, message, linked });
+    // ההחלטה לפי ההודעה המקורית (QR_EXPIRED_MESSAGE), לא לפי הגרסה המנוקה
+    const decision = classifyDisconnect({ statusCode, message: (err && err.message) || '', linked });
     const detail = [message, data].filter(Boolean).join(' | ');
     switch (decision.action) {
       case 'stop':
@@ -343,6 +407,9 @@ export function createListener(deps) {
     const record = toGroupRecord(msg, upsertType, helpers);
     if (!record || !groupIds.has(record.groupId)) return;
 
+    // מעבר יום קודם לספירה: הודעה שמגיעה אחרי חצות ולפני פעימת הטיימר
+    // הבאה (עד דקה) הייתה נספרת ליום שנגמר.
+    dailyTick();
     const nowMs = now();
     if (!claimMessage(stats, dedupKey(record), nowMs)) {
       log.info(`♻️ כפילות נתפסה ולא נספרה: ${groupLabel(record.groupId)} | ${upsertType}`);
@@ -375,6 +442,7 @@ export function createListener(deps) {
     if (runtime.shuttingDown) return;
     runtime.shuttingDown = true;
     clearReconnectTimer();
+    clearStableTimer();
     if (runtime.sock) {
       try {
         Promise.resolve(runtime.sock.end(undefined)).catch((err) => logError('סגירת החיבור נכשלה:', err));
@@ -390,12 +458,12 @@ export function createListener(deps) {
     const parts = [prefix];
     if (err) {
       parts.push(`type=${err.name || err.constructor?.name || typeof err}`);
-      if (err.message) parts.push(`message="${oneLine(err.message, 300)}"`);
-      if (err.code) parts.push(`code=${err.code}`);
+      if (err.message) parts.push(`message="${scrubIdentifiers(oneLine(err.message, 300))}"`);
+      if (err.code) parts.push(`code=${scrubIdentifiers(String(err.code))}`);
       if (err.output && err.output.statusCode) parts.push(`status=${err.output.statusCode}`);
     }
     log.error(parts.join(' | '));
-    if (err && err.stack) log.error(err.stack);
+    if (err && err.stack) log.error(scrubIdentifiers(err.stack));
   }
 
   return {
