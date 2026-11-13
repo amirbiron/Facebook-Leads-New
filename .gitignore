@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 data/
+whatsapp-listener/node_modules/
+whatsapp-listener/.baileys_auth/
+whatsapp-listener/wa-listener-*.json

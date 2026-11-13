@@ -33,3 +33,53 @@ services:
       name: fb-leads-data
       mountPath: /app/data
       sizeGB: 1
+
+  # מאזין קריאה-בלבד לקבוצות וואטסאפ (Baileys) — שלב 2: מקבל הודעות מקבוצות
+  # שבמעקב, רושם ללוג וסופר. לא מעביר שום דבר הלאה ולא שולח דבר לוואטסאפ.
+  # שירות נפרד ולא בתוך fb-leads-agent: שם רץ Chromium של Playwright על 512MB,
+  # ושירות שקורס או מתנפח לא צריך להפיל את השני. rootDir מבודד גם את ה-deploy:
+  # שינוי מחוץ ל-whatsapp-listener/ לא מפעיל build של השירות הזה
+  # (https://render.com/docs/blueprint-spec) — חשוב, כי כל חיבור מחדש מופיע
+  # בטלפון כאירוע.
+  - type: web
+    name: fb-leads-whatsapp
+    runtime: node
+    rootDir: whatsapp-listener
+    # starter (512MB) מספיק: Baileys בלי דפדפן — 118MB מחובר בפרודקשן של
+    # myAgent. לעקוב אחרי המטריקות בשבועות הראשונים (לא ידוע איך זה נראה עם
+    # הרבה קבוצות לאורך ימים). כתוב כאן כי סנכרון Blueprint דורס שינוי ידני.
+    plan: starter
+    # npm ci מתקין בדיוק את מה שב-package-lock.json — אותן גרסאות בכל בנייה,
+    # כולל אחרי suspend/resume (Render בונה מחדש בכל חידוש).
+    buildCommand: npm ci
+    startCommand: npm start
+    # הסשן של וואטסאפ, מניעת הכפילויות והמונים היומיים — על דיסק קבוע. עם דיסק
+    # Render עוצר את המופע הישן לפני שהחדש עולה, כך שאין שני חיבורים לאותו סשן.
+    disk:
+      name: wa-listener-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      # Baileys דורשת Node 20 ומעלה (בודקת בהתקנה). כמו ב-myAgent.
+      - key: NODE_VERSION
+        value: "20"
+      # Render דורש האזנה על 0.0.0.0; ברירת המחדל בקוד היא localhost (K5).
+      - key: HOST
+        value: "0.0.0.0"
+      - key: WA_AUTH_DIR
+        value: /var/data/baileys_auth
+      # טוקן לדף /qr (https://<שירות>/qr?token=...). בלעדיו, או אם הוא קצר
+      # מ-24 תווים, הדף כבוי. ערך אקראי ארוך, מוגדר ידנית ב-Dashboard.
+      - key: QR_ACCESS_TOKEN
+        sync: false
+      # מזהי הקבוצות שבמעקב, מופרדים בפסיקים. הרשימה המלאה (מזהה + שם) נכתבת
+      # ללוג אחרי ההתחברות הראשונה.
+      - key: WA_GROUP_IDS
+        sync: false
+      # אותו בוט ואותו צ'אט של fb-leads-agent — להתראות על חסימה וניתוק
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TIMEZONE
+        value: "Asia/Jerusalem"
