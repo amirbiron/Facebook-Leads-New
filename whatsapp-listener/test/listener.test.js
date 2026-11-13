@@ -596,6 +596,27 @@ test('הודעה אחרי חצות, לפני פעימת הטיימר — נספ�
   assert.deepEqual(h.stats.totals[LISTED], { count: 2, withText: 2 });
 });
 
+test('logError: שגיאה שהשם שלה מכיל מזהה — השם עובר ניקוי כמו ההודעה', async () => {
+  let failures = 1;
+  const h = makeHarness({
+    linked: false,
+    makeSocket: () => {
+      if (failures-- > 0) {
+        const err = new Error('boom for 972541234567@s.whatsapp.net');
+        err.name = 'Err_155516504436974@lid';
+        err.code = 'E972541234567';
+        throw err;
+      }
+    },
+  });
+  await h.listener.startSocket('startup');
+  h.listener.requestPairing();
+  await flush();
+  const all = h.logs.map(([, m]) => m).join('\n');
+  assert.ok(all.includes('type=Err_<jid>'), all);
+  assert.ok(!all.includes('972541234567') && !all.includes('155516504436974'), all);
+});
+
 test('הודעת ניתוק מהשרת עם מזהים — נכתבת ללוג ולטלגרם בלי המספר', async () => {
   const h = await connected();
   h.emit('connection.update', {

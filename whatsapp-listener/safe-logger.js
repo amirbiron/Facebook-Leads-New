@@ -6,19 +6,20 @@
 //   - מאובייקט הנתונים יוצאים רק שדות מרשימה מותרת, ושגיאות רק בתקציר
 //     (סוג, הודעה, קוד). כל שדה אחר נשמט, ורק **שמו** נרשם, כדי שיהיה ברור
 //     שהיה שם משהו;
-//   - כל טקסט חופשי (ההודעה, הודעת השגיאה, ה-stack) עובר scrubIdentifiers,
-//     שמחליף מזהי וואטסאפ ומספרים ארוכים בסימון;
+//   - כל טקסט חופשי (ההודעה, שם השגיאה והודעתה, ה-stack, שמות שדות) עובר
+//     safeText: קודם ניקוי מזהי וואטסאפ ומספרים (גם מעוצבים), ורק אחר כך
+//     חיתוך — אחרת חיתוך באמצע מספר משאיר חלק ממנו;
 //   - שדות ה-child (bindings) מסוננים באותה רשימה.
 // הממשק לפי lib/Utils/logger.d.ts של 7.0.0-rc14 (ILogger): level, child(obj),
 // ו-trace/debug/info/warn/error(obj, msg?). Baileys בודקת גם logger.level
 // ישירות (lib/Socket/socket.js: logger.level === 'debug').
 
-import { oneLine, scrubIdentifiers } from './lib.js';
+import { safeText } from './lib.js';
 
 const LEVELS = { trace: 10, debug: 20, info: 30, warn: 40, error: 50, fatal: 60, silent: Infinity };
 
 // שדות שמותר להדפיס כמו שהם — מונים, סוגים ושמות פנימיים של Baileys, בלי
-// מזהים ובלי תוכן. ערך מחרוזת עדיין עובר scrubIdentifiers.
+// מזהים ובלי תוכן. ערך מחרוזת עדיין עובר safeText.
 const ALLOWED_FIELDS = new Set([
   'class',
   'type',
@@ -36,19 +37,21 @@ const ALLOWED_FIELDS = new Set([
 ]);
 const ERROR_FIELDS = new Set(['err', 'error']);
 
+// כל שדה של השגיאה הוא טקסט חיצוני — גם השם: ‏err.name ניתן לשינוי כמו כל
+// מאפיין, ושגיאה שנבנתה מנתוני השרת יכולה לשאת בו מזהה.
 function summarizeError(err) {
-  if (!err || typeof err !== 'object') return scrubIdentifiers(oneLine(err, 300));
-  const parts = [err.name || err.constructor?.name || 'Error'];
-  if (err.message) parts.push(scrubIdentifiers(oneLine(err.message, 300)));
+  if (!err || typeof err !== 'object') return safeText(err, 300);
+  const parts = [safeText(err.name || err.constructor?.name || 'Error', 60)];
+  if (err.message) parts.push(safeText(err.message, 300));
   const status = err.output && err.output.statusCode;
-  if (status) parts.push(`status=${status}`);
-  if (err.code) parts.push(`code=${scrubIdentifiers(String(err.code))}`);
+  if (Number.isFinite(status)) parts.push(`status=${status}`);
+  if (err.code) parts.push(`code=${safeText(err.code, 40)}`);
   return parts.join(': ');
 }
 
 function scalar(value) {
   if (value === null || typeof value === 'number' || typeof value === 'boolean') return value;
-  if (typeof value === 'string') return scrubIdentifiers(oneLine(value, 200));
+  if (typeof value === 'string') return safeText(value, 200);
   return undefined; // אובייקט או מערך בשדה מותר — לא נכנסים פנימה
 }
 
@@ -62,11 +65,12 @@ export function sanitizeFields(obj) {
       fields[key] = summarizeError(value);
     } else if (key === 'trace' && typeof value === 'string') {
       // trace = error.stack אצל Baileys. השורה הראשונה מספיקה לאבחון.
-      fields.trace = scrubIdentifiers(oneLine(value.split('\n')[0], 300));
+      fields.trace = safeText(value.split('\n')[0], 300);
     } else if (ALLOWED_FIELDS.has(key) && scalar(value) !== undefined) {
       fields[key] = scalar(value);
     } else {
-      dropped.push(key);
+      // גם שם השדה עובר ניקוי: אובייקט שהמפתחות שלו הם מזהים ({ [jid]: ... })
+      dropped.push(safeText(key, 40));
     }
   }
   return { fields, dropped };
@@ -91,7 +95,7 @@ export function createSafeLogger({ level = 'warn', write = (line) => console.log
     const record = {
       level: lvl,
       ...boundFields,
-      msg: scrubIdentifiers(oneLine(text ?? '', 300)),
+      msg: safeText(text ?? '', 300),
       ...fields,
     };
     if (dropped.length) record.dropped = dropped.join(',');

@@ -28,6 +28,7 @@ import {
   recordMessage,
   rollDay,
   serializeStats,
+  safeText,
   safeTokenEqual,
   scrubIdentifiers,
   SEEN_MAX,
@@ -346,4 +347,35 @@ test('scrubIdentifiers: מזהי טלפון, LID וקבוצה, ומספרים א
   );
   assert.equal(out, 'from <jid> / <jid> in <jid>, <num> code=515 id=3EB0A1');
   assert.equal(scrubIdentifiers(undefined), '');
+});
+
+test('scrubIdentifiers: מספר טלפון מעוצב — רווחים, מקפים, סוגריים, מקף Unicode ותווי כיווניות', () => {
+  const formatted = [
+    '+972 54-123-4567',
+    '054-1234567',
+    '(054) 123 4567',
+    '054.123.4567',
+    '+1 (555) 123-4567',
+    '\u2066+972 54\u2011123\u20114567\u2069', // עטוף ב-LRI/PDI, עם מקף שאינו נשבר
+    '054\u00a0123\u00a04567', // רווח קשיח
+  ];
+  for (const t of formatted) {
+    const out = scrubIdentifiers(`call ${t} now`);
+    assert.ok(!/[0-9](?:\D{0,3}[0-9]){5,}/.test(out), `${JSON.stringify(t)} -> ${JSON.stringify(out)}`);
+    assert.match(out, /<num>/);
+  }
+  // קודים ומספרים קצרים לא נפגעים
+  assert.equal(scrubIdentifiers('code 515 status=403 at 127.0.0.1:1, 3 attempts'), 'code 515 status=403 at 127.0.0.1:1, 3 attempts');
+});
+
+test('safeText: ניקוי לפני חיתוך — בשום נקודת חיתוך לא נשאר חלק ממספר', () => {
+  const phone = '972541234567';
+  for (let k = 0; k <= phone.length + 1; k++) {
+    const max = 30;
+    // המספר מתחיל כך שהחיתוך (max-1 תווים + …) נופל אחרי k ספרות שלו
+    const text = `${'x'.repeat(max - 1 - k)}${phone} tail`;
+    const out = safeText(text, max);
+    assert.ok(!/[0-9]{3,}/.test(out), `k=${k}: ${JSON.stringify(out)}`);
+  }
+  assert.equal(safeText('קבוצה\nעם 054-1234567', 100), 'קבוצה עם <num>');
 });

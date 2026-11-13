@@ -16,11 +16,11 @@ import {
   guardSocket,
   localDayKey,
   localTime,
-  oneLine,
   pruneSeen,
   RECONNECT_MAX_ATTEMPTS,
   recordMessage,
   rollDay,
+  safeText,
   scrubIdentifiers,
   textLength,
   toGroupRecord,
@@ -43,7 +43,7 @@ export const STABLE_CONNECTION_MS = 60 * 1000;
 
 function alertText(kind, code, detail, qrHint) {
   const c = Number.isFinite(code) ? ` (קוד ${code})` : '';
-  const d = detail ? `\nפרטים: ${oneLine(detail, 500)}` : '';
+  const d = detail ? `\nפרטים: ${safeText(detail, 500)}` : '';
   const qr = qrHint ? `\nלסריקה: ${qrHint}` : '';
   switch (kind) {
     case 'blocked':
@@ -316,7 +316,7 @@ export function createListener(deps) {
     const linked = Boolean(auth.state.creds.me?.id);
     runtime.linked = linked;
     log.warn(
-      `🔌 החיבור נסגר: code=${statusCode} reason="${oneLine(message, 200)}"${data ? ` data=${oneLine(data, 300)}` : ''} linked=${linked}`,
+      `🔌 החיבור נסגר: code=${statusCode} reason="${safeText(message, 200)}"${data ? ` data=${safeText(data, 300)}` : ''} linked=${linked}`,
     );
 
     // ההחלטה לפי ההודעה המקורית (QR_EXPIRED_MESSAGE), לא לפי הגרסה המנוקה
@@ -353,7 +353,7 @@ export function createListener(deps) {
 
   function groupLabel(id) {
     const name = groupNames.get(id);
-    return name ? `${oneLine(name, 60)} (${id})` : id;
+    return name ? `${safeText(name, 60)} (${id})` : id;
   }
 
   // בעלייה: כל הקבוצות שהחשבון חבר בהן, עם המזהה והשם, כדי לבחור מתוכן את
@@ -375,7 +375,7 @@ export function createListener(deps) {
     for (const g of groups.sort((a, b) => String(a.subject).localeCompare(String(b.subject)))) {
       const mark = groupIds.has(g.id) ? '✅' : '⬜';
       const size = Number.isFinite(g.size) ? ` | ${g.size} משתתפים` : '';
-      log.info(`👥 ${mark} ${g.id} | ${oneLine(g.subject || '(בלי שם)', 80)}${size}`);
+      log.info(`👥 ${mark} ${g.id} | ${safeText(g.subject || '(בלי שם)', 80)}${size}`);
     }
     for (const id of groupIds) {
       if (!all || !all[id]) log.warn(`⚠️ הקבוצה ${id} ב-WA_GROUP_IDS, אבל החשבון לא חבר בה.`);
@@ -457,9 +457,10 @@ export function createListener(deps) {
   function logError(prefix, err) {
     const parts = [prefix];
     if (err) {
-      parts.push(`type=${err.name || err.constructor?.name || typeof err}`);
-      if (err.message) parts.push(`message="${scrubIdentifiers(oneLine(err.message, 300))}"`);
-      if (err.code) parts.push(`code=${scrubIdentifiers(String(err.code))}`);
+      // כל שדה של השגיאה, כולל השם, דרך safeText (ניקוי ואז חיתוך)
+      parts.push(`type=${safeText(err.name || err.constructor?.name || typeof err, 60)}`);
+      if (err.message) parts.push(`message="${safeText(err.message, 300)}"`);
+      if (err.code) parts.push(`code=${safeText(err.code, 40)}`);
       if (err.output && err.output.statusCode) parts.push(`status=${err.output.statusCode}`);
     }
     log.error(parts.join(' | '));

@@ -89,6 +89,22 @@ test('silent / רמה לא מוכרת: silent לא כותב כלום; רמה ל�
   assert.equal(u.logger.level, 'warn');
 });
 
+test('שם השגיאה, הקוד ושמות שדות שנשמטו — עוברים ניקוי, כמו ההודעה', () => {
+  const { logger, text } = capture();
+  const err = new Error('m');
+  err.name = `Err_${PHONE}@s.whatsapp.net`;
+  err.code = `E${PHONE}`;
+  logger.error({ err, [`${LID}@lid`]: 1 }, 'x');
+  assert.ok(!text().includes(PHONE) && !text().includes(LID), text());
+  assert.match(text(), /"dropped":"<jid>"/);
+});
+
+test('מספר מעוצב ומספר שנחתך בגבול האורך — לא נשאר ממנו כלום', () => {
+  const { logger, text } = capture();
+  logger.warn({ reason: 'call +972 54-123-4567' }, `${'x'.repeat(295)} ${PHONE}`);
+  assert.ok(!/[0-9]{3,}/.test(text().replace(/"level":"warn"/, '')), text());
+});
+
 test('sanitizeFields: אובייקט בשדה מותר לא נפתח', () => {
   const { fields, dropped } = sanitizeFields({ type: { participant: `${PHONE}@s.whatsapp.net` }, count: 3 });
   assert.deepEqual(fields, { count: 3 });
