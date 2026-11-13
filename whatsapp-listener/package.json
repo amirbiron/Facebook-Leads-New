@@ -1,0 +1,23 @@
+{
+  "name": "fb-leads-whatsapp-listener",
+  "version": "0.1.0",
+  "private": true,
+  "description": "מאזין קריאה-בלבד לקבוצות וואטסאפ (Baileys) — שלב 2: רק מקבל ורושם, לא מעביר הלאה",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "acorn": "8.19.0",
+    "acorn-walk": "8.3.5"
+  },
+  "engines": {
+    "node": "20.x"
+  }
+}
